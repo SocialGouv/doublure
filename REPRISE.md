@@ -11,8 +11,8 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 4 traité (walker + moteur) ; l'agent hook du
-round 4 n'avait pas rendu au moment du commit — vérifier son rapport.**
+**Boucle en cours. Round 4 traité EN ENTIER (hook + walker + moteur).
+Round 5 à lancer.**
 
 Protocole appliqué à chaque round :
 1. Lancer 2-3 agents `general-purpose`, `model: opus`, en parallèle, sur des
@@ -30,12 +30,12 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**520 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**565 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 374
+uv run pytest tests/ --ignore=tests/egress   # 565
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session réelle + capture
@@ -49,7 +49,9 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
 1. **Lancer le round 5** sur ce que le round 4 vient de réécrire :
    `USER_DATA_KEYS` (périmètre de SKIP_KEYS), `SCHEMA_REF_KEYS`,
    `_extract_repo` (deux plantages corrigés), la normalisation `hôte/`,
-   `_fake_query` (valeur vide + percent-encoding), le séparateur SSE atomique.
+   `_fake_query` (valeur vide + percent-encoding), le séparateur SSE atomique,
+   et côté hook le marqueur de substitution opaque, le balayage `-exec`, le
+   scan mot à mot des interpréteurs en ligne, `_est_usage_local`.
    Deux rounds de suite ont produit des régressions de mes propres correctifs :
    il n'y a pas de raison que celui-ci fasse exception.
 2. Points **non corrigés**, à re-arbitrer ou à traiter :

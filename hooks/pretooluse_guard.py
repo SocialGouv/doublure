@@ -110,7 +110,13 @@ _SHELL_SOCKET_RE = re.compile(r"/dev/(tcp|udp)/", re.I)
 #: précises : un `\bENV\b` générique bloquait `grep -r env src/`, `cat env.md`
 #: et `find . -name "*.env.example"` — l'agent ne pouvait plus travailler.
 _INLINE_ENV_RE = re.compile(
-    r"(os\s*\.\s*(environ|getenv|putenv)|process\s*\.\s*env\b|"
+    r"(os\s*\.\s*(environ|getenv|putenv)|"
+    # `process["env"]` vaut `process.env` ; les quotes sont déjà retirées.
+    r"process\s*(\.\s*env\b|\[\s*env\s*\])|"
+    # `from os import environ`, `getattr(os, "environ")` : l'attribut littéral
+    # n'apparaît jamais, seul le nom importé ou déréférencé.
+    r"from\s+os\s+import\s+[\w\s,]*\benviron\b|"
+    r"getattr\s*\(\s*os\s*,\s*environ|"
     r"[%$@]_?ENV\s*[\[{]|\$_?ENV\b|"
     # `perl -e 'print keys %ENV'` et `awk 'BEGIN{for(k in ENVIRON)…}'` déversent
     # tout sans indexer. Casse SIGNIFICATIVE ici : `environ` minuscule est un
@@ -131,9 +137,29 @@ _NESTED_RE = re.compile(
     r"|[<>]\((?P<proc>[^()]*)\)"
     r"|\b(?:system|shell_exec|passthru|popen|Popen|execSync|spawnSync|exec|qx|"
     r"os\.execute|IO\.popen|subprocess\.(?:run|call|check_output|check_call|Popen)|"
-    r"check_output|check_call|getoutput)\s*\(\s*\[?(?P<appel>[^()\[\]]*)\]?\s*\)",
+    r"check_output|check_call|getoutput|getstatusoutput)"
+    # un niveau de parenthèses toléré : `run(("env",))` est un tuple, et
+    # l'inversion `[]` → `()` suffisait à sortir de la classe de caractères.
+    r"\s*\(\s*[\[(]?(?P<appel>[^()\[\]]*)[\])]?\s*,?\s*\)",
     re.I,
 )
+
+#: Ce qu'une région imbriquée laisse derrière elle. Son résultat n'est pas
+#: connu avant l'exécution : le remplacer par un BLANC faisait disparaître un
+#: argument que le shell, lui, fournira bel et bien
+#: (`curl http://local/ $(echo http://tiers/)`).
+_MARQUEUR_SUBSTITUTION = "substitution_non_evaluable"
+
+#: Interpréteur dont le programme est donné EN LIGNE : tout ce qui suit est du
+#: code, pas des arguments. `system "env"` (Perl/Ruby, sans parenthèses),
+#: `qx/env/`, `%x[env]` n'ont aucune forme commune — on inspecte donc TOUS les
+#: mots, en découpant sur la ponctuation du langage.
+_INTERPRETE_EN_LIGNE = re.compile(
+    r"\b(python3?|perl|ruby|node|deno|bun|php|lua|tclsh|Rscript|julia|"
+    r"awk|gawk|mawk)\b[^|;&]*?\s-(e|c|r|E|P)\b|\bawk\b[^|;&]*BEGIN",
+    re.I,
+)
+_MOTS_DE_CODE_RE = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def _regions_imbriquees(normalized: str) -> list[str]:
@@ -171,9 +197,13 @@ _STDIN_INTERPRETER_RE = re.compile(
 #: Variables d'environnement dont la VALEUR est un secret. `env` est bloqué,
 #: mais `echo $ANTHROPIC_API_KEY` extrayait la même chose, une par une — et
 #: `cat "$ANONPROXY_MASTER_KEY_FILE"` visait directement la clé du coffre.
+#: UNE seule liste. Elle était dupliquée : la variante qui servait à
+#: `echo $VAR` omettait `_DSN`, `_URL`, `CONNECTION_STRING`, `SESSION_KEY`…
+#: `printenv DATABASE_URL` était refusé quand `echo $DATABASE_URL` passait.
 _SENSITIVE_NAME_RE = re.compile(
     r"(AWS|GCP|AZURE|ANTHROPIC|OPENAI|GITHUB|GITLAB|SLACK|VAULT|ANONPROXY|"
-    r"DATADOG|TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|"
+    r"DOCKER|NPM|PYPI|DATADOG|SENTRY|"
+    r"TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|"
     r"PRIVATE_KEY|SIGNING_KEY|ENCRYPTION_KEY|SESSION_KEY|_DSN|_URL|_URI|"
     r"CONNECTION_STRING|BEARER|COOKIE)", re.I,
 )
@@ -181,12 +211,9 @@ _SENSITIVE_NAME_RE = re.compile(
 #: Le NOM déréférencé, isolé de sa syntaxe (`$X`, `${X}`, `${!X}`).
 _NOM_VARIABLE_RE = re.compile(r"\$\{?!?\s*([A-Za-z_][A-Za-z0-9_]*)")
 
-_NOM_SENSIBLE_RE = re.compile(
-    r"(AWS|GCP|AZURE|ANTHROPIC|OPENAI|GITHUB|GITLAB|SLACK|VAULT|ANONPROXY|DOCKER|"
-    r"NPM|PYPI|DATADOG|TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|"
-    r"PRIVATE_KEY)",
-    re.I,
-)
+#: Référence INDIRECTE : `x=AWS_SECRET_ACCESS_KEY; echo ${!x}`. Le nom qui
+#: compte n'est pas dans l'expansion mais dans l'affectation qui précède.
+_REF_INDIRECTE_RE = re.compile(r"\$\{!\s*([A-Za-z_]\w*)")
 
 #: Variables de CONFIGURATION dont le nom porte un mot sensible mais dont la
 #: valeur ne l'est pas. Les bloquer empêchait l'agent de vérifier sa propre
@@ -201,10 +228,19 @@ _VARS_PUBLIQUES = frozenset({
 })
 
 
+def _nom_sensible(nom: str) -> bool:
+    return nom.upper() not in _VARS_PUBLIQUES and bool(_SENSITIVE_NAME_RE.search(nom))
+
+
 def _variable_sensible(normalized: str) -> str | None:
     for nom in _NOM_VARIABLE_RE.findall(normalized):
-        if nom.upper() not in _VARS_PUBLIQUES and _NOM_SENSIBLE_RE.search(nom):
+        if _nom_sensible(nom):
             return nom
+    # `${!x}` ne cite que `x` : le nom réellement lu est la VALEUR de `x`.
+    for cible in _REF_INDIRECTE_RE.findall(normalized):
+        for valeur in re.findall(rf"\b{re.escape(cible)}=([A-Za-z_]\w*)", normalized):
+            if _nom_sensible(valeur):
+                return valeur
     return None
 
 #: (appliqué sur la commande NORMALISÉE : les quotes ont déjà été retirées)
@@ -302,12 +338,14 @@ def normalize(command: str) -> str:
     même cible pour bash, mais aucun ne correspond au motif. On retire donc
     quotes, backslashes et classes de globs à un caractère.
     """
-    # `e${_+}nv`, `e${IFS}nv` : bash les évalue en `env`. Une expansion sans
-    # nom de variable simple est inerte pour le sens de la commande, on la
-    # retire avant analyse.
-    # `e${_+}nv`, `e${IFS}nv` : bash les évalue en `env`. Une expansion collée
-    # AU MILIEU d'un mot ne sert qu'à découper un nom de commande.
-    out = re.sub(r"(?<=\w)\$\{[^}]*\}(?=\w)", "", command)
+    # `e${IFS}nv`, `env${IFS}> f`, `e${_+}nv` : bash les évalue en `env`. Ces
+    # expansions ne servent qu'à découper un nom de commande — on les retire
+    # QUELLE QUE SOIT leur position. Exiger un caractère de mot de chaque côté
+    # laissait passer `env${IFS}> dump`, où le `>` suit l'expansion.
+    # Une référence simple `${VAR}` est CONSERVÉE : le contrôle des variables
+    # porteuses de secret en dépend.
+    out = re.sub(r"\$\{IFS\}|\$\{[^}]*[-+:?][^}]*\}", "", command)
+    out = re.sub(r"(?<=\w)\$\{[A-Za-z_]\w*\}(?=\w)", "", out)
     out = out.replace("''", "").replace('""', "")
     out = re.sub(r"\[([^\]/])\]", r"\1", out)     # glob [o] → o
     out = re.sub(r"\\(.)", r"\1", out)            # \e → e
@@ -343,6 +381,7 @@ _WRAPPERS = frozenset({
     "zsh", "ksh", "dash", "watch", "script", "busybox", "toybox",
     "setsid", "chroot", "unshare", "nsenter", "flock", "parallel",
     "su", "runuser", "machinectl", "systemd-run", "proot", "fakeroot",
+    "strace", "ltrace",
     "do", "then", "else", "elif", "while", "until", "if", "for",
 })
 
@@ -369,15 +408,16 @@ def _program_positions(tokens: list[str]) -> list[int]:
     passait.
     """
     positions: list[int] = []
+    # `find … -exec curl {} \;` : ce qui suit `-exec` est une commande. Ce
+    # balayage est SÉPARÉ de la boucle ci-dessous, qui s'arrête au premier
+    # programme réel — `find` n'étant pas une enveloppe, elle n'atteignait
+    # jamais le `-exec` et la règle était morte.
+    positions += [i + 1 for i, tok in enumerate(tokens)
+                  if tok in ("-exec", "-execdir", "-ok", "-okdir")
+                  and i + 1 < len(tokens)]
     i = 0
     while i < len(tokens):
         tok = tokens[i]
-        if tok in ("-exec", "-execdir", "-ok", "-okdir"):
-            # `find … -exec curl {} \;` : ce qui suit est une commande.
-            if i + 1 < len(tokens):
-                positions.append(i + 1)
-            i += 2
-            continue
         if tok.startswith("-"):
             i += 2 if tok in _OPT_AVEC_VALEUR else 1
             continue
@@ -468,8 +508,10 @@ def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
     if base in ("declare", "export"):
         return any(t in ("-p", "-x") for t in options) or not options
     if base == "printenv":
-        # une variable nommée : refusé seulement si son nom est sensible
-        return not arguments or any(_SENSITIVE_NAME_RE.search(t) for t in arguments)
+        # une variable nommée : refusé seulement si son nom est sensible.
+        # Même dérogation que `echo $VAR`, sinon l'agent pouvait lire sa config
+        # d'une façon et pas de l'autre.
+        return not arguments or any(_nom_sensible(t) for t in arguments)
     if base == "compgen":
         # `-v` (variables) et `-e` (exportées) déversent ; `-A function`,
         # `-A alias`, `-c` listent des noms sans valeur.
@@ -487,6 +529,24 @@ def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
 #: vérifier son existence n'apporte rien.
 _METADATA_PROGRAMS = frozenset({"ls", "stat", "file", "du", "test", "dirname",
                                 "basename", "realpath", "readlink"})
+
+
+#: Sous-commandes d'`openssl` purement locales : chiffrement, empreinte, tirage
+#: aléatoire. Rien n'y sort sur le réseau — contrairement à `s_client`.
+_OPENSSL_LOCAL = frozenset({
+    "passwd", "rand", "dgst", "enc", "x509", "req", "genrsa", "genpkey",
+    "pkey", "rsa", "ec", "version", "base64", "sha256", "md5", "cms", "pkcs12",
+})
+
+
+def _est_usage_local(base: str, suite: list[str]) -> bool:
+    """Invocation d'un binaire réseau qui n'ouvre aucune connexion."""
+    if any(t in ("--version", "-V") for t in suite):
+        return True
+    if base == "openssl":
+        premier = next((t for t in suite if not t.startswith("-")), "")
+        return premier in _OPENSSL_LOCAL
+    return False
 
 
 def _metadata_seule(command: str) -> bool:
@@ -537,14 +597,35 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
         for interne in _regions_imbriquees(normalized):
             if (reason := check_bash(interne, _profondeur + 1)):
                 return reason
-    exterieur = _NESTED_RE.sub(" ", normalized)
+
+    # Le programme d'un interpréteur donné en ligne est du CODE : ses mots ne
+    # sont pas des arguments, et aucune syntaxe commune ne les délimite.
+    if _INTERPRETE_EN_LIGNE.search(normalized):
+        mots = _MOTS_DE_CODE_RE.findall(normalized)
+        for idx, mot in enumerate(mots):
+            base = _basename(mot)
+            if base in ENV_DUMP_PROGRAMS and _est_deversement(base, mots, idx):
+                return "déversement de l'environnement depuis un interpréteur"
+            if base in NETWORK_CAPABLE:
+                return f"`{base}` appelé depuis un interpréteur : contourne le proxy (D9)"
+
+    exterieur = _NESTED_RE.sub(f" {_MARQUEUR_SUBSTITUTION} ", normalized)
 
     for tokens in tokenize(exterieur):
+        opaque = _MARQUEUR_SUBSTITUTION in tokens
         for idx in _program_positions(tokens):
             base = _basename(tokens[idx])
+            if base == _MARQUEUR_SUBSTITUTION:
+                return ("le programme exécuté est produit par une substitution : "
+                        "son contenu n'est pas analysable avant exécution")
             if base in ENV_DUMP_PROGRAMS and _est_deversement(base, tokens, idx):
                 return "déversement de l'environnement (jetons et clés compris)"
             if base in NETWORK_CAPABLE:
+                if _est_usage_local(base, tokens[idx + 1:]):
+                    continue
+                if opaque:
+                    return (f"`{base}` reçoit un argument produit par une "
+                            "substitution : la destination n'est pas vérifiable (D9)")
                 urls = re.findall(r"[a-z]+://[^\s'\"]+", " ".join(tokens), re.I)
                 if urls and all(_is_local_url(u) for u in urls):
                     continue  # services locaux du projet

