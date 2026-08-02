@@ -177,12 +177,23 @@ def _looks_like_service(name: str) -> bool:
     return n.startswith(_SERVICE_PREFIXES) or n.endswith(_SERVICE_SUFFIXES)
 
 
+def _repo_authority(value: str) -> str:
+    """Hôte d'une URL de dépôt, quelle que soit sa forme (HTTPS, SSH, scp)."""
+    reste = value.split("://", 1)[1] if "://" in value else value
+    reste = reste.split("@", 1)[-1]  # userinfo éventuel
+    return re.split(r"[:/]", reste, maxsplit=1)[0].lower()
+
+
 def _extract_repo(value: str) -> tuple[str, str] | None:
     """org/nom depuis une URL HTTPS, une forme SSH ou une forme courte."""
     v = value.strip()
+    # L'hôte est comparé en ENTIER : une simple sous-chaîne faisait passer
+    # `attacker-github.com/org/repo` pour du GitHub, et le substitut affichait
+    # alors `github.com` — une confiance fabriquée, que le modèle peut lire.
+    autorite = _repo_authority(v)
     for host in REPO_HOSTS:
-        if f"{host}/" in v or f"{host}:" in v:
-            tail = re.split(rf"{re.escape(host)}[:/]", v, maxsplit=1)[1]
+        if autorite == host or autorite.endswith(f".{host}"):
+            tail = re.split(rf"{re.escape(autorite)}[:/]", v, maxsplit=1)[1]
             tail = tail.split("?")[0].split("#")[0]
             if tail.endswith(".git"):
                 tail = tail[:-4]

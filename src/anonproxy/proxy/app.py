@@ -219,6 +219,26 @@ async def messages(request: Request):
     return await _stream(state, safe_body, headers, dict(request.query_params))
 
 
+def _erreur_restauree(payload: bytes, sub_in, state: ProxyState) -> dict[str, Any]:
+    """Événement `error` SSE dont les substituts sont résolus pour l'opérateur.
+
+    Un corps qui n'est pas du JSON d'erreur exploitable est relayé tel quel :
+    on ne devine pas sa structure, mais on ne le perd pas non plus.
+    """
+    texte = payload.decode("utf-8", "replace")
+    try:
+        corps = json.loads(texte)
+    except json.JSONDecodeError:
+        corps = None
+    if isinstance(corps, dict) and isinstance(corps.get("error"), dict):
+        restored, unresolved = walk_response(corps, sub_in)
+        _note_unresolved(state, unresolved)
+        return {"type": "error", "error": restored["error"]}
+    resolu, unresolved = sub_in.to_real(texte)
+    _note_unresolved(state, unresolved)
+    return {"type": "error", "error": {"type": "api_error", "message": resolu}}
+
+
 async def _stream(state: ProxyState, safe_body: dict[str, Any], headers: dict[str, str],
                   params: dict[str, str]):
     """Relaie le SSE amont en restaurant les valeurs réelles à la volée."""
@@ -234,11 +254,11 @@ async def _stream(state: ProxyState, safe_body: dict[str, Any], headers: dict[st
                 if upstream.status_code >= 400:
                     payload = await upstream.aread()
                     logger.error("amont %s : %s", upstream.status_code, payload[:500])
-                    yield encode_sse({
-                        "type": "error",
-                        "error": {"type": "api_error",
-                                  "message": payload.decode("utf-8", "replace")},
-                    })
+                    # Un message d'erreur amont cite ce qu'il a reçu, donc des
+                    # SUBSTITUTS. Le rendre brut donnait à l'opérateur des
+                    # erreurs illisibles (« hôte inconnu <fictif> ») là où la
+                    # branche non-streamée restaure le même corps.
+                    yield encode_sse(_erreur_restauree(payload, sub_in, state))
                     return
 
                 async for chunk in upstream.aiter_text():

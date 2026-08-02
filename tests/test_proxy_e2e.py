@@ -91,6 +91,7 @@ class FakeUpstream:
     def __init__(self):
         self.requests: list[dict] = []
         self.mode = "json"
+        self.cite = ""  # substitut que l'amont renvoie dans son message d'erreur
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content) if request.content else {}
@@ -104,6 +105,17 @@ class FakeUpstream:
             # renvoie le contenu SUBSTITUÉ reçu, pour valider la restauration
             echo = json.dumps(body.get("messages", []))
             found = sorted(set(re.findall(r"[\w.@-]{6,}", echo)))
+            if self.mode == "sse_error":
+                # une erreur d'API CITE ce qu'elle a reçu, c'est-à-dire un
+                # substitut : l'opérateur doit lire sa propre valeur.
+                trouve = re.search(r"Cluster ([\w.-]+) en production",
+                                   json.dumps(body.get("system", [])))
+                self.cite = trouve.group(1) if trouve else "?"
+                return httpx.Response(
+                    400, headers={"content-type": "application/json"},
+                    json={"type": "error",
+                          "error": {"type": "invalid_request_error",
+                                    "message": f"hôte invalide : {self.cite}"}})
             if self.mode == "sse":
                 return httpx.Response(200, headers={"content-type": "text/event-stream"},
                                       content=self._sse(found))
@@ -335,3 +347,18 @@ def test_healthz(proxy):
     r = client.get("/healthz")
     assert r.status_code == 200
     assert r.json()["scope"] == "project:test"
+
+
+def test_erreur_amont_en_streaming_est_restauree(proxy):
+    """La branche non-streamée restaure le corps d'erreur ; le flux le rendait
+    brut, donc l'opérateur lisait « hôte invalide : <nom fictif> »."""
+    client, upstream, _ = proxy
+    upstream.mode = "sse_error"
+    reponse = client.post("/v1/messages", json=sample_body(stream=True))
+    corps = reponse.text
+
+    assert upstream.cite and upstream.cite != "?", "l'amont n'a pas cité de substitut"
+    assert upstream.cite not in corps, (
+        f"substitut non restauré dans l'erreur streamée : {corps!r}")
+    assert REAL_HOST in corps, f"valeur réelle absente de l'erreur : {corps!r}"
+    assert "invalid_request_error" in corps, "type d'erreur amont perdu"

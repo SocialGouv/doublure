@@ -282,3 +282,88 @@ def test_ids_de_protocole_intacts():
     blk = out["messages"][0]["content"][0]
     assert blk["id"] == "toolu_01ABC" and blk["type"] == "tool_use" and blk["name"] == "bash"
     assert blk["input"]["cmd"] == "MODIFIÉ"
+
+
+# --------------------------------------------------------------------------- #
+# Round 3 — la restauration doit couvrir TOUT le flux, pas seulement les
+# `text_delta` et les `tool_use` accumulés. Un passthrough par défaut est
+# fail-open pour la restauration : l'opérateur voit le substitut à la place de
+# sa propre valeur, sans aucun signal.
+# --------------------------------------------------------------------------- #
+
+
+def test_le_bloc_de_demarrage_est_restaure():
+    """`content_block_start` n'est pas vide : il porte déjà des valeurs."""
+    rw = SSERewriter(make_sub())
+    out = list(rw.feed({
+        "type": "content_block_start", "index": 0,
+        "content_block": {
+            "type": "mcp_tool_use", "id": "mcp_1", "name": "search",
+            "server_name": "billing-api",
+            "input": {"host": "cluster-01-prod.northwind.internal"},
+        },
+    }))
+    bloc = out[0]["content_block"]
+    assert bloc["server_name"] == "payments-api"
+    assert bloc["input"]["host"] == "db-master-01-prod.acme.internal"
+    # les identifiants de protocole restent intacts
+    assert bloc["id"] == "mcp_1" and bloc["type"] == "mcp_tool_use"
+
+
+def test_un_delta_non_enumere_est_restaure():
+    """`citations_delta` porte `cited_text` — il existe déjà côté API."""
+    rw = SSERewriter(make_sub())
+    out = list(rw.feed({
+        "type": "content_block_delta", "index": 0,
+        "delta": {"type": "citations_delta",
+                  "citation": {"type": "char_location",
+                               "cited_text": "voir cluster-01-prod.northwind.internal",
+                               "document_index": 0}},
+    }))
+    cite = out[0]["delta"]["citation"]
+    assert cite["cited_text"] == "voir db-master-01-prod.acme.internal"
+    assert out[0]["delta"]["type"] == "citations_delta"
+
+
+def test_les_deltas_signes_restent_opaques():
+    """Le pendant : toucher un thinking_delta invaliderait sa signature (D3)."""
+    rw = SSERewriter(make_sub())
+    for dtype, champ, valeur in (
+            ("thinking_delta", "thinking", "cluster-01-prod.northwind.internal"),
+            ("signature_delta", "signature", "cluster-01-prod.northwind.internal")):
+        event = {"type": "content_block_delta", "index": 0,
+                 "delta": {"type": dtype, champ: valeur}}
+        assert list(rw.feed(event)) == [event], f"{dtype} modifié"
+
+
+def test_un_delta_orphelin_est_traite_et_non_relaye_brut():
+    """Sans `content_block_start`, le delta partait brut avec ses substituts."""
+    rw = SSERewriter(make_sub())
+    out = list(rw.feed({
+        "type": "content_block_delta", "index": 7,
+        "delta": {"type": "text_delta", "text": "hôte cluster-01-prod.northwind.internal fin"},
+    }))
+    out += list(rw.feed({"type": "content_block_stop", "index": 7}))
+    assert "cluster-01-prod.northwind.internal" not in json.dumps(out)
+    assert "db-master-01-prod.acme.internal" in json.dumps(out)
+
+
+def test_un_json_partiel_orphelin_n_est_jamais_resolu_en_vol():
+    """D2 tient aussi pour un `input_json_delta` sans bloc de démarrage."""
+    rw = SSERewriter(make_sub())
+    emis = list(rw.feed({
+        "type": "content_block_delta", "index": 3,
+        "delta": {"type": "input_json_delta", "partial_json": '{"h": "cluster-01'},
+    }))
+    assert emis == [], "un JSON partiel a été émis avant le stop"
+
+
+@pytest.mark.parametrize("sep", ["\r\n\r\n", "\r\r", "\n\n"])
+def test_les_trois_separateurs_sse_sont_reconnus(sep):
+    """Un flux en CRLF ne rendait AUCUN bloc : tampon sans fin, zéro erreur."""
+    from anonproxy.sse import iter_blocks
+    ligne = sep[:len(sep) // 2]  # même convention de fin de ligne que le bloc
+    flux = "event: ping" + ligne + "data: {}" + sep
+    blocks, reste = iter_blocks(flux, "")
+    assert len(blocks) == 1, f"séparateur {sep!r} non reconnu"
+    assert reste == ""

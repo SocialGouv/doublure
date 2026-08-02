@@ -70,6 +70,10 @@ _PLAIN_TAG_RE = re.compile(
     re.I,
 )
 
+#: Ce qui trahit un identifiant dans un NOM de paramètre de query : un nom
+#: d'API n'a ni point (FQDN), ni arobase (e-mail), ni deux-points (IPv6).
+_IDENT_EN_NOM_RE = re.compile(r"[.@:]")
+
 
 class SurrogateCollisionError(RuntimeError):
     """Espace de substituts épuisé pour cette valeur : fail-closed (D5/D6)."""
@@ -599,7 +603,19 @@ class SurrogateEngine:
                 continue
             name, eq, value = chunk.partition("=")
             if eq and value:
+                # Le NOM d'un paramètre est un contrat d'API (`page`, `limit`,
+                # `cursor`) : le substituer casserait le sens que le modèle
+                # doit lire. Mais il porte parfois la donnée elle-même
+                # (`?db-01.acme.internal=1`), et un nom d'API ne contient
+                # jamais de point, d'arobase ni de deux-points.
+                nom_sortant = (
+                    self._combo("url-arg", name, attempt, SERVICE_WORDS)
+                    if _IDENT_EN_NOM_RE.search(name) else name
+                )
+                # dérivé du nom RÉEL : le substitut du nom ne doit pas décaler
+                # celui de la valeur
                 value = self._combo("url-arg", f"{name}:{value}", attempt, SERVICE_WORDS)
+                name = nom_sortant
             elif not eq and name:
                 # paramètre sans valeur : c'est la donnée elle-même
                 name = self._combo("url-arg", name, attempt, SERVICE_WORDS)
@@ -645,10 +661,17 @@ class SurrogateEngine:
             return prefix + body
 
         if etype == "PASSWORD_CONTEXT":
-            # conserve le préfixe contextuel (« password: »), remplace la valeur
-            m = re.match(r"(?P<label>.*?[:=]\s*)(?P<secret>\S+)$", value, re.S)
-            if m:
-                return m.group("label") + h[:20]
+            # Conserve le libellé contextuel (« password: ») et remplace TOUT
+            # ce qui suit le PREMIER séparateur. Un `.*?[:=]\s*(\S+)$` se cale
+            # sur le DERNIER mot de la chaîne : sur `oldpass=A newpass=B`, `A`
+            # partait en clair dans le « libellé ».
+            # Le libellé n'est repris que s'il est un simple mot : un span
+            # SECRET gagne tous les arbitrages de recouvrement (D4), donc un
+            # identifiant qui le précède n'a plus de span à lui.
+            m = re.match(r"(?P<label>[^:=]*)(?P<sep>[:=]\s*)(?P<secret>\S.*)$",
+                         value, re.S)
+            if m and re.fullmatch(r"[A-Za-z][A-Za-z _-]*", m.group("label")):
+                return m.group("label") + m.group("sep") + h[:20]
             return h[:20]
 
         return h[:max(16, min(len(value), 48))]

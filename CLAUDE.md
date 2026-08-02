@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**392 tests verts** (374 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**494 tests verts** (476 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -125,6 +125,52 @@ services/anonshield/wrapper/run.sh            # détecteur :9000 (GPU)
 scripts/run-proxy.sh                          # proxy :8090
 ANTHROPIC_BASE_URL=http://127.0.0.1:8090 claude
 ```
+
+## Quatrième revue adversariale (2026-08-03, round 3 — 3 agents opus effort max)
+Deux fuites SORTANTES et deux fuites du hook, toutes corrigées avec
+non-régression. Le round a aussi produit **deux régressions de mes propres
+correctifs**, attrapées par `phase3_e2e.sh` et pas par les 470 tests unitaires.
+
+**Walker** — `SKIP_KEYS` recopiait VERBATIM tout sous-arbre non scalaire
+(`cache_control` enrichi, `metadata.type` structuré) : fail-open silencieux,
+requête acceptée en 200 · `_is_known_control` renvoyait `True` pour tout
+scalaire, donc n'importe quelle chaîne passait sous `betas` — surface la pire,
+l'API IGNORE un nom de beta inconnu et traite quand même la requête.
+
+**Moteur** — un span PUBLIC (`SERVICE`, `PORT`) qui recouvrait un span
+substituable GAGNAIT l'arbitrage par sa longueur, et la zone sortait EN CLAIR :
+`db-master.acme.internal` intact. `PUBLIC` passe désormais en DERNIER, par
+symétrie avec `SECRET` qui passe en premier · le NOM d'un paramètre de query
+n'était jamais substitué (`?db-01.acme.internal=1`) ; il l'est quand il porte
+un point, une arobase ou deux-points, jamais pour `page`/`limit`/`cursor`.
+
+**Hook** — `_is_local_url` testait le PRÉFIXE `127.` sur un nom d'hôte :
+`127.evil.test` résout où son propriétaire veut et passait, avec `curl`,
+`wget` et `WebFetch`. L'hôte est comparé comme ADRESSE (`ipaddress`) · les
+régions imbriquées (`$(…)`, `` ` ``, `<(…)`, `system(…)`, `subprocess.run([…])`)
+sont analysées RÉCURSIVEMENT puis retirées de la commande englobante — c'est ce
+qui laissait passer `perl -e 'system("env")'` et `bash <(env)` · enveloppes
+`su`/`runuser` et options à valeur (`sudo -u root env`) · l'index pointait
+toujours sur la PREMIÈRE occurrence (`env PATH=/x env` passait).
+
+**Faux positifs mesurés et corrigés** (un agent bloqué est aussi cassé qu'un
+agent qui fuit) : `set +e` · `env -i`/`env -u` · `command -v env` ·
+`compgen -A function` · `echo $(find . -name env)` · `echo $ANTHROPIC_BASE_URL`
+· `ls ~/.ssh` · et surtout `grep -r curl src/` — le scan « tous les tokens »
+refusait toute MENTION d'un programme réseau.
+
+**Régressions introduites puis corrigées** (les deux via l'E2E réel) :
+substituer `"type": ["string","null"]` rend le schéma invalide → API 400,
+session interrompue ; `cache_control.ttl` n'accepte que `5m` ou `1h` → 400.
+D'où `SCHEMA_STRUCTURAL_KEYS` élargi (`type`, `format`, `pattern`) et
+`STRUCTURED_SKIP_KEYS`. Au passage, `"format": "int64"` était substitué DEPUIS
+LE DÉBUT sans que rien ne casse : `format` est une annotation, l'API l'ignore.
+
+**Non corrigé, assumé** : `HOSTNAME "acme.internal"` (zone nue) reçoit une
+identité propre au lieu de rejoindre la zone fictive de `db-01.acme.internal`.
+Le « correctif » évident passerait par `_zone_for`, donc par un attribut
+PARTAGÉ — exclu de la vue de restauration : l'hôte deviendrait non
+restaurable. La co-appartenance vaut moins que la restauration.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

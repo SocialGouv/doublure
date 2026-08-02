@@ -83,6 +83,15 @@ SKIP_KEYS: frozenset[str] = frozenset(
     }
 )
 
+#: Cles de bloc dont la valeur est une STRUCTURE de protocole, pas du texte.
+#: Meme regle que REQUEST_CONTROL_KEYS : la forme connue est recopiee, une cle
+#: inattendue fait traverser le bloc entier. `cache_control` s'est enrichi de
+#: `ttl` — dont l'API n'accepte que '5m' ou '1h' : le traverser le substituait
+#: (400), le recopier en bloc laissait sortir une annotation posee par le client.
+STRUCTURED_SKIP_KEYS: dict[str, frozenset[str]] = {
+    "cache_control": frozenset({"type", "ttl"}),
+}
+
 #: Types MIME dont la charge est binaire : `data` y reste opaque. Tout le
 #: reste — texte, JSON, media_type absent — est traverse.
 BINARY_MEDIA_PREFIXES: tuple[str, ...] = (
@@ -126,20 +135,43 @@ REQUEST_CONTROL_KEYS: dict[str, frozenset[str]] = {
 }
 
 
-def _is_known_control(node: Any, allowed: frozenset[str]) -> bool:
+#: Forme d'un jeton de protocole : nom de modele, de beta, de version, de
+#: palier. Ni point, ni barre, ni espace — `cluster-01.acme.internal` est un
+#: identifiant parfaitement valide au sens large, et passait sous `betas`, ou
+#: Anthropic ignore un nom inconnu mais TRAITE quand meme la requete.
+#: Une valeur qui n'a pas cette forme est TRAVERSEE : le detecteur ne modifiera
+#: de toute facon pas un vrai jeton de protocole, l'erreur ne coute rien.
+_CONTROL_TOKEN_RE = re.compile(r"[A-Za-z0-9_+-]{0,64}")
+
+#: Formes plus strictes pour les cles ou l'on connait la convention exacte.
+_CONTROL_VALUE_RE: dict[str, re.Pattern[str]] = {
+    # `betas` est la surface la plus exposee : l'API IGNORE un nom de beta
+    # inconnu et traite quand meme la requete, donc une valeur aberrante
+    # partirait sans la moindre erreur visible. Tous les noms de beta
+    # d'Anthropic sont horodates ; un identifiant d'infrastructure ne l'est pas.
+    "betas": re.compile(r"[a-z0-9]+(?:[-.][a-z0-9]+)*-\d{4}-\d{2}-\d{2}"),
+}
+
+
+def _is_known_control(
+    node: Any, allowed: frozenset[str], motif: re.Pattern[str] = _CONTROL_TOKEN_RE
+) -> bool:
     """Le bloc a-t-il exactement la forme attendue ?
 
-    Les feuilles scalaires sont admises telles quelles (parametres
-    d'inference, noms de beta) ; seule une CLE inconnue disqualifie le bloc.
+    Une CLE inconnue disqualifie le bloc, et une VALEUR textuelle qui n'a pas
+    la forme d'un jeton de protocole aussi : sans ce second test, l'exclusion
+    portait sur le nom du champ sans jamais regarder son contenu.
     """
     if isinstance(node, dict):
         return all(
-            key in allowed and _is_known_control(value, allowed)
+            key in allowed and _is_known_control(value, allowed, motif)
             for key, value in node.items()
         )
     if isinstance(node, list):
-        return all(_is_known_control(item, allowed) for item in node)
-    return True
+        return all(_is_known_control(item, allowed, motif) for item in node)
+    if isinstance(node, str):
+        return motif.fullmatch(node) is not None
+    return True  # nombre, booleen, null : ne peut pas porter de texte libre
 
 #: Cles de JSON Schema qui sont structurelles, pas du texte libre.
 #: On traverse `description`, on ignore la mecanique du schema : ces valeurs
@@ -149,8 +181,22 @@ def _is_known_control(node: Any, allowed: frozenset[str]) -> bool:
 #: - `required` : liste de NOMS de proprietes. Les noms de proprietes ne sont
 #:   pas substitues (contrat avec le modele) ; substituer `required` casserait
 #:   la correspondance silencieusement.
+#: `type` y figure pour sa forme UNION (`["string", "null"]`) : le saut par
+#: SKIP_KEYS ne protegeait que la forme scalaire, et substituer les mots-cles
+#: rend le schema invalide (API 400).
+#: `format` et `pattern` sont des contrats de validation, pas du texte :
+#: `"format": "int64"` devenait un nom fictif — sans erreur, `format` etant une
+#: annotation, mais c'est de la corruption silencieuse.
 SCHEMA_STRUCTURAL_KEYS: frozenset[str] = frozenset(
-    {"required", "$schema", "$ref"}
+    {"required", "$schema", "$ref", "type", "format", "pattern"}
+)
+
+#: Conteneurs de sous-schemas dont les CLES sont des noms declares par l'outil :
+#: on preserve les noms et on traverse chaque definition. Les traiter
+#: generiquement appliquerait SKIP_KEYS a ces noms — une definition appelee
+#: « name » ou « data » verrait sa description recopiee telle quelle.
+SCHEMA_NAMED_SUBSCHEMAS: frozenset[str] = frozenset(
+    {"properties", "$defs", "definitions", "patternProperties"}
 )
 
 #: Cles de schema qui peuvent contenir un sous-schema (donc des `description`
@@ -274,9 +320,20 @@ def _walk(node: Any, fn: Callable[[str], str], *, in_schema: bool = False) -> An
 
         out: dict[str, Any] = {}
         for key, value in node.items():
-            if key in SKIP_KEYS and not (key == "data" and texte_brut):
+            structure = STRUCTURED_SKIP_KEYS.get(key)
+            if structure is not None and _is_known_control(value, structure):
                 out[key] = value
                 continue
+
+            if key in SKIP_KEYS and not (key == "data" and texte_brut):
+                # Le saut ne vaut que pour un SCALAIRE protocolaire. Ces cles
+                # portent parfois une structure — `cache_control` s'enrichit
+                # (`{"type": "ephemeral", "ttl": "5m"}`) et `metadata` est un
+                # dict libre cote client. La recopier verbatim laissait sortir
+                # tout son sous-arbre sans passer par le detecteur.
+                if not isinstance(value, (dict, list)):
+                    out[key] = value
+                    continue
 
             # Les noms de proprietes d'un schema sont un contrat avec le modele :
             # on preserve les cles et on traverse chaque definition. Teste AVANT
@@ -284,7 +341,7 @@ def _walk(node: Any, fn: Callable[[str], str], *, in_schema: bool = False) -> An
             # traversee generique appliquerait SKIP_KEYS aux NOMS de proprietes
             # et laisserait passer la description d'une propriete nommee
             # "name" / "id" / "data".
-            if in_schema and key == "properties" and isinstance(value, dict):
+            if in_schema and key in SCHEMA_NAMED_SUBSCHEMAS and isinstance(value, dict):
                 out[key] = {
                     pname: _walk(pdef, fn, in_schema=True)
                     for pname, pdef in value.items()
@@ -346,7 +403,8 @@ def walk_request(body: dict[str, Any], sub: Substituter) -> dict[str, Any]:
 
     for key, value in body.items():
         allowed = REQUEST_CONTROL_KEYS.get(key)
-        if allowed is not None and _is_known_control(value, allowed):
+        motif = _CONTROL_VALUE_RE.get(key, _CONTROL_TOKEN_RE)
+        if allowed is not None and _is_known_control(value, allowed, motif):
             continue
         out[key] = _walk(value, sub.to_surrogate)
 
@@ -493,16 +551,11 @@ class SSERewriter:
         elif etype in ("message_delta", "error"):
             # Memes surfaces que walk_response hors `content` : l'echo de
             # `stop_sequence` et les messages d'erreur portent des substituts.
-            def _resolve(text: str) -> str:
-                resolved, missing = self.sub.to_real(text)
-                self.unresolved.extend(missing)
-                return resolved
-
             out = dict(event)
             for key, value in event.items():
                 if key in RESPONSE_CONTROL_KEYS or key == "type":
                     continue
-                out[key] = _walk(value, _resolve)
+                out[key] = _walk(value, self._resolve)
             yield out
 
         else:
@@ -510,6 +563,14 @@ class SSERewriter:
             yield event
 
     # -- interne ------------------------------------------------------------ #
+
+    #: Deltas dont le contenu est SIGNE : y toucher invalide la signature (D3).
+    _OPAQUE_DELTAS: frozenset[str] = frozenset({"thinking_delta", "signature_delta"})
+
+    def _resolve(self, text: str) -> str:
+        resolved, missing = self.sub.to_real(text)
+        self.unresolved.extend(missing)
+        return resolved
 
     def _on_block_start(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
         idx = event.get("index", 0)
@@ -523,6 +584,12 @@ class SSERewriter:
         elif btype in ("tool_use", "server_tool_use", "mcp_tool_use"):
             self._json[idx] = []
 
+        # L'evenement de demarrage n'est pas vide : `mcp_tool_use.server_name`,
+        # `web_search_tool_result.content[].url` et parfois `input` y sont deja
+        # remplis. Les emettre verbatim montrait le SUBSTITUT a l'operateur, la
+        # ou walk_response restaure le meme bloc.
+        if block:
+            event = {**event, "content_block": _walk(block, self._resolve)}
         yield event
 
     def _on_delta(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -530,8 +597,16 @@ class SSERewriter:
         delta = event.get("delta", {})
         dtype = delta.get("type")
 
-        if dtype == "text_delta" and idx in self._text:
-            resolved, missing = self._text[idx].feed(delta.get("text", ""))
+        if dtype == "text_delta":
+            # L'accumulateur est cree A LA VOLEE : un delta sans
+            # `content_block_start` correspondant partait sinon brut, substituts
+            # non resolus.
+            buffer = self._text.get(idx)
+            if buffer is None:
+                buffer = self._text[idx] = _TextBuffer(
+                    self.sub, keep=self.sub.max_surrogate_len
+                )
+            resolved, missing = buffer.feed(delta.get("text", ""))
             self.unresolved.extend(missing)
             if resolved:
                 out = dict(event)
@@ -540,13 +615,22 @@ class SSERewriter:
             # rien a emettre : le tail buffer retient encore le contenu
             return
 
-        if dtype == "input_json_delta" and idx in self._json:
-            # On accumule, on n'emet RIEN. Resolution atomique au stop.
-            self._json[idx].append(delta.get("partial_json", ""))
+        if dtype == "input_json_delta":
+            # On accumule, on n'emet RIEN. Resolution atomique au stop (D2).
+            self._json.setdefault(idx, []).append(delta.get("partial_json", ""))
             return
 
-        # thinking_delta, signature_delta, et tout type futur : passthrough.
-        yield event
+        if dtype in self._OPAQUE_DELTAS:
+            yield event
+            return
+
+        # Tout autre delta est RESOLU. `citations_delta` porte deja
+        # `citation.cited_text` : un passthrough par defaut etait fail-open pour
+        # la restauration — l'operateur voyait le substitut a la place de sa
+        # propre valeur, et le moindre delta ajoute demain aurait le meme sort.
+        out = dict(event)
+        out["delta"] = _walk(delta, self._resolve)
+        yield out
 
     def _on_block_stop(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
         idx = event.get("index", 0)

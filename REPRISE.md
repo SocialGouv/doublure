@@ -11,7 +11,7 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 2 traité, round 3 PAS ENCORE LANCÉ.**
+**Boucle en cours. Round 3 traité, round 4 à lancer.**
 
 Protocole appliqué à chaque round :
 1. Lancer 2-3 agents `general-purpose`, `model: opus`, en parallèle, sur des
@@ -29,7 +29,7 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**374 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**476 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
@@ -45,9 +45,13 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
 
 ## 3. À FAIRE au prochain round
 
-1. **Lancer le round 3** (rien n'a encore été relu depuis les correctifs du
-   round 2 : hook fortement remanié, `_aad`, allowlist cloud, `detect()`).
-2. Points du round 2 **non corrigés**, à re-arbitrer ou à traiter :
+1. **Lancer le round 4.** Zones jamais relues depuis les correctifs du round 3,
+   donc les plus suspectes : la récursion sur régions imbriquées du hook
+   (`_regions_imbriquees` + `_program_positions`, réécriture profonde),
+   `STRUCTURED_SKIP_KEYS` / `SCHEMA_STRUCTURAL_KEYS` élargis, le nouvel ordre
+   PUBLIC dans `_sort_key`, la substitution des noms de query, et
+   `_erreur_restauree` côté proxy.
+2. Points **non corrigés**, à re-arbitrer ou à traiter :
    - **M3 — fragmentation de substituts** : le détecteur renvoie parfois un
      span URL tronqué (`https://acme.int`) qui chevauche un span HOSTNAME ;
      l'arbitrage garde le plus long et le reste devient une entité distincte.
@@ -66,6 +70,10 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
      Piste : figer aussi le CARDINAL attendu.
    - **T4 — `sensitive_from_fixture`** ne reconnaît que quelques TLD ; un hôte
      en `.dev`/`.app` dans une future fixture ne serait pas recherché.
+   - **Zone nue** (round 3) : `HOSTNAME "acme.internal"` n'atterrit pas dans la
+     zone fictive de `db-01.acme.internal`. Corriger par `_zone_for` en ferait
+     un attribut PARTAGÉ, donc non restaurable — arbitré en faveur de la
+     restauration. Ne pas « re-corriger » sans revoir ce compromis.
    - **Hook, contournements assumés faute de mieux** (le rapport les liste,
      ils relèvent structurellement de D9) : écrire-puis-exécuter
      (`printf … > /tmp/x && bash /tmp/x`), scripts par chemin
@@ -73,6 +81,10 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
      `git clone` vers un remote arbitraire, `docker pull/push`, `helm pull`.
      **Ne pas empiler des motifs pour ceux-là** : le hook est un rideau, pas
      un mur, et c'est écrit dans son en-tête.
+   - **Jeton de contrôle nu** : une valeur sous une clé de `REQUEST_CONTROL_KEYS`
+     qui a la forme d'un jeton de protocole (`db01`, sans point ni espace) n'est
+     pas traversée. Le motif attrape les formes sensibles réelles (FQDN, e-mail,
+     URL, IP, chemin) ; `betas` a en plus sa règle horodatée. Limite connue.
 3. Le reste du backlog produit : `corpus/real/` non annoté (matière de jo),
    KMS/rotation/journal d'accès immuable (Phase 6, hors MVP).
 
@@ -102,7 +114,26 @@ réversibles. Corrigé + `tests/test_classes_contract.py`.
 Hook : préfixe/quoting/glob · décodage-puis-shell · `$ENV` d'interpréteur ·
 `ps auxe` · variables sensibles · `~/.ssh` en bloc · outils MCP · hôte d'URL ·
 `bash <(curl)` · backticks · `busybox` · `terraform show` · `port-forward` ·
-`gh api` · `docker run -v` · expansions `${…}` en milieu de mot.
+`gh api` · `docker run -v` · expansions `${…}` en milieu de mot · hôte local
+comparé comme ADRESSE (`127.evil.test`) · régions imbriquées analysées
+récursivement (`system()`, `subprocess.run([…])`, `<(…)`) · `%ENV`/`ENVIRON`
+nus · enveloppes `su`/`runuser` et options à valeur (`sudo -u root env`) ·
+index par OCCURRENCE (`env PATH=/x env`).
+
+Faux positifs corrigés (mesurés, un agent bloqué est aussi cassé) : `set +e` ·
+`env -i`/`env -u` · `command -v env` · `compgen -A function` ·
+`echo $(find . -name env)` · `$ANTHROPIC_BASE_URL` · `ls ~/.ssh` ·
+`grep -r curl src/`.
+
+Walker/proxy round 3 : sous-arbre non scalaire sous une clé de `SKIP_KEYS` ·
+scalaire arbitraire sous une clé de contrôle (`betas`) · mots-clés de schéma
+(`type` en union, `format`, `pattern`) · `cache_control` enrichi ·
+`content_block_start` non restauré · `citations_delta` en passthrough ·
+corps d'erreur streamé non restauré · séparateurs SSE CRLF · delta orphelin.
+
+Moteur round 3 : span PUBLIC masquant une classe substituable · nom de
+paramètre de query porteur d'identifiant · `PASSWORD_CONTEXT` recopiant le
+secret précédent · `_extract_repo` matchant `attacker-github.com`.
 
 Tests complaisants : compteur de collisions tautologique · recherche aveugle
 aux échappements · garde-fou FakeDetector à couverture partielle · `or` de

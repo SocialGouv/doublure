@@ -6,6 +6,7 @@ fait la traduction octets ⇄ dict, et rien d'autre.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 
@@ -36,16 +37,19 @@ def encode_sse(event: dict[str, Any]) -> bytes:
     return f"event: {etype}\ndata: {data}\n\n".encode("utf-8")
 
 
+#: Séparateur de blocs SSE. Les trois formes sont valides (RFC EventSource) :
+#: ne chercher que ``\n\n`` sur un flux en CRLF ne rend AUCUN bloc — le tampon
+#: grossit sans fin et l'opérateur ne voit rien passer, sans la moindre erreur.
+_SEPARATEUR_BLOC = re.compile(r"\r\n\r\n|\r\r|\n\n")
+
+
 def iter_blocks(chunk: str, buffer: str) -> tuple[list[str], str]:
     """Découpe un flux SSE en blocs complets. Retourne (blocs, reste tamponné)."""
     buffer += chunk
     blocks: list[str] = []
-    while True:
-        idx = buffer.find("\n\n")
-        if idx == -1:
-            break
-        blocks.append(buffer[:idx])
-        buffer = buffer[idx + 2:]
+    while (found := _SEPARATEUR_BLOC.search(buffer)):
+        blocks.append(buffer[:found.start()])
+        buffer = buffer[found.end():]
     return blocks, buffer
 
 

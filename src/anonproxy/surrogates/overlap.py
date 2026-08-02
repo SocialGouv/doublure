@@ -9,7 +9,13 @@ Ordre appliqué :
 1. **SECRET d'abord**, absolument. Un secret avalé par un span plus long
    deviendrait réversible via le coffre — violation de D4. Il gagne même
    quand il est plus court ou moins bien scoré.
-2. **Span le plus long** ensuite. Sur un recouvrement PARTIEL, prendre le
+2. **PUBLIC en dernier**, symétriquement. Un span PUBLIC n'est pas substitué :
+   s'il gagne un arbitrage, la zone reste EN CLAIR. Comme il est souvent plus
+   long (``SERVICE`` couvre ``db-master.acme.internal running`` là où
+   ``HOSTNAME`` s'arrête à l'hôte), le critère de longueur le faisait gagner
+   et le nom d'hôte réel sortait tel quel. Un span PUBLIC ne conserve donc que
+   ce qu'aucune classe substituable ne revendique.
+3. **Span le plus long** ensuite. Sur un recouvrement PARTIEL, prendre le
    span le plus court laisserait le reste en clair : ``alice.demo@ex.org``
    arbitré en faveur de ``ex.org`` (URL) laisserait fuir ``alice.demo``.
 3. **Priorité de type** (table du plan §5 : ID technique > EMAIL > HOSTNAME >
@@ -26,8 +32,10 @@ from .classes import DataClass, class_of, priority_of
 
 
 def _sort_key(span: dict[str, Any]) -> tuple:
+    classe = class_of(span["type"])
     return (
-        0 if class_of(span["type"]) is DataClass.SECRET else 1,
+        0 if classe is DataClass.SECRET else 1,
+        1 if classe is DataClass.PUBLIC else 0,
         -(span["end"] - span["start"]),
         priority_of(span["type"]),
         -float(span.get("score", 0.0)),

@@ -358,3 +358,117 @@ def test_empoisonnement_ne_casse_pas_les_ip(tmp_path):
 @pytest.mark.parametrize("path", ["/", "//", "///"])
 def test_racine_ne_plante_pas(tmp_path, path):
     assert engine(tmp_path).substitute_value("FILE_PATH", path) == path
+
+
+# --------------------------------------------------------------------------- #
+# Round 3 — un span PUBLIC n'est pas substitué : s'il gagne un arbitrage de
+# recouvrement, la zone sort EN CLAIR. `SERVICE` couvre souvent plus large que
+# `HOSTNAME` (« db-master.acme.internal running »), donc le critère de longueur
+# le faisait gagner.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("texte, spans, reel", [
+    ("db-master.acme.internal running",
+     [{"type": "SERVICE", "start": 0, "end": 31, "score": 0.9},
+      {"type": "HOSTNAME", "start": 0, "end": 23, "score": 0.9}],
+     "db-master.acme.internal"),
+    ("db-master.acme.internal",
+     [{"type": "SERVICE", "start": 0, "end": 23, "score": 0.9},
+      {"type": "HOSTNAME", "start": 0, "end": 23, "score": 0.9}],
+     "db-master.acme.internal"),
+    ("10.1.2.3:8080",
+     [{"type": "PORT", "start": 0, "end": 13, "score": 0.9},
+      {"type": "IP_ADDRESS", "start": 0, "end": 8, "score": 0.9}],
+     "10.1.2.3"),
+])
+def test_un_span_public_ne_masque_pas_une_classe_substituable(tmp_path, texte, spans, reel):
+    sortie = engine(tmp_path).transform(texte, spans)
+    assert reel not in sortie, f"valeur réelle laissée en clair par un span PUBLIC : {sortie!r}"
+
+
+def test_le_public_reste_prioritaire_sur_ce_qu_il_est_seul_a_couvrir(tmp_path):
+    """Le pendant : hors recouvrement, un span PUBLIC garde son rôle."""
+    texte = "CVE-2024-3094 sur db-01.acme.internal"
+    spans = [{"type": "CVE_ID", "start": 0, "end": 13, "score": 0.9},
+             {"type": "HOSTNAME", "start": 18, "end": 37, "score": 0.9}]
+    sortie = engine(tmp_path).transform(texte, spans)
+    assert sortie.startswith("CVE-2024-3094"), "un identifiant public a été substitué"
+    assert "db-01.acme.internal" not in sortie
+
+
+# --------------------------------------------------------------------------- #
+# Round 3 — le NOM d'un paramètre de query n'était jamais substitué. Un nom
+# d'API ne contient ni point, ni arobase, ni deux-points : quand il en porte,
+# c'est la donnée elle-même.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("url, reel", [
+    ("http://api.example.com/foo?db-master-01.acme.internal=1", "db-master-01.acme.internal"),
+    ("http://api.example.com/foo?alice@acme.example=x", "alice@acme.example"),
+    ("http://api.example.com/foo?10.1.2.3=host", "10.1.2.3"),
+    ("http://api.example.com/foo?a=1&fd00::1=2", "fd00::1"),
+])
+def test_nom_de_parametre_porteur_d_identifiant_substitue(tmp_path, url, reel):
+    sortie = engine(tmp_path).substitute_value("URL", url)
+    assert reel not in sortie, f"identifiant laissé en clair dans un nom de query : {sortie!r}"
+
+
+def test_les_noms_de_parametres_d_api_restent_lisibles(tmp_path):
+    """Substituer `page` ou `limit` casserait le sens que le modèle doit lire."""
+    sortie = engine(tmp_path).substitute_value(
+        "URL", "http://api.example.com/foo?page=2&limit=10&cursor=abc")
+    for nom in ("page=", "limit=", "cursor="):
+        assert nom in sortie, f"nom de paramètre d'API perdu : {nom} ({sortie!r})"
+
+
+# --------------------------------------------------------------------------- #
+# Round 3 — `PASSWORD_CONTEXT` : `.*?[:=]\s*(\S+)$` se cale sur le DERNIER mot,
+# donc tout ce qui précède (y compris un premier secret) était recopié.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("valeur, interdits", [
+    ("oldpass=secret123ABC newpass=secret456XYZ", ["secret123ABC", "secret456XYZ"]),
+    ("jdbc:postgresql://hote/db?password=P@ssword123 ssl=true", ["P@ssword123"]),
+    ("password: MonMotDePasse42", ["MonMotDePasse42"]),
+    # un identifiant en position de libellé : le span SECRET a fait perdre son
+    # span au HOSTNAME, on ne peut donc pas le recopier
+    ("db-01.acme.internal pass: X9", ["db-01.acme.internal"]),
+])
+def test_password_context_ne_recopie_aucun_secret(tmp_path, valeur, interdits):
+    sortie = engine(tmp_path).substitute_value("PASSWORD_CONTEXT", valeur)
+    for interdit in interdits:
+        assert interdit not in sortie, f"{interdit!r} recopié dans {sortie!r}"
+
+
+def test_password_context_garde_un_libelle_simple(tmp_path):
+    """D1 : le substitut reste plausible quand le libellé est inoffensif."""
+    assert engine(tmp_path).substitute_value(
+        "PASSWORD_CONTEXT", "password: MonMotDePasse42").startswith("password: ")
+
+
+# --------------------------------------------------------------------------- #
+# Round 3 — `_extract_repo` testait une sous-chaîne : `attacker-github.com`
+# passait pour du GitHub, et le substitut affichait `github.com`. Ce n'est pas
+# une fuite mais une confiance FABRIQUÉE, que le modèle peut lire.
+# --------------------------------------------------------------------------- #
+
+
+def test_un_hote_qui_contient_github_n_est_pas_github(tmp_path):
+    from anonproxy.surrogates.canonical import _extract_repo
+    assert _extract_repo("https://attacker-github.com/acme/secret-repo") is None
+    sortie = engine(tmp_path).substitute_value(
+        "URL", "https://attacker-github.com/acme/secret-repo")
+    assert "github.com" not in sortie, f"hôte d'hébergement fabriqué : {sortie!r}"
+
+
+@pytest.mark.parametrize("url", [
+    "https://github.com/acme/payments-api",
+    "git@github.com:acme/payments-api.git",
+    "https://internal.github.com/acme/payments-api",
+])
+def test_les_vraies_formes_de_depot_restent_reconnues(url):
+    from anonproxy.surrogates.canonical import _extract_repo
+    assert _extract_repo(url) == ("acme", "payments-api"), url

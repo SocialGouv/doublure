@@ -23,6 +23,7 @@ raison au modèle sous une forme exploitable.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -45,13 +46,22 @@ VAULT_PATTERNS = (
 #: fichier) ET sur les commandes shell, quel que soit le lecteur employé :
 #: `cat`, `less`, `cp`, `python -c open(...)`, un éditeur… Ne pas énumérer les
 #: lecteurs, viser la cible.
+#: Suffixes de fichiers d'environnement qui sont des GABARITS publics, faits
+#: pour être partagés. L'exclusion est LOCALE au suffixe, jamais globale à la
+#: commande : une exclusion en `(?!.*…)` se désamorce en mentionnant
+#: `.env.example` n'importe où ailleurs (`cat .env; echo .env.example`).
+_GABARIT_ENV = r"(?!(example|sample|template|dist|schema)\b)"
+
 SENSITIVE_FILE_PATTERNS: tuple[str, ...] = (
     # Le délimiteur de droite doit inclure les opérateurs shell : sans eux,
     # `cat .env|xxd` et `cat .env;true` passaient.
-    # `production.env` autant que `.env` ; mais jamais les TEMPLATES publics
-    # (`.env.example`, `.env.sample`…), qui sont faits pour être partagés.
-    r"(?!.*\.env\.(example|sample|template|dist|schema))"
-    r"[\w-]*\.env(\.[\w-]+)?($|[\s'\"|>;&)\],])",
+    # `production.env`, `.env.local` et `.env-production` autant que `.env` :
+    # le séparateur de variante est un point OU un tiret.
+    rf"[\w-]*\.env([.\-]{_GABARIT_ENV}[\w-]+)?($|[\s'\"|>;&)\],])",
+    # `env.production` sans point initial (convention `env_file:` de Compose).
+    # Le point APRÈS `env` est obligatoire, sinon `venv` et `python -m venv env`
+    # correspondaient.
+    rf"(^|[\s/'\"=(])env\.{_GABARIT_ENV}[\w-]+($|[\s'\"|>;&)\],])",
     r"\.aws/credentials",
     r"\.kube/config",
     r"\bkubeconfig\b",
@@ -102,20 +112,43 @@ _SHELL_SOCKET_RE = re.compile(r"/dev/(tcp|udp)/", re.I)
 _INLINE_ENV_RE = re.compile(
     r"(os\s*\.\s*(environ|getenv|putenv)|process\s*\.\s*env\b|"
     r"[%$@]_?ENV\s*[\[{]|\$_?ENV\b|"
-    r"\bENVIRON\s*\[|\barray\s+get\s+env\b|"
+    # `perl -e 'print keys %ENV'` et `awk 'BEGIN{for(k in ENVIRON)…}'` déversent
+    # tout sans indexer. Casse SIGNIFICATIVE ici : `environ` minuscule est un
+    # mot courant, `ENVIRON` majuscule est la table d'awk.
+    r"(?-i:[%@]_?ENV)\b|(?-i:\bENVIRON\b)|"
+    r"\barray\s+get\s+env\b|"
     r"Sys\.getenv|System\.getenv|\bgetenv\s*\()",
     re.I,
 )
 
-#: Invocation d'un interpréteur avec le programme EN LIGNE. Dans ce contexte
-#: seulement, une simple mention de l'environnement suffit à refuser : le
-#: risque est réel et le faux positif quasi nul.
-_INTERPRETE_EN_LIGNE = re.compile(
-    r"\b(python3?|perl|ruby|node|php|lua|tclsh|Rscript|julia|awk|gawk|mawk)\b"
-    r"[^|;&]*\s-(e|c|E|f)?\b|\bawk\b\s+[\"']?BEGIN",
+#: Régions dont le CONTENU est lui-même une commande : substitutions du shell
+#: et primitives d'exécution des interpréteurs. Elles sont analysées
+#: récursivement puis retirées de la commande englobante — sans quoi leurs mots
+#: y passeraient pour de simples arguments (`perl -e 'system("env")'`).
+_NESTED_RE = re.compile(
+    r"\$\((?P<sub>[^()]*)\)"
+    r"|`(?P<bt>[^`]*)`"
+    r"|[<>]\((?P<proc>[^()]*)\)"
+    r"|\b(?:system|shell_exec|passthru|popen|Popen|execSync|spawnSync|exec|qx|"
+    r"os\.execute|IO\.popen|subprocess\.(?:run|call|check_output|check_call|Popen)|"
+    r"check_output|check_call|getoutput)\s*\(\s*\[?(?P<appel>[^()\[\]]*)\]?\s*\)",
     re.I,
 )
-_MENTION_ENV = re.compile(r"\b(env|environ|environment)\b", re.I)
+
+
+def _regions_imbriquees(normalized: str) -> list[str]:
+    """Contenus exécutables imbriqués, prêts à être ré-analysés.
+
+    La virgule devient un séparateur : `subprocess.run(["curl", "http://x"])`
+    est une commande dont les mots sont séparés par des virgules, pas par des
+    espaces.
+    """
+    regions = []
+    for m in _NESTED_RE.finditer(normalized):
+        contenu = next((v for v in m.groupdict().values() if v is not None), "")
+        if contenu.strip():
+            regions.append(contenu.replace(",", " "))
+    return regions
 
 #: Charge obfusquée réinjectée dans un interpréteur : le hook ne voit que
 #: `base64 -d`, la charge réelle n'apparaît qu'à l'exécution. On refuse le
@@ -145,13 +178,34 @@ _SENSITIVE_NAME_RE = re.compile(
     r"CONNECTION_STRING|BEARER|COOKIE)", re.I,
 )
 
-_SENSITIVE_VAR_RE = re.compile(
-    r"\$\{?!?\s*[A-Za-z_]*(AWS|GCP|AZURE|ANTHROPIC|OPENAI|GITHUB|GITLAB|SLACK|"
-    r"VAULT|ANONPROXY|DOCKER|NPM|PYPI|DATADOG)[A-Za-z0-9_]*|"
-    r"\$\{?!?\s*[A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|"
-    r"CREDENTIAL|PRIVATE_KEY)[A-Za-z0-9_]*",
+#: Le NOM déréférencé, isolé de sa syntaxe (`$X`, `${X}`, `${!X}`).
+_NOM_VARIABLE_RE = re.compile(r"\$\{?!?\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+_NOM_SENSIBLE_RE = re.compile(
+    r"(AWS|GCP|AZURE|ANTHROPIC|OPENAI|GITHUB|GITLAB|SLACK|VAULT|ANONPROXY|DOCKER|"
+    r"NPM|PYPI|DATADOG|TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|"
+    r"PRIVATE_KEY)",
     re.I,
 )
+
+#: Variables de CONFIGURATION dont le nom porte un mot sensible mais dont la
+#: valeur ne l'est pas. Les bloquer empêchait l'agent de vérifier sa propre
+#: configuration — `ANTHROPIC_BASE_URL` est l'entrée du proxy, il la lit à
+#: chaque session. Liste de noms COMPLETS : un préfixe rouvrirait le trou.
+#: `ANONPROXY_STATE_DIR` en est volontairement absente — le chemin du coffre
+#: est lui-même un secret.
+_VARS_PUBLIQUES = frozenset({
+    "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+    "AWS_REGION", "AWS_DEFAULT_REGION", "AWS_PROFILE", "AWS_PAGER",
+    "GOOGLE_CLOUD_PROJECT", "DOCKER_HOST", "NPM_CONFIG_REGISTRY",
+})
+
+
+def _variable_sensible(normalized: str) -> str | None:
+    for nom in _NOM_VARIABLE_RE.findall(normalized):
+        if nom.upper() not in _VARS_PUBLIQUES and _NOM_SENSIBLE_RE.search(nom):
+            return nom
+    return None
 
 #: (appliqué sur la commande NORMALISÉE : les quotes ont déjà été retirées)
 _INLINE_NETWORK_RE = re.compile(
@@ -207,10 +261,6 @@ DENY_COMMAND_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\.local/state(/[^/\s]*)*/\*", "accès générique au répertoire d'état (coffre)"),
     (r"\bfind\b[^|;&]*\.local/state\b", "énumération du répertoire d'état (coffre)"),
 )
-
-#: Hôtes joignables sans contourner la politique (services locaux du projet).
-LOCAL_HOST_RE = re.compile(r"(localhost|127\.0\.0\.1|::1)(:\d+)?")
-
 
 def audit(record: dict) -> None:
     try:
@@ -273,7 +323,11 @@ def tokenize(command: str) -> list[list[str]]:
     une substitution `$(...)`.
     """
     cleaned = re.sub(r"[$`()]", " ", normalize(command))
-    parts = re.split(r"[|;&\n]+|\|\||&&", cleaned)
+    # Les redirections séparent au même titre que `|` : sans ça, la cible de
+    # `env > dump.txt` passait pour le programme exécuté PAR `env`, donc pour
+    # un préfixe d'exécution légitime. Les substitutions de processus ont déjà
+    # été retirées à ce stade, `<` et `>` ne peuvent plus qu'ouvrir un fichier.
+    parts = re.split(r"[|;&\n<>]+|\|\||&&", cleaned)
     return [p.split() for p in parts if p.strip()]
 
 
@@ -282,23 +336,72 @@ def _basename(token: str) -> str:
     return token.rsplit("/", 1)[-1]
 
 
-def _program_words(tokens: list[str]) -> list[str]:
-    """Mots pouvant désigner un programme : ignore les options et les
-    affectations, et déplie les enveloppes (`command`, `bash -c`, `xargs`…)."""
-    wrappers = {"command", "builtin", "exec", "nohup", "timeout", "time", "sudo",
-                "doas", "xargs", "nice", "ionice", "stdbuf", "env", "sh", "bash",
-                "zsh", "ksh", "dash", "watch", "script", "busybox", "toybox",
-                "setsid", "chroot", "unshare", "nsenter", "flock", "parallel",
-                "do", "then", "else", "elif", "while", "until", "if", "for"}
-    words = []
-    for tok in tokens:
-        if tok.startswith("-") or "=" in tok or tok.isdigit():
-            continue  # option, affectation `VAR=x` ou durée : jamais un programme
+#: Enveloppes : leur argument est lui-même un programme, il faut continuer.
+_WRAPPERS = frozenset({
+    "command", "builtin", "exec", "nohup", "timeout", "time", "sudo",
+    "doas", "xargs", "nice", "ionice", "stdbuf", "env", "sh", "bash",
+    "zsh", "ksh", "dash", "watch", "script", "busybox", "toybox",
+    "setsid", "chroot", "unshare", "nsenter", "flock", "parallel",
+    "su", "runuser", "machinectl", "systemd-run", "proot", "fakeroot",
+    "do", "then", "else", "elif", "while", "until", "if", "for",
+})
+
+#: Options d'enveloppe dont la valeur occupe le token SUIVANT. Sans elles,
+#: `sudo -u root env` faisait passer `root` pour le programme et `env`
+#: n'était jamais examiné. `-c` en est exclu : sa valeur EST la commande.
+_OPT_AVEC_VALEUR = frozenset({"-u", "--user", "-g", "--group", "-n", "-I", "-t",
+                              "--timeout", "--unset"})
+
+#: Enveloppes dont le premier argument est une CIBLE (répertoire, verrou),
+#: pas le programme.
+_WRAPPERS_AVEC_CIBLE = frozenset({"chroot", "flock"})
+
+#: Ce qui ressemble à une durée (`timeout 5s cmd`), jamais à un programme.
+_DUREE_RE = re.compile(r"\d+(\.\d+)?[smhd]?")
+
+
+def _program_positions(tokens: list[str]) -> list[int]:
+    """Indices des mots pouvant désigner un programme.
+
+    Renvoyer les INDICES et non les mots permet d'évaluer chaque occurrence à
+    sa place : avec le seul nom, `env PATH=/x env` était jugé sur le premier
+    `env` (un préfixe d'exécution légitime) et le second — un déversement —
+    passait.
+    """
+    positions: list[int] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ("-exec", "-execdir", "-ok", "-okdir"):
+            # `find … -exec curl {} \;` : ce qui suit est une commande.
+            if i + 1 < len(tokens):
+                positions.append(i + 1)
+            i += 2
+            continue
+        if tok.startswith("-"):
+            i += 2 if tok in _OPT_AVEC_VALEUR else 1
+            continue
+        if "=" in tok or _DUREE_RE.fullmatch(tok):
+            i += 1
+            continue
         base = _basename(tok)
-        words.append(base)
-        if base not in wrappers:
+        if base == "command" and any(t in ("-v", "-V") for t in tokens[i + 1:]):
+            break  # `command -v env` : introspection, rien n'est exécuté
+        positions.append(i)
+        if base not in _WRAPPERS:
             break  # premier programme réel atteint : la suite, ce sont ses arguments
-    return words
+        i += 1
+        if base in _WRAPPERS_AVEC_CIBLE:
+            while i < len(tokens) and tokens[i].startswith("-"):
+                i += 1
+            i += 1
+    # `su root -c env` : l'utilisateur occupe la position de programme et
+    # arrêtait l'analyse ; la valeur de `-c` est pourtant une commande.
+    if positions and _basename(tokens[positions[0]]) in _WRAPPERS and "-c" in tokens:
+        cible = tokens.index("-c") + 1
+        if cible < len(tokens) and cible not in positions:
+            positions.append(cible)
+    return positions
 
 
 def check_vault_access(text: str) -> str | None:
@@ -341,9 +444,24 @@ def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
     UNE variable non sensible. Les bloquer rendait l'agent inutilisable.
     """
     suite = tokens[idx + 1:]
+    if base == "env":
+        # `env` ne déverse que s'il n'exécute RIEN. `env -i cmd` et
+        # `env -u FOO cmd` réduisent l'environnement au lieu de l'exposer.
+        i = 0
+        while i < len(suite):
+            tok = suite[i]
+            if tok in ("-u", "--unset"):
+                i += 2
+            elif tok.startswith("-") or "=" in tok:
+                i += 1
+            else:
+                return False  # un programme suit : préfixe d'exécution
+        return True
     if _is_env_prefix(tokens, idx):
         return False
-    options = [t for t in suite if t.startswith("-")]
+    # `+e` est une option au même titre que `-e` : `set +e` désactive le mode
+    # strict, il n'imprime rien.
+    options = [t for t in suite if t.startswith(("-", "+"))]
     arguments = [t for t in suite if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", t)]
     if base == "set":
         return not options  # `set -e` : mode strict ; `set > f` : déversement
@@ -352,13 +470,46 @@ def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
     if base == "printenv":
         # une variable nommée : refusé seulement si son nom est sensible
         return not arguments or any(_SENSITIVE_NAME_RE.search(t) for t in arguments)
+    if base == "compgen":
+        # `-v` (variables) et `-e` (exportées) déversent ; `-A function`,
+        # `-A alias`, `-c` listent des noms sans valeur.
+        if any(t in ("-v", "-e") for t in options):
+            return True
+        if "-A" in suite:
+            return suite[suite.index("-A") + 1:][:1] in (["variable"], ["export"],
+                                                        ["exported"])
+        return not options
     return True
 
 
-def check_bash(command: str) -> str | None:
+#: Commandes qui n'exposent que des MÉTADONNÉES (nom, taille, date) : `ls` et
+#: `stat` ne peuvent pas révéler le CONTENU d'un secret, et interdire de
+#: vérifier son existence n'apporte rien.
+_METADATA_PROGRAMS = frozenset({"ls", "stat", "file", "du", "test", "dirname",
+                                "basename", "realpath", "readlink"})
+
+
+def _metadata_seule(command: str) -> bool:
+    """Commande simple UNIQUE dont le programme ne lit aucun contenu.
+
+    L'unicité est essentielle : `ls ~/.ssh && cat ~/.ssh/id_rsa` doit rester
+    refusé, et une substitution pourrait cacher n'importe quel lecteur.
+    """
+    normalized = normalize(command)
+    if _NESTED_RE.search(normalized):
+        return False
+    commandes = tokenize(command)
+    if len(commandes) != 1:
+        return False
+    positions = _program_positions(commandes[0])
+    return bool(positions) and all(
+        _basename(commandes[0][i]) in _METADATA_PROGRAMS for i in positions)
+
+
+def check_bash(command: str, _profondeur: int = 0) -> str | None:
     if (reason := check_vault_access(command)):
         return reason
-    if (reason := check_sensitive_files(command)):
+    if not _metadata_seule(command) and (reason := check_sensitive_files(command)):
         return reason
 
     normalized = normalize(command)
@@ -372,30 +523,29 @@ def check_bash(command: str) -> str | None:
         return "appel réseau embarqué dans un interpréteur : contourne le proxy (D9)"
     if _INLINE_ENV_RE.search(normalized):
         return "lecture de l'environnement depuis un interpréteur"
-    if _SENSITIVE_VAR_RE.search(normalized):
+    if _variable_sensible(normalized):
         return "lecture d'une variable d'environnement porteuse de secret"
     if _DECODER_TO_SHELL_RE.search(normalized) or _STDIN_INTERPRETER_RE.search(normalized):
         return ("charge décodée puis exécutée : son contenu n'est pas analysable "
                 "avant exécution, la commande est refusée en l'état")
 
-    # Une substitution (`$(…)`, backticks) exécute ce qu'elle contient, où
-    # qu'il apparaisse : on inspecte alors TOUS les mots, pas seulement la
-    # position de programme.
-    substitution = "`" in command or "$(" in command
-    for tokens in tokenize(command):
-        candidats = [_basename(t) for t in tokens] if substitution else _program_words(tokens)
-        for base_tok in candidats:
-            if base_tok in ENV_DUMP_PROGRAMS:
-                idx = next((i for i, t in enumerate(tokens)
-                            if _basename(t) == base_tok), 0)
-                if _est_deversement(base_tok, tokens, idx):
-                    return "déversement de l'environnement (jetons et clés compris)"
-        # Tous les tokens, pas seulement la position de programme : `curl`
-        # caché dans une substitution de processus, un backtick ou un
-        # `system()` d'awk échappait à l'analyse.
-        for base in {_basename(t) for t in tokens}:
+    # Une région imbriquée est une commande à part entière : on l'analyse
+    # récursivement, puis on la RETIRE de la commande englobante — sinon ses
+    # mots y seraient lus comme des arguments (`echo $(find . -name env)`
+    # refusé) ou au contraire ignorés (`bash <(env)` accepté).
+    if _profondeur < 4:
+        for interne in _regions_imbriquees(normalized):
+            if (reason := check_bash(interne, _profondeur + 1)):
+                return reason
+    exterieur = _NESTED_RE.sub(" ", normalized)
+
+    for tokens in tokenize(exterieur):
+        for idx in _program_positions(tokens):
+            base = _basename(tokens[idx])
+            if base in ENV_DUMP_PROGRAMS and _est_deversement(base, tokens, idx):
+                return "déversement de l'environnement (jetons et clés compris)"
             if base in NETWORK_CAPABLE:
-                urls = re.findall(r"[a-z]+://[^\s'\"]+", normalized, re.I)
+                urls = re.findall(r"[a-z]+://[^\s'\"]+", " ".join(tokens), re.I)
                 if urls and all(_is_local_url(u) for u in urls):
                     continue  # services locaux du projet
                 return f"`{base}` peut sortir sur le réseau sans passer par le proxy (D9)"
@@ -408,12 +558,22 @@ def _is_local_url(url: str) -> bool:
     Chercher « localhost » n'importe où dans l'URL suffisait à passer :
     `https://exfil.test/?to=127.0.0.1` et `http://localhost@exfil.test/` sont
     des sorties vers un tiers.
+
+    L'hôte est comparé en tant qu'ADRESSE, jamais en tant que chaîne : un test
+    de préfixe `127.` accepte le nom de domaine `127.evil.test`, qui résout où
+    son propriétaire veut.
     """
     try:
         hote = urlsplit(url).hostname or ""
     except ValueError:
         return False
-    return hote in ("localhost", "127.0.0.1", "::1", "0.0.0.0") or hote.startswith("127.")
+    if hote == "localhost":
+        return True
+    try:
+        adresse = ipaddress.ip_address(hote)
+    except ValueError:
+        return False  # nom de domaine : jamais local, quelle que soit sa forme
+    return adresse.is_loopback or adresse.is_unspecified
 
 
 def _payload_text(payload: dict) -> str:

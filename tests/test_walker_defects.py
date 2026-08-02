@@ -324,3 +324,152 @@ def test_types_de_blocs_opaques_toujours_respectes():
     assert blocks[0]["thinking"] == "SECRET-HOST", "bloc thinking modifié (D3)"
     assert blocks[1]["data"] == "SECRET-HOST", "bloc redacted_thinking modifié (D3)"
     assert blocks[2]["text"] == "fake-host", "le texte normal doit être substitué"
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 8 — une clé de SKIP_KEYS dont la valeur n'est PAS un scalaire
+#
+# SKIP_KEYS suppose que `type`, `id`, `name`, `cache_control`, `role`… portent
+# une chaîne protocolaire. Rien ne le garantit : `cache_control` s'enrichit
+# (`{"type": "ephemeral", "ttl": "5m"}`) et `metadata` est un dict LIBRE côté
+# client. Un dict ou une liste sous une de ces clés est recopié VERBATIM, donc
+# jamais soumis au détecteur : fail-open silencieux, la requête part en 200.
+# --------------------------------------------------------------------------- #
+
+
+def test_defaut8_sous_arbre_sous_une_cle_ignoree_est_substitue():
+    body = {
+        "model": "claude-opus-4",
+        "system": [{
+            "type": "text",
+            "text": "contexte",
+            # forme enrichie : `cache_control` n'est plus un dict à une clé
+            "cache_control": {"type": "ephemeral", "annotation": "SECRET-HOST"},
+        }],
+        # `metadata` est libre : un client peut y poser une structure
+        "metadata": {"type": {"host": "SECRET-HOST"}},
+    }
+    out = walk_request(body, marker_sub())
+    brut = json.dumps(out)
+    assert "SECRET-HOST" not in brut, (
+        f"valeur réelle sortie sous une clé de SKIP_KEYS : {brut}")
+    # le discriminant scalaire, lui, reste intact — il fait partie du protocole
+    assert out["system"][0]["cache_control"]["type"] == "ephemeral"
+    assert out["system"][0]["type"] == "text"
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 9 — `_is_known_control` admet TOUT scalaire
+#
+# `return True` sur une feuille scalaire fait passer n'importe quelle chaîne
+# sous une clé de contrôle. `betas` est le pire cas : Anthropic ignore un nom
+# de beta inconnu mais TRAITE la requête — la chaîne part et reste dans ses
+# journaux, sans erreur visible côté opérateur.
+# --------------------------------------------------------------------------- #
+
+
+def test_defaut9_scalaire_sous_une_cle_de_controle_est_substitue():
+    body = {
+        "model": "claude-opus-4",
+        "betas": ["SECRET-HOST"],
+        "output_config": "cible SECRET-HOST",
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "messages": [{"role": "user", "content": "bonjour"}],
+    }
+    out = walk_request(body, marker_sub())
+    brut = json.dumps(out)
+    assert "SECRET-HOST" not in brut, (
+        f"valeur réelle sortie sous une clé de contrôle : {brut}")
+
+
+def test_defaut9_les_vrais_jetons_de_protocole_restent_intacts():
+    """Le pendant : durcir ne doit pas corrompre les paramètres d'inférence."""
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {
+        "model": "claude-sonnet-4-5-20250929",
+        "anthropic_version": "2023-06-01",
+        "betas": ["context-1m-2025-08-07", "fine-grained-tool-streaming-2025-05-14"],
+        "service_tier": "auto",
+        "max_tokens": 4096,
+        "temperature": 0.7,
+        "stream": True,
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "output_config": {"effort": "high"},
+        "messages": [{"role": "user", "content": "bonjour"}],
+    }
+    out = walk_request(body, sabotage)
+    for cle in ("model", "anthropic_version", "betas", "service_tier",
+                "max_tokens", "temperature", "stream", "thinking", "output_config"):
+        assert out[cle] == body[cle], f"paramètre de protocole corrompu : {cle}"
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 10 — mots-clés de JSON Schema substitués
+#
+# `type` sous sa forme UNION (`["string", "null"]`) n'était protégé que par
+# hasard : SKIP_KEYS sautait la forme scalaire, jamais la liste. Substituer les
+# mots-clés rend le schéma invalide et l'API répond 400 — session interrompue.
+# `format` et `pattern` sont dans le même cas, en plus discret : `format` étant
+# une annotation, l'API accepte `"format": "larch-cluster"` sans broncher.
+# Observé en session RÉELLE (`tools.54.custom.input_schema`).
+# --------------------------------------------------------------------------- #
+
+
+def test_defaut10_les_mots_cles_de_schema_ne_sont_pas_substitues():
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {"tools": [{
+        "name": "activate_window",
+        "description": "focus une fenêtre",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "app_id": {"default": None, "type": ["string", "null"]},
+                "pid": {"format": "int64", "minimum": 0,
+                        "type": ["integer", "null"],
+                        "pattern": r"^\d+$"},
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "required": ["app_id"],
+        },
+    }]}
+    schema = walk_request(body, sabotage)["tools"][0]["input_schema"]
+    assert schema["type"] == "object"
+    assert schema["properties"]["app_id"]["type"] == ["string", "null"]
+    assert schema["properties"]["pid"]["type"] == ["integer", "null"]
+    assert schema["properties"]["pid"]["format"] == "int64"
+    assert schema["properties"]["pid"]["pattern"] == r"^\d+$"
+    assert schema["required"] == ["app_id"]
+    assert schema["$schema"].startswith("https://json-schema.org/")
+
+
+def test_defaut10_les_descriptions_restent_substituees():
+    """Le pendant : c'est la fuite « la plus discrète » du plan §7."""
+    body = {"tools": [{
+        "name": "query",
+        "description": "interroge SECRET-HOST",
+        "input_schema": {
+            "type": "object",
+            "$defs": {
+                # une définition nommée comme une clé de SKIP_KEYS
+                "name": {"type": "string", "description": "hôte SECRET-HOST"},
+            },
+            "properties": {
+                "host": {"type": "string", "description": "défaut SECRET-HOST"},
+            },
+        },
+    }]}
+    out = json.dumps(walk_request(body, marker_sub()))
+    assert "SECRET-HOST" not in out, f"description non substituée : {out}"
+
+
+def test_defaut8_la_forme_connue_de_cache_control_reste_verbatim():
+    """`ttl` n'accepte que '5m' ou '1h' : le substituer donne une API 400.
+
+    L'exclusion vaut pour la forme CONNUE seulement — c'est ce qui distingue
+    « structure de protocole » de « recopie aveugle ».
+    """
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {"system": [{"type": "text", "text": "x",
+                        "cache_control": {"type": "ephemeral", "ttl": "5m"}}]}
+    out = walk_request(body, sabotage)
+    assert out["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
