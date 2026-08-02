@@ -35,12 +35,20 @@ class DetectClient:
             return self._detect_chunked(text)
         if strategy is None:
             strategy = "filtered"
+        # Les blocs délimités sont repérés à TOUTE taille : le détecteur ne
+        # classe un PEM court ni en CERTIFICATE ni en AUTH_TOKEN (son corps est
+        # trop bref), et la clé partait alors intégralement en clair.
+        blocs = self._detect_blocs_longs(text)
         try:
             r = self._client.post(
                 f"{self.base_url}/detect", json={"text": text, "strategy": strategy}
             )
             r.raise_for_status()
-            return r.json()["entities"]
+            vus = {(e["start"], e["end"], e["type"]) for e in blocs}
+            return blocs + [
+                e for e in r.json()["entities"]
+                if (e["start"], e["end"], e["type"]) not in vus
+            ]
         except (httpx.HTTPError, KeyError, ValueError) as exc:
             raise DetectionUnavailable(
                 f"détection indisponible ({self.base_url}, stratégie={strategy}) : {exc}"

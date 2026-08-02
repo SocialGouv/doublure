@@ -60,10 +60,12 @@ localhost
 # Mesuré par tests/corpus_eval.py (cas `tf-001`). On n'autorise donc que la
 # forme <service>[.<région>].<cloud> : au-delà, c'est une ressource.
 sts.amazonaws.com
-re:[a-z0-9-]+(\.[a-z]{2}-[a-z]+-\d)?\.amazonaws\.com
-re:[a-z0-9-]+(\.[a-z]{2}-[a-z]+\d)?\.googleapis\.com
-re:[a-z0-9-]+\.azure\.com
-re:[a-z0-9-]+\.windows\.net
+re:(ec2|s3|sts|iam|ecr|eks|rds|sqs|sns|lambda|logs|kms|ssm|secretsmanager|dynamodb|cloudformation)(\.[a-z]{2}-[a-z]+-\d)?\.amazonaws\.com
+re:(storage|compute|container|iam|logging|monitoring|pubsub|bigquery|cloudresourcemanager|artifactregistry|oauth2|www)\.googleapis\.com
+re:(management|login|graph)\.azure\.com
+login.microsoftonline.com
+graph.microsoft.com
+re:login\.windows\.net
 
 # --- Permissions Microsoft Graph — et ELLES SEULES.
 # La forme générique `PascalCase.PascalCase` rendait publique la moitié des

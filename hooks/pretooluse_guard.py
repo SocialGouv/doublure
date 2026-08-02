@@ -48,11 +48,16 @@ VAULT_PATTERNS = (
 SENSITIVE_FILE_PATTERNS: tuple[str, ...] = (
     # Le délimiteur de droite doit inclure les opérateurs shell : sans eux,
     # `cat .env|xxd` et `cat .env;true` passaient.
-    r"(^|[\s/'\"=<(\[,])\.env(\.[\w-]+)?($|[\s'\"|>;&)\],])",
+    # `production.env` autant que `.env` ; mais jamais les TEMPLATES publics
+    # (`.env.example`, `.env.sample`…), qui sont faits pour être partagés.
+    r"(?!.*\.env\.(example|sample|template|dist|schema))"
+    r"[\w-]*\.env(\.[\w-]+)?($|[\s'\"|>;&)\],])",
     r"\.aws/credentials",
     r"\.kube/config",
     r"\bkubeconfig\b",
-    r"\.ssh/(id_\w+|identity)",
+    r"\.ssh(/|$|\b)",
+    r"\.gnupg(/|$|\b)",
+    r"/etc/ssl/private(/|$)",
     r"\bid_(rsa|dsa|ecdsa|ed25519)\b",
     r"\.netrc\b",
     r"\.git-credentials\b",
@@ -60,7 +65,7 @@ SENSITIVE_FILE_PATTERNS: tuple[str, ...] = (
     r"\.npmrc\b",
     r"\.pypirc\b",
     r"[\w./-]*secrets?[\w-]*\.(ya?ml|json|env|txt|conf|toml|ini)\b",
-    r"\.(pem|p12|pfx|ppk|der|jks|keystore|pkcs12)\b",
+    r"\.(pem|key|p12|pfx|ppk|der|jks|keystore|pkcs12)\b",
     r"/proc/[^/\s]+/environ",
     r"\.envrc\b",
     r"\bkubecfg\b",
@@ -91,12 +96,26 @@ _SHELL_SOCKET_RE = re.compile(r"/dev/(tcp|udp)/", re.I)
 #: Appels réseau embarqués dans un interpréteur (`python3 -c …`, `node -e …`).
 #: Lecture de l'environnement depuis un interpréteur : `env` est bloqué, mais
 #: `node -e process.env` ou `perl -e %ENV` faisaient exactement la même chose.
+#: Syntaxes d'accès à l'environnement PROPRES à un langage. Volontairement
+#: précises : un `\bENV\b` générique bloquait `grep -r env src/`, `cat env.md`
+#: et `find . -name "*.env.example"` — l'agent ne pouvait plus travailler.
 _INLINE_ENV_RE = re.compile(
-    r"(os\s*\.\s*(environ|getenv|putenv)|process\s*\.\s*env|"
-    r"[%$@]ENV\b|\bENV\s*[\[{.]|\bENVIRON\b|\bENV\b(?=\s*[\)\},;]|\s*$)|"
-    r"Sys\.getenv|System\.getenv|getenv\s*\()",
+    r"(os\s*\.\s*(environ|getenv|putenv)|process\s*\.\s*env\b|"
+    r"[%$@]_?ENV\s*[\[{]|\$_?ENV\b|"
+    r"\bENVIRON\s*\[|\barray\s+get\s+env\b|"
+    r"Sys\.getenv|System\.getenv|\bgetenv\s*\()",
     re.I,
 )
+
+#: Invocation d'un interpréteur avec le programme EN LIGNE. Dans ce contexte
+#: seulement, une simple mention de l'environnement suffit à refuser : le
+#: risque est réel et le faux positif quasi nul.
+_INTERPRETE_EN_LIGNE = re.compile(
+    r"\b(python3?|perl|ruby|node|php|lua|tclsh|Rscript|julia|awk|gawk|mawk)\b"
+    r"[^|;&]*\s-(e|c|E|f)?\b|\bawk\b\s+[\"']?BEGIN",
+    re.I,
+)
+_MENTION_ENV = re.compile(r"\b(env|environ|environment)\b", re.I)
 
 #: Charge obfusquée réinjectée dans un interpréteur : le hook ne voit que
 #: `base64 -d`, la charge réelle n'apparaît qu'à l'exécution. On refuse le
@@ -119,6 +138,13 @@ _STDIN_INTERPRETER_RE = re.compile(
 #: Variables d'environnement dont la VALEUR est un secret. `env` est bloqué,
 #: mais `echo $ANTHROPIC_API_KEY` extrayait la même chose, une par une — et
 #: `cat "$ANONPROXY_MASTER_KEY_FILE"` visait directement la clé du coffre.
+_SENSITIVE_NAME_RE = re.compile(
+    r"(AWS|GCP|AZURE|ANTHROPIC|OPENAI|GITHUB|GITLAB|SLACK|VAULT|ANONPROXY|"
+    r"DATADOG|TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|"
+    r"PRIVATE_KEY|SIGNING_KEY|ENCRYPTION_KEY|SESSION_KEY|_DSN|_URL|_URI|"
+    r"CONNECTION_STRING|BEARER|COOKIE)", re.I,
+)
+
 _SENSITIVE_VAR_RE = re.compile(
     r"\$\{?!?\s*[A-Za-z_]*(AWS|GCP|AZURE|ANTHROPIC|OPENAI|GITHUB|GITLAB|SLACK|"
     r"VAULT|ANONPROXY|DOCKER|NPM|PYPI|DATADOG)[A-Za-z0-9_]*|"
@@ -144,7 +170,7 @@ DENY_COMMAND_PATTERNS: tuple[tuple[str, str], ...] = (
      "kubectl exec/cp permet de lire le jeton de compte de service monté dans le pod"),
     (r"\b(kubectl|oc|k|kc)\b[^|;&]*\bcreate\b[^|;&]*\btoken\b", "émission d'un jeton Kubernetes"),
     (r"/(var/)?run/secrets/", "montage de secrets (jeton de compte de service)"),
-    (r"\bterraform\b[^|;&]*\b(state|console)\b", "l'état Terraform contient des secrets"),
+    (r"\bterraform\b[^|;&]*\b(state|console|show)\b", "l'état Terraform contient des secrets"),
     (r"\bterraform\b[^|;&]*\boutput\b(?![^|;&]*-json\s+\w)", "les sorties Terraform peuvent être sensibles"),
     (r"\b(aws|gcloud|az|gh)\b[^|;&]*\b(get-session-token|print-access-token|get-token|"
      r"get-access-token|print-identity-token|assume-role|export-credentials|sso|"
@@ -169,11 +195,15 @@ DENY_COMMAND_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bgit\b[^|;&]*\bremote\b[^|;&]*(-v|get-url)", "les remotes git peuvent porter un jeton"),
     (r"\.git/config\b", "la config du dépôt peut contenir un jeton"),
     (r"\bcrontab\b\s+-l\b", "les tâches planifiées portent souvent des secrets"),
+    (r"\b(kubectl|oc|k|kc)\b[^|;&]*\b(port-forward|proxy)\b",
+     "un tunnel vers le cluster contourne le proxy (D9)"),
+    (r"\bgh\b\s+api\b", "`gh api` appelle GitHub directement (D9)"),
+    (r"\bdocker\b[^|;&]*\brun\b[^|;&]*-v\s*[^\s:]*(\.ssh|\.aws|\.kube|\.gnupg|/etc/ssl)",
+     "montage d'un répertoire de secrets dans un conteneur"),
+    (r"(^|[|;&\s])(\.|source)\s+(/tmp/|/dev/|/var/tmp/)",
+     "exécution d'un script depuis un répertoire temporaire : contenu non analysable"),
+    (r"\bhistory\b(\s|$)|\$HISTFILE\b", "l'historique de shell contient des secrets saisis"),
     (r"\.(bash|zsh|sh)_history\b", "l'historique de shell contient des secrets saisis"),
-    # archivage/copie EN BLOC d'un répertoire de secrets : viser le dossier,
-    # pas seulement les fichiers, sinon `tar ~/.ssh` ne nomme aucun fichier.
-    (r"[~$\w/.]*\.ssh(/|\b)", "le répertoire ~/.ssh contient les clés privées"),
-    (r"[~$\w/.]*\.gnupg(/|\b)", "le trousseau GPG"),
     (r"\.local/state(/[^/\s]*)*/\*", "accès générique au répertoire d'état (coffre)"),
     (r"\bfind\b[^|;&]*\.local/state\b", "énumération du répertoire d'état (coffre)"),
 )
@@ -222,7 +252,13 @@ def normalize(command: str) -> str:
     même cible pour bash, mais aucun ne correspond au motif. On retire donc
     quotes, backslashes et classes de globs à un caractère.
     """
-    out = command.replace("''", "").replace('""', "")
+    # `e${_+}nv`, `e${IFS}nv` : bash les évalue en `env`. Une expansion sans
+    # nom de variable simple est inerte pour le sens de la commande, on la
+    # retire avant analyse.
+    # `e${_+}nv`, `e${IFS}nv` : bash les évalue en `env`. Une expansion collée
+    # AU MILIEU d'un mot ne sert qu'à découper un nom de commande.
+    out = re.sub(r"(?<=\w)\$\{[^}]*\}(?=\w)", "", command)
+    out = out.replace("''", "").replace('""', "")
     out = re.sub(r"\[([^\]/])\]", r"\1", out)     # glob [o] → o
     out = re.sub(r"\\(.)", r"\1", out)            # \e → e
     out = out.replace("'", "").replace('"', "")
@@ -251,11 +287,13 @@ def _program_words(tokens: list[str]) -> list[str]:
     affectations, et déplie les enveloppes (`command`, `bash -c`, `xargs`…)."""
     wrappers = {"command", "builtin", "exec", "nohup", "timeout", "time", "sudo",
                 "doas", "xargs", "nice", "ionice", "stdbuf", "env", "sh", "bash",
-                "zsh", "ksh", "dash", "watch", "script"}
+                "zsh", "ksh", "dash", "watch", "script", "busybox", "toybox",
+                "setsid", "chroot", "unshare", "nsenter", "flock", "parallel",
+                "do", "then", "else", "elif", "while", "until", "if", "for"}
     words = []
     for tok in tokens:
-        if tok.startswith("-") or "=" in tok:
-            continue  # option ou affectation `VAR=x`, jamais un programme
+        if tok.startswith("-") or "=" in tok or tok.isdigit():
+            continue  # option, affectation `VAR=x` ou durée : jamais un programme
         base = _basename(tok)
         words.append(base)
         if base not in wrappers:
@@ -274,8 +312,16 @@ def check_vault_access(text: str) -> str | None:
     return None
 
 
+#: Fichiers de `~/.ssh` qui sont PUBLICS par nature : les bloquer empêchait
+#: `ssh-keygen -l -f ~/.ssh/id_rsa.pub` et la lecture d'un `known_hosts`.
+_SSH_PUBLIC_RE = re.compile(r"\.ssh/(config|known_hosts\w*|authorized_keys|[\w-]+\.pub)\b")
+
+
 def check_sensitive_files(text: str) -> str | None:
     normalized = normalize(text)
+    if _SSH_PUBLIC_RE.search(normalized) and not re.search(
+            r"\.ssh/(id_\w+|identity)\b(?!\.pub)", normalized):
+        return None
     for pat in SENSITIVE_FILE_PATTERNS:
         if re.search(pat, normalized, re.I):
             return "accès à un fichier de credentials ou de clés privées"
@@ -285,6 +331,28 @@ def check_sensitive_files(text: str) -> str | None:
 def _is_env_prefix(tokens: list[str], idx: int) -> bool:
     """`env VAR=x cmd` : préfixe d'exécution légitime, pas un déversement."""
     return any("=" in t and not t.startswith("-") for t in tokens[idx + 1:])
+
+
+def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
+    """Ce programme déverse-t-il VRAIMENT l'environnement ?
+
+    `set -e`, `set -euo pipefail` sont l'en-tête idiomatique de tout script
+    shell propre ; `declare -f` liste des fonctions ; `printenv PATH` affiche
+    UNE variable non sensible. Les bloquer rendait l'agent inutilisable.
+    """
+    suite = tokens[idx + 1:]
+    if _is_env_prefix(tokens, idx):
+        return False
+    options = [t for t in suite if t.startswith("-")]
+    arguments = [t for t in suite if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", t)]
+    if base == "set":
+        return not options  # `set -e` : mode strict ; `set > f` : déversement
+    if base in ("declare", "export"):
+        return any(t in ("-p", "-x") for t in options) or not options
+    if base == "printenv":
+        # une variable nommée : refusé seulement si son nom est sensible
+        return not arguments or any(_SENSITIVE_NAME_RE.search(t) for t in arguments)
+    return True
 
 
 def check_bash(command: str) -> str | None:
@@ -310,11 +378,22 @@ def check_bash(command: str) -> str | None:
         return ("charge décodée puis exécutée : son contenu n'est pas analysable "
                 "avant exécution, la commande est refusée en l'état")
 
+    # Une substitution (`$(…)`, backticks) exécute ce qu'elle contient, où
+    # qu'il apparaisse : on inspecte alors TOUS les mots, pas seulement la
+    # position de programme.
+    substitution = "`" in command or "$(" in command
     for tokens in tokenize(command):
-        for idx, tok in enumerate(tokens):
-            if _basename(tok) in ENV_DUMP_PROGRAMS and not _is_env_prefix(tokens, idx):
-                return "déversement de l'environnement (jetons et clés compris)"
-        for base in _program_words(tokens):
+        candidats = [_basename(t) for t in tokens] if substitution else _program_words(tokens)
+        for base_tok in candidats:
+            if base_tok in ENV_DUMP_PROGRAMS:
+                idx = next((i for i, t in enumerate(tokens)
+                            if _basename(t) == base_tok), 0)
+                if _est_deversement(base_tok, tokens, idx):
+                    return "déversement de l'environnement (jetons et clés compris)"
+        # Tous les tokens, pas seulement la position de programme : `curl`
+        # caché dans une substitution de processus, un backtick ou un
+        # `system()` d'awk échappait à l'analyse.
+        for base in {_basename(t) for t in tokens}:
             if base in NETWORK_CAPABLE:
                 urls = re.findall(r"[a-z]+://[^\s'\"]+", normalized, re.I)
                 if urls and all(_is_local_url(u) for u in urls):

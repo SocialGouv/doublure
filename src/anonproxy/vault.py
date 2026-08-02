@@ -152,7 +152,14 @@ class Vault:
         restaurée ailleurs, opérateur sans la clé — échange deux `real_enc` et
         inverse silencieusement deux correspondances, sans invalider aucun tag.
         """
-        return f"{scope}\x1f{etype}\x1f{surrogate}".encode("utf-8")
+        # Encodage à préfixe de longueur, comme `_index` : une simple
+        # concaténation par séparateur n'est pas injective, et deux triplets
+        # différents produiraient la même AAD dès qu'une valeur contient le
+        # séparateur — l'échange de scellés redeviendrait indétectable.
+        return b"".join(
+            len(raw := p.encode("utf-8")).to_bytes(4, "big") + raw
+            for p in (scope, etype, surrogate)
+        )
 
     def _seal(self, scope: str, etype: str, surrogate: str, real: str) -> bytes:
         nonce = os.urandom(12)

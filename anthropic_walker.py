@@ -83,6 +83,14 @@ SKIP_KEYS: frozenset[str] = frozenset(
     }
 )
 
+#: Types MIME dont la charge est binaire : `data` y reste opaque. Tout le
+#: reste — texte, JSON, media_type absent — est traverse.
+BINARY_MEDIA_PREFIXES: tuple[str, ...] = (
+    "image/", "audio/", "video/", "font/",
+    "application/pdf", "application/octet-stream", "application/zip",
+    "application/gzip", "application/x-", "application/vnd.",
+)
+
 #: Cles de REPONSE porteuses de compteurs, jamais de texte.
 RESPONSE_CONTROL_KEYS: frozenset[str] = frozenset({"usage", "container_id"})
 
@@ -252,11 +260,17 @@ def _walk(node: Any, fn: Callable[[str], str], *, in_schema: bool = False) -> An
         if isinstance(btype, str) and btype in OPAQUE_BLOCK_TYPES:
             return node
 
-        # `data` protege une charge BINAIRE (image, PDF). Mais une source de
-        # document peut etre du texte brut : `{"type": "text", "media_type":
-        # "text/plain", "data": "<texte libre>"}`. Sauter `data` sans regarder
-        # la nature de la source laissait ce texte partir en clair.
-        texte_brut = btype == "text" and str(node.get("media_type", "")).startswith("text/")
+        # `data` protege une charge BINAIRE (image, PDF). Une source de
+        # document peut aussi etre du TEXTE : `{"type": "text", "data": "..."}`.
+        # La regle est fail-CLOSED : on ne saute `data` que si la charge est
+        # EXPLICITEMENT binaire. Exiger `media_type` commencant par `text/`
+        # laissait fuir les cas sans media_type, avec `application/json`, ou
+        # avec une casse differente (les types MIME sont insensibles a la
+        # casse, RFC 2045).
+        media = node.get("media_type")
+        media = media.lower() if isinstance(media, str) else ""
+        binaire = btype == "base64" or media.startswith(BINARY_MEDIA_PREFIXES)
+        texte_brut = "data" in node and not binaire
 
         out: dict[str, Any] = {}
         for key, value in node.items():
