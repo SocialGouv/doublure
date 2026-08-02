@@ -29,7 +29,7 @@ WORDS = ["payments", "checkout", "ledger", "catalog", "search", "billing",
 
 def make_engine(tmp_path, name="v1"):
     return SurrogateEngine(
-        vault=Vault(tmp_path / f"{name}.db"), master_key=MASTER, scope_key=SCOPE
+        vault=Vault(tmp_path / f"{name}.db", master_key=MASTER), master_key=MASTER, scope_key=SCOPE
     )
 
 

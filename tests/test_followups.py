@@ -21,7 +21,7 @@ MASTER = "cd" * 32
 
 
 def engine(tmp_path, name="v", scope="project:fu") -> SurrogateEngine:
-    return SurrogateEngine(vault=Vault(tmp_path / f"{name}.db"), master_key=MASTER, scope_key=scope)
+    return SurrogateEngine(vault=Vault(tmp_path / f"{name}.db", master_key=MASTER), master_key=MASTER, scope_key=scope)
 
 
 # --------------------------------------------------------------------------- #
@@ -179,7 +179,7 @@ class _Detector:
 def test_cache_isole_les_portees(tmp_path):
     """Un Pseudonymizer réutilisé entre deux portées ne doit pas servir le
     résultat de la première à la seconde."""
-    vault = Vault(tmp_path / "v.db")
+    vault = Vault(tmp_path / "v.db", master_key=MASTER)
     a = SurrogateEngine(vault=vault, master_key=MASTER, scope_key="project:a")
     b = SurrogateEngine(vault=vault, master_key=MASTER, scope_key="project:b")
 

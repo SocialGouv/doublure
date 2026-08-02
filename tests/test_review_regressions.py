@@ -18,7 +18,7 @@ MASTER = "ab" * 32
 
 
 def engine(tmp_path, scope="project:rt") -> SurrogateEngine:
-    return SurrogateEngine(vault=Vault(tmp_path / "v.db"), master_key=MASTER, scope_key=scope)
+    return SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER), master_key=MASTER, scope_key=scope)
 
 
 # --------------------------------------------------------------------------- #
@@ -239,7 +239,7 @@ def test_allowlist_partagee_avec_les_sous_parties(tmp_path):
     """
     from anonproxy.surrogates.engine import SurrogateEngine
 
-    eng = SurrogateEngine(vault=Vault(tmp_path / "v.db"), master_key=MASTER,
+    eng = SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER), master_key=MASTER,
                           scope_key="project:rt",
                           is_public=lambda v: v in {"python3.12-slim", "healthz"})
     image = eng.substitute_value("CONTAINER_IMAGE", "registry.acme.io/app:python3.12-slim")

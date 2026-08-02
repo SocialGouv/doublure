@@ -64,7 +64,7 @@ def evaluate(examples: list[dict], detect_url: str) -> tuple[dict, int]:
 
     for run_idx in range(2):  # deux exécutions : mesure de la variance
         engine = SurrogateEngine(
-            vault=Vault(tmp / f"run{run_idx}.db"), master_key=MASTER, scope_key="project:eval"
+            vault=Vault(tmp / f"run{run_idx}.db", master_key=MASTER), master_key=MASTER, scope_key="project:eval"
         )
         outputs: list[str] = []
         for ex in examples:
@@ -116,7 +116,7 @@ def evaluate(examples: list[dict], detect_url: str) -> tuple[dict, int]:
     # Compter les collisions sur les CLÉS d'un dict serait tautologique (elles
     # sont uniques par construction) : on interroge les lignes brutes, et on
     # vérifie en plus que la contrainte d'unicité refuse activement un doublon.
-    vault = Vault(tmp / "run0.db")
+    vault = Vault(tmp / "run0.db", master_key=MASTER)
     rows = vault._conn.execute(
         "SELECT surrogate FROM mapping WHERE scope=?", ("project:eval",)
     ).fetchall()

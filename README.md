@@ -24,13 +24,15 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:8090 claude
 ```
 
 Le coffre et la clé maître vivent dans `~/.local/state/anonproxy/` — hors du
-dépôt, jamais lus par l'agent. **Les sauvegarder : la clé + la base sont les
-deux moitiés du secret ; les perdre rend la dé-anonymisation impossible.**
+dépôt, jamais lus par l'agent. Le coffre est **chiffré au repos** (AES-256-GCM,
+clé dérivée de la clé maître) : le fichier seul ne révèle rien. **Sauvegarder
+les deux : la clé et la base sont les deux moitiés du secret ; perdre l'une
+rend la dé-anonymisation impossible.**
 
 ## Vérifier
 
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 312 tests
+uv run pytest tests/ --ignore=tests/egress   # 319 tests
 uv run pytest tests/egress/test_report.py    # 18 tests (harnais Phase 0)
 
 bash tests/egress_capture.sh                 # inventaire d'egress

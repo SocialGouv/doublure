@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Proxy de pseudonymisation bidirectionnelle Claude Code ↔ API Anthropic"
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=50.0.0",
     "fastapi>=0.115",
     "httpx>=0.27",
     "uvicorn[standard]>=0.30",

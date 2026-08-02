@@ -28,7 +28,7 @@ SCOPE = "project:adv"
 
 
 def engine(tmp_path, name="v") -> SurrogateEngine:
-    return SurrogateEngine(vault=Vault(tmp_path / f"{name}.db"), master_key=MASTER, scope_key=SCOPE)
+    return SurrogateEngine(vault=Vault(tmp_path / f"{name}.db", master_key=MASTER), master_key=MASTER, scope_key=SCOPE)
 
 
 # --------------------------------------------------------------------------- #
@@ -322,7 +322,7 @@ def test_reprise_apres_crash_conserve_les_correspondances(tmp_path):
 
 def test_portees_distinctes_ne_partagent_rien(tmp_path):
     """Deux projets ne doivent pas produire le même substitut (réponse §3.1)."""
-    v = Vault(tmp_path / "multi.db")
+    v = Vault(tmp_path / "multi.db", master_key=MASTER)
     a = SurrogateEngine(vault=v, master_key=MASTER, scope_key="project:alpha")
     b = SurrogateEngine(vault=v, master_key=MASTER, scope_key="project:beta")
     host = "db-01.acme.internal"

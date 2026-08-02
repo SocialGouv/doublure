@@ -12,7 +12,7 @@ SCOPE = "project:demo"
 
 
 def make_engine(tmp_path):
-    return SurrogateEngine(vault=Vault(tmp_path / "v.db"), master_key=MASTER, scope_key=SCOPE)
+    return SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER), master_key=MASTER, scope_key=SCOPE)
 
 
 # --------------------------- canonique ------------------------------------- #

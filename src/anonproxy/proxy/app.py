@@ -57,10 +57,12 @@ class ProxyState:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.vault = Vault(settings.vault_path)
+        # Lue une seule fois : elle scelle le coffre ET dérive les substituts.
+        master = read_master_key(settings.master_key_file)
+        self.vault = Vault(settings.vault_path, master_key=master)
         self.engine = SurrogateEngine(
             vault=self.vault,
-            master_key=read_master_key(settings.master_key_file),
+            master_key=master,
             scope_key=settings.scope_key,
             is_public=Allowlist.load(settings.allowlist_file),
         )

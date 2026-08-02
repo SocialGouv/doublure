@@ -27,7 +27,7 @@ SCOPE = "project:hard"
 
 
 def engine(path: Path) -> SurrogateEngine:
-    return SurrogateEngine(vault=Vault(path), master_key=MASTER, scope_key=SCOPE)
+    return SurrogateEngine(vault=Vault(path, master_key=MASTER), master_key=MASTER, scope_key=SCOPE)
 
 
 # --------------------------------------------------------------------------- #
@@ -37,17 +37,17 @@ def engine(path: Path) -> SurrogateEngine:
 
 def test_repertoire_inexistant_refuse(tmp_path):
     with pytest.raises(VaultUnavailableError) as exc:
-        Vault(tmp_path / "absent" / "vault.db", create_parents=False)
+        Vault(tmp_path / "absent" / "vault.db", master_key=MASTER, create_parents=False)
     assert "coffre indisponible" in str(exc.value)
 
 
 def test_coffre_illisible_refuse(tmp_path):
     p = tmp_path / "vault.db"
-    Vault(p).close()
+    Vault(p, master_key=MASTER).close()
     p.chmod(0)
     try:
         with pytest.raises(VaultUnavailableError):
-            Vault(p)
+            Vault(p, master_key=MASTER)
     finally:
         p.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
@@ -56,7 +56,7 @@ def test_coffre_corrompu_refuse(tmp_path):
     p = tmp_path / "vault.db"
     p.write_bytes(b"ceci n'est pas une base SQLite" * 50)
     with pytest.raises(VaultUnavailableError):
-        Vault(p)
+        Vault(p, master_key=MASTER)
 
 
 def test_ecriture_impossible_propage(tmp_path):
@@ -77,14 +77,14 @@ def test_ecriture_impossible_propage(tmp_path):
 
 def test_injectivite_garantie_par_la_base(tmp_path):
     """Défense en profondeur : même en forçant, la base refuse un doublon."""
-    v = Vault(tmp_path / "vault.db")
+    v = Vault(tmp_path / "vault.db", master_key=MASTER)
     v.bind(SCOPE, "HOSTNAME", "a.acme.internal", "aa.northwind.internal")
     with pytest.raises(SurrogateConflict):
         v.bind(SCOPE, "HOSTNAME", "b.acme.internal", "aa.northwind.internal")
 
 
 def test_meme_reel_deux_fois_renvoie_le_meme_substitut(tmp_path):
-    v = Vault(tmp_path / "vault.db")
+    v = Vault(tmp_path / "vault.db", master_key=MASTER)
     first = v.bind(SCOPE, "HOSTNAME", "a.acme.internal", "aa.northwind.internal")
     second = v.bind(SCOPE, "HOSTNAME", "a.acme.internal", "bb.northwind.internal")
     assert first == second == "aa.northwind.internal"
@@ -143,7 +143,7 @@ def test_stats_du_pipeline_sont_des_compteurs(tmp_path):
 def test_portee_isolee_dans_la_base(tmp_path):
     """Isolation par portée : supprimer les lignes d'une portée n'affecte
     pas les autres — socle de la suppression ciblée (Phase 6 du plan)."""
-    v = Vault(tmp_path / "v.db")
+    v = Vault(tmp_path / "v.db", master_key=MASTER)
     a = SurrogateEngine(vault=v, master_key=MASTER, scope_key="project:a")
     b = SurrogateEngine(vault=v, master_key=MASTER, scope_key="project:b")
     a.substitute_value("HOSTNAME", "db.acme.internal")
@@ -162,9 +162,9 @@ def test_perte_de_cle_rend_la_derivation_differente(tmp_path):
     """La clé maître + la base = les deux moitiés du secret : sans la bonne
     clé, les substituts générés diffèrent (la base seule ne suffit pas)."""
     v_path = tmp_path / "v.db"
-    e1 = SurrogateEngine(vault=Vault(v_path), master_key=MASTER, scope_key=SCOPE)
+    e1 = SurrogateEngine(vault=Vault(v_path, master_key=MASTER), master_key=MASTER, scope_key=SCOPE)
     s1 = e1._candidate("HOSTNAME", "db-01.acme.internal", 0)
-    e2 = SurrogateEngine(vault=Vault(tmp_path / "autre.db"),
+    e2 = SurrogateEngine(vault=Vault(tmp_path / "autre.db", master_key="00" * 32),
                          master_key="00" * 32, scope_key=SCOPE)
     s2 = e2._candidate("HOSTNAME", "db-01.acme.internal", 0)
     assert s1 != s2

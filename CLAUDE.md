@@ -65,7 +65,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**330 tests verts** (312 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**337 tests verts** (319 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -76,7 +76,24 @@ puis `uv run pytest tests/egress/test_report.py`.
 | 3 — Proxy + walker | critère atteint | `tests/phase3_e2e.sh` : session Claude Code RÉELLE, rc=0, **0 valeur réelle sur 427 Ko** capturés (mitmproxy), restauration 3/3 côté opérateur |
 | 4 — Hooks PreToolUse | critère atteint | `tests/phase4_e2e.sh` : commande interdite bloquée AVANT exécution, tracée, raison citée par le modèle |
 | 5 — Corpus doré | critère atteint (corpus synthétique) | `tests/corpus_eval.py` : 0 fuite, secrets **100 %**, 0 faux positif, variance 0, 0 collision ; 16 scénarios adversariaux (`test_adversarial.py`) |
-| 6 — Durcissement | MVP livré, reste §6 documenté | `tests/test_hardening.py` (11 tests fail-closed/observabilité) + `docs/analyse-re-identification.md` |
+| 6 — Durcissement | coffre CHIFFRÉ au repos + fail-closed ; KMS/rotation restent à faire | `tests/test_vault_at_rest.py` (7) + `test_hardening.py` (11) + `docs/analyse-re-identification.md` |
+
+## Coffre chiffré au repos (2026-08-02)
+La doc affirmait que « la clé + la base sont les deux moitiés du secret » —
+c'était FAUX : les valeurs réelles étaient stockées en clair, la base seule
+suffisait à tout lire. Corrigé :
+- `real_enc` = AES-256-GCM, clé dérivée de la clé maître (HMAC de domaine).
+- Recherche par index HMAC (`key_idx`, `real_idx`) : le chiffrement
+  authentifié utilise un nonce aléatoire, une recherche directe serait
+  impossible. L'index ne révèle qu'une égalité.
+- Clé fausse ⇒ `VaultUnavailableError`, jamais une valeur devinée (D5).
+- Un coffre au format antérieur est REFUSÉ, pas lu silencieusement.
+  Migration : `scripts/migrate_vault.py ANCIEN.db NOUVEAU.db` (n'écrase rien,
+  clé lue par référence, jamais affichée). Le recréer à vide ferait perdre la
+  restauration des substituts DÉJÀ envoyés à Anthropic.
+- Fichiers du coffre remis à 0600 à chaque ouverture (y compris `-wal`/`-shm`).
+- Reste hors MVP : chiffrement d'enveloppe KMS/HSM, rotation de clé, journal
+  d'accès immuable, protection contre l'énumération.
 
 ## Comment lancer (ordre)
 ```bash

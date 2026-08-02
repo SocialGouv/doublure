@@ -13,7 +13,7 @@ SCOPE = "project:demo"
 
 
 def make_engine(tmp_path):
-    return SurrogateEngine(vault=Vault(tmp_path / "v.db"), master_key=MASTER, scope_key=SCOPE)
+    return SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER), master_key=MASTER, scope_key=SCOPE)
 
 
 def test_secret_jamais_reversible(tmp_path):
@@ -60,7 +60,7 @@ def test_collision_epuisee_erreur_explicite(tmp_path, monkeypatch):
 def test_coffre_indisponible_erreur_explicite(tmp_path):
     p = tmp_path / "inexistant" / "sous" / "v.db"  # parent absent, non créé
     with pytest.raises(VaultUnavailableError):
-        Vault(p, create_parents=False)
+        Vault(p, master_key=MASTER, create_parents=False)
 
 
 def test_substitut_inconnu_jamais_devine():
