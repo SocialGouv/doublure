@@ -34,6 +34,7 @@ if str(ROOT) not in sys.path:
 
 from anthropic_walker import SSERewriter, Substituter, walk_request, walk_response  # noqa: E402
 
+from ..allowlist import Allowlist  # noqa: E402
 from ..config import Settings, read_master_key  # noqa: E402
 from ..detect import DetectClient, DetectionUnavailable  # noqa: E402
 from ..pipeline import Pseudonymizer  # noqa: E402
@@ -61,6 +62,7 @@ class ProxyState:
             vault=self.vault,
             master_key=read_master_key(settings.master_key_file),
             scope_key=settings.scope_key,
+            is_public=Allowlist.load(settings.allowlist_file),
         )
         self.detector = DetectClient(
             settings.detect_url, regex_threshold=settings.regex_threshold
@@ -153,23 +155,37 @@ def _fail(status: int, kind: str, detail: str) -> JSONResponse:
 # --------------------------------------------------------------------------- #
 
 
-@app.post("/v1/messages")
-async def messages(request: Request):
-    state: ProxyState = request.app.state.proxy
-    raw = await request.body()
+async def _pseudonymize(state: ProxyState, request: Request):
+    """Lit le corps et le pseudonymise. Retourne (corps, corps_sûr, erreur).
+
+    Chemin FAIL-CLOSED unique : dupliqué par endpoint, il se serait mis à
+    diverger au premier ajout d'exception, et une branche oubliée renverrait
+    la requête telle quelle à l'amont.
+    """
     try:
-        body = json.loads(raw)
+        body = json.loads(await request.body())
     except json.JSONDecodeError as exc:
-        return _fail(400, "invalid_request_error", f"corps JSON invalide : {exc}")
+        return None, None, _fail(400, "invalid_request_error", f"corps JSON invalide : {exc}")
 
     sub_out = state.outgoing()
     try:
         # Traversée synchrone (détection HTTP + SQLite) hors boucle d'événements.
         safe_body = await anyio.to_thread.run_sync(lambda: walk_request(body, sub_out))
     except DetectionUnavailable as exc:
-        return _fail(503, "api_error", f"pseudonymisation impossible, requête refusée : {exc}")
-    except (VaultUnavailableError, SurrogateCollisionError) as exc:
-        return _fail(503, "api_error", f"coffre indisponible, requête refusée : {exc}")
+        return None, None, _fail(
+            503, "api_error", f"pseudonymisation impossible, requête refusée : {exc}")
+    except (VaultUnavailableError, SurrogateCollisionError, ValueError) as exc:
+        return None, None, _fail(
+            503, "api_error", f"substitution impossible, requête refusée : {exc}")
+    return body, safe_body, None
+
+
+@app.post("/v1/messages")
+async def messages(request: Request):
+    state: ProxyState = request.app.state.proxy
+    body, safe_body, erreur = await _pseudonymize(state, request)
+    if erreur is not None:
+        return erreur
 
     headers = _forward_headers(request)
     streaming = bool(body.get("stream"))
@@ -272,19 +288,9 @@ def _drop_len(headers: dict[str, str]) -> dict[str, str]:
 @app.post("/v1/messages/count_tokens")
 async def count_tokens(request: Request):
     state: ProxyState = request.app.state.proxy
-    raw = await request.body()
-    try:
-        body = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        return _fail(400, "invalid_request_error", f"corps JSON invalide : {exc}")
-
-    sub_out = state.outgoing()
-    try:
-        safe_body = await anyio.to_thread.run_sync(lambda: walk_request(body, sub_out))
-    except DetectionUnavailable as exc:
-        return _fail(503, "api_error", f"pseudonymisation impossible, requête refusée : {exc}")
-    except (VaultUnavailableError, SurrogateCollisionError) as exc:
-        return _fail(503, "api_error", f"coffre indisponible, requête refusée : {exc}")
+    _body, safe_body, erreur = await _pseudonymize(state, request)
+    if erreur is not None:
+        return erreur
 
     try:
         upstream = await state.client.post(

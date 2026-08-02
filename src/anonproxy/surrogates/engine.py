@@ -21,7 +21,7 @@ import hashlib
 import hmac
 import re
 import unicodedata
-from typing import Any
+from typing import Any, Callable
 
 from ..vault import SurrogateConflict, Vault
 from .canonical import (
@@ -92,9 +92,15 @@ class SurrogateEngine:
     ``tenant:<nom>`` ou ``global`` — cf. réponse §3.1.
     """
 
-    def __init__(self, vault: Vault, master_key: str, scope_key: str):
+    def __init__(self, vault: Vault, master_key: str, scope_key: str,
+                 is_public: Callable[[str], bool] | None = None):
         self.vault = vault
         self.scope_key = scope_key
+        #: Prédicat « cette sous-partie est publique » — l'allowlist §6. Le
+        #: détecteur l'applique aux entités entières ; il faut la consulter à
+        #: nouveau ici, sur les COMPOSANTS d'une valeur composite (tag d'image,
+        #: segment d'URL) que le détecteur n'a jamais vus isolément.
+        self.is_public = is_public or (lambda _value: False)
         self._master = master_key.encode() if isinstance(master_key, str) else master_key
         # Sel de portée : deux portées ne dérivent jamais le même substitut.
         self._salt = hmac.new(self._master, scope_key.encode(), hashlib.sha256).digest()
@@ -423,7 +429,7 @@ class SurrogateEngine:
         # Un tag n'est PAS toujours une version : on y trouve des SHA de
         # commit, des noms de branche (`feat/PROJ-1234-…`), des logins, des
         # noms de clients. Seules les formes manifestement publiques passent.
-        if _PLAIN_TAG_RE.fullmatch(tag):
+        if _PLAIN_TAG_RE.fullmatch(tag) or self.is_public(tag):
             return f"{out}:{tag}"
         return f"{out}:{self._combo('image-tag', tag, attempt, SERVICE_WORDS)}"
 
@@ -502,7 +508,8 @@ class SurrogateEngine:
                 path = m.group("path")
                 segments = [s for s in path.split("/") if s]
                 fake_path = "".join(
-                    "/" + self._combo("url-seg", f"{i}:{s}", attempt, SERVICE_WORDS)
+                    "/" + (s if self.is_public(s)
+                           else self._combo("url-seg", f"{i}:{s}", attempt, SERVICE_WORDS))
                     for i, s in enumerate(segments)
                 )
                 if path.endswith("/") and segments:

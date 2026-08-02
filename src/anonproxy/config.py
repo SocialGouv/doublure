@@ -31,6 +31,8 @@ class Settings:
     #: Bundle CA pour la connexion amont (CA d'entreprise, ou mitmproxy pendant
     #: les tests de capture). None = magasin par défaut.
     ca_bundle: str | None
+    #: Allowlist §6, partagée avec le service de détection.
+    allowlist_file: Path
 
     @staticmethod
     def from_env() -> "Settings":
@@ -51,6 +53,10 @@ class Settings:
             cache_size=int(os.environ.get("ANONPROXY_CACHE_SIZE", "20000")),
             request_timeout=float(os.environ.get("ANONPROXY_TIMEOUT", "600")),
             ca_bundle=os.environ.get("ANONPROXY_CA_BUNDLE") or None,
+            allowlist_file=Path(
+                os.environ.get("ANON_ALLOWLIST_FILE",
+                               Path(__file__).resolve().parents[2] / "config/allowlist.txt")
+            ),
         )
 
 

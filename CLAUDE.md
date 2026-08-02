@@ -65,7 +65,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**329 tests verts** (311 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**330 tests verts** (312 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -279,9 +279,13 @@ unitaires. C'est l'argument pour garder les preuves E2E réelles.
 - Recognizers regex fournis couvrant la future classe SECRET (Phase 2) :
   `AUTH_TOKEN`, `JWT`, `PRIVATE_KEY_PEM`, `PASSWORD_CONTEXT`,
   `COOKIE_SESSION`, `CERT_*`, `RSA_MODULUS`, `PGP_BLOCK`.
-- Config wrapper : `allowlist.txt` (§6, exact + `re:` full-match),
-  `custom_patterns.json` (exemples synthétiques — les conventions RÉELLES
-  s'écrivent avec jo, de préférence après Phase 3).
+- Config en TERRAIN NEUTRE : `config/allowlist.txt` (§6, exact + `re:`
+  full-match) et `config/custom_patterns.json` (exemples synthétiques — les
+  conventions RÉELLES s'écrivent avec jo, de préférence après Phase 3). Le
+  service de détection ET le moteur de substituts les lisent : « ce token est
+  public » ne se maintient qu'à un seul endroit. Le PARSEUR est dupliqué de
+  part et d'autre de la frontière D7 (dix lignes, contre une dépendance de
+  licence) — c'est la liste qui compte, pas le code de lecture.
 
 ## Latence Phase 1 — RÉSOLUE (2026-08-02, décision jo : option a, reboot + CUDA)
 - Historique : en CPU le critère <150 ms était inatteignable (fp32 ~800 ms,

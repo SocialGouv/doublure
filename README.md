@@ -30,7 +30,7 @@ deux moitiés du secret ; les perdre rend la dé-anonymisation impossible.**
 ## Vérifier
 
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 311 tests
+uv run pytest tests/ --ignore=tests/egress   # 312 tests
 uv run pytest tests/egress/test_report.py    # 18 tests (harnais Phase 0)
 
 bash tests/egress_capture.sh                 # inventaire d'egress
@@ -65,8 +65,9 @@ bash tests/datadog_probe.sh                  # que part-il vers la télémétrie
 | `ANONPROXY_REGEX_THRESHOLD` | `8000` | Au-delà, détection regex (gros volumes) |
 | `ANON_DEVICE` | `auto` | `cuda` \| `cpu` — `cuda` échoue si indisponible |
 
-Détection : `services/anonshield/wrapper/allowlist.txt` (§6 du plan) et
-`custom_patterns.json` (conventions d'environnement, à écrire avec jo).
+Détection : `config/allowlist.txt` (§6 du plan) et `config/custom_patterns.json`
+(conventions d'environnement, à écrire avec jo). Ces fichiers sont en terrain
+neutre : le service de détection ET le moteur de substituts les lisent.
 
 ## Frontière GPL
 

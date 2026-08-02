@@ -31,9 +31,9 @@ génère la clé `ANON_SECRET_KEY` (persistée hors dépôt, jamais affichée).
 
 ## Configuration
 
-- `allowlist.txt` — anti-faux-positifs (§6 du plan) : exact ou `re:<regex>`
+- `../../../config/allowlist.txt` — anti-faux-positifs (§6 du plan) : exact ou `re:<regex>`
   (full-match). Appliquée côté presidio (exact) + post-filtre (regex).
-- `custom_patterns.json` — conventions propres à l'environnement, à écrire
+- `../../../config/custom_patterns.json` — conventions propres à l'environnement, à écrire
   avec jo (après Phase 3 de préférence). Exemples synthétiques fournis.
 - Env : `ANON_TRANSFORMER_MODEL`, `ANON_SCORE_THRESHOLD` (défaut 0.4),
   `ANON_WRAPPER_PORT`, `ANONPROXY_STATE_DIR`.

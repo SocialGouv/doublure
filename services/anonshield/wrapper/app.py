@@ -33,9 +33,12 @@ logger = logging.getLogger("anonshield.wrapper")
 WRAPPER_DIR = Path(__file__).resolve().parent
 MODEL = os.environ.get("ANON_TRANSFORMER_MODEL", "attack-vector/SecureModernBERT-NER")
 LANG = "en"
-ALLOWLIST_FILE = Path(os.environ.get("ANON_ALLOWLIST_FILE", WRAPPER_DIR / "allowlist.txt"))
+#: Configuration en terrain NEUTRE : le moteur de substituts la lit aussi, pour
+#: que « ce qui est public » ne soit maintenu qu'à un seul endroit.
+CONFIG_DIR = WRAPPER_DIR.parents[2] / "config"
+ALLOWLIST_FILE = Path(os.environ.get("ANON_ALLOWLIST_FILE", CONFIG_DIR / "allowlist.txt"))
 CUSTOM_PATTERNS_FILE = Path(
-    os.environ.get("ANON_CUSTOM_PATTERNS_FILE", WRAPPER_DIR / "custom_patterns.json")
+    os.environ.get("ANON_CUSTOM_PATTERNS_FILE", CONFIG_DIR / "custom_patterns.json")
 )
 
 # État module : rempli une seule fois par _load_engine() au startup.

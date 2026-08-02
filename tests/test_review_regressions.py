@@ -230,6 +230,25 @@ def test_url_hote_nu_partage_l_identite_de_l_hote(tmp_path, valeur):
     assert eng.substitute_value("URL", valeur) == eng.substitute_value("HOSTNAME", valeur)
 
 
+def test_allowlist_partagee_avec_les_sous_parties(tmp_path):
+    """« Ce token est public » ne doit être maintenu qu'à un endroit.
+
+    Le détecteur applique l'allowlist aux entités ENTIÈRES ; les composants
+    d'une valeur composite (tag d'image, segment d'URL) ne lui sont jamais
+    soumis isolément. Le moteur consulte donc la même liste.
+    """
+    from anonproxy.surrogates.engine import SurrogateEngine
+
+    eng = SurrogateEngine(vault=Vault(tmp_path / "v.db"), master_key=MASTER,
+                          scope_key="project:rt",
+                          is_public=lambda v: v in {"python3.12-slim", "healthz"})
+    image = eng.substitute_value("CONTAINER_IMAGE", "registry.acme.io/app:python3.12-slim")
+    assert image.endswith(":python3.12-slim"), f"tag public substitué : {image}"
+    url = eng.substitute_value("URL", "https://api.acme.internal/healthz")
+    assert url.endswith("/healthz"), f"segment public substitué : {url}"
+    assert "acme" not in url
+
+
 def test_url_avec_et_sans_slash_final_identiques(tmp_path):
     """`https://hôte` et `https://hôte/` sont la même ressource : deux
     enregistrements pour un même substitut bloquaient la substitution."""
