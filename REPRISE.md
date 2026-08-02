@@ -11,8 +11,8 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 4 traité EN ENTIER (hook + walker + moteur).
-Round 5 à lancer.**
+**Boucle en cours. Round 5 : le HOOK est traité ; les agents walker et
+moteur n'avaient pas rendu au moment du commit — vérifier leurs rapports.**
 
 Protocole appliqué à chaque round :
 1. Lancer 2-3 agents `general-purpose`, `model: opus`, en parallèle, sur des
@@ -30,12 +30,12 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**565 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**596 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 565
+uv run pytest tests/ --ignore=tests/egress   # 596
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session réelle + capture

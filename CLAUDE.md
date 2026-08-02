@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**583 tests verts** (565 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**614 tests verts** (596 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -247,6 +247,26 @@ précède · `strace`/`ltrace` reconnus comme enveloppes.
 Faux positifs corrigés : `printenv AWS_REGION` était refusé quand
 `echo $AWS_REGION` passait · `openssl rand|dgst|passwd|enc|x509` et
 `--version`/`-V` n'ouvrent aucune connexion.
+
+## Sixième revue adversariale (2026-08-03, round 5 — hook)
+Encore trois régressions de mes correctifs du round 4 :
+- **`${IFS}` n'était neutralisé que pour les opérateurs `-+:?`** : `${IFS/a/b}`,
+  `${IFS##x}`, `${IFS%%x}`, `${IFS,,}`, `${IFS^^}` valent tous IFS et
+  découpaient un nom de commande. Corollaire trouvé en corrigeant : `${IFS}`
+  vaut un SÉPARATEUR, pas du vide — le remplacer par rien soudait
+  `env${IFS}printenv` en un mot inexistant et faisait disparaître les DEUX
+  programmes. Il devient une espace ; les expansions à valeur vide
+  (`e${_+}nv`) sont, elles, retirées.
+- **`-exec` ne marquait que le premier mot** : `find … -exec sudo curl …` et
+  `-exec env printenv …` masquaient le programme réel derrière une enveloppe.
+  La sous-commande est désormais ANALYSÉE, pas seulement pointée.
+- **Mon scan mot à mot des interpréteurs refusait la prose** :
+  `python3 -c "print('The curl command is useful')"` était bloqué, comme tout
+  one-liner citant un binaire réseau. Seul ce qui SUIT une primitive
+  d'exécution est inspecté (`system`, `qx`, `%x`, `subprocess.*`…).
+- `--version` n'importe où désarmait le contrôle réseau
+  (`curl --version http://tiers/`) : il ne vaut que SEUL. `stat` sortait de la
+  catégorie « métadonnées » avec `--files0-from`, qui lit un contenu.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

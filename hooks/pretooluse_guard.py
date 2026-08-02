@@ -150,13 +150,16 @@ _NESTED_RE = re.compile(
 #: (`curl http://local/ $(echo http://tiers/)`).
 _MARQUEUR_SUBSTITUTION = "substitution_non_evaluable"
 
-#: Interpréteur dont le programme est donné EN LIGNE : tout ce qui suit est du
-#: code, pas des arguments. `system "env"` (Perl/Ruby, sans parenthèses),
-#: `qx/env/`, `%x[env]` n'ont aucune forme commune — on inspecte donc TOUS les
-#: mots, en découpant sur la ponctuation du langage.
-_INTERPRETE_EN_LIGNE = re.compile(
-    r"\b(python3?|perl|ruby|node|deno|bun|php|lua|tclsh|Rscript|julia|"
-    r"awk|gawk|mawk)\b[^|;&]*?\s-(e|c|r|E|P)\b|\bawk\b[^|;&]*BEGIN",
+#: Primitive d'exécution SANS parenthèses (`system "env"` en Perl/Ruby,
+#: `qx/env/`, `%x[env]`) : `_NESTED_RE` ne voit que les formes parenthésées.
+#: On n'inspecte QUE ce qui suit l'appel — inspecter tous les mots du
+#: programme en ligne refusait `print("the curl command is useful")`, donc
+#: toute prose citant un binaire réseau.
+_APPEL_EXEC_RE = re.compile(
+    r"\b(?:system|exec|qx|popen|spawnSync|execSync|shell_exec|passthru|"
+    r"os\.execute|IO\.popen|subprocess\.\w+|check_output|check_call|"
+    r"getoutput|getstatusoutput)\b(?P<args>[^;\n]*)"
+    r"|%x[\[({<](?P<pcx>[^\])}>]*)",
     re.I,
 )
 _MOTS_DE_CODE_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -344,8 +347,18 @@ def normalize(command: str) -> str:
     # laissait passer `env${IFS}> dump`, où le `>` suit l'expansion.
     # Une référence simple `${VAR}` est CONSERVÉE : le contrôle des variables
     # porteuses de secret en dépend.
-    out = re.sub(r"\$\{IFS\}|\$\{[^}]*[-+:?][^}]*\}", "", command)
-    out = re.sub(r"(?<=\w)\$\{[A-Za-z_]\w*\}(?=\w)", "", out)
+    # `${IFS}` et ses variantes à opérateur (`${IFS/a/b}`, `${IFS##x}`,
+    # `${IFS%%x}`, `${IFS,,}`, `${IFS^^}`) valent toutes IFS, c'est-à-dire un
+    # SÉPARATEUR : les remplacer par du vide souderait `env${IFS}printenv` en
+    # un seul mot inexistant, et les deux programmes disparaîtraient.
+    out = re.sub(r"\$\{IFS[^}]*\}", " ", command)
+    # Les autres expansions à opérateur s'évaluent à VIDE (`e${_+}nv` → `env`)
+    # et ne servent qu'à découper un nom de commande. `!` est exclu :
+    # `${!nom}` doit rester visible pour le contrôle des références indirectes.
+    out = re.sub(r"\$\{[^}!]*[-+:?#%/^,=@][^}]*\}", "", out)
+    # Une référence collée AU MILIEU d'un mot ne sert qu'à le découper —
+    # y compris sous forme indirecte (`e${!q}nv`).
+    out = re.sub(r"(?<=\w)\$\{!?[A-Za-z_]\w*\}(?=\w)", "", out)
     out = out.replace("''", "").replace('""', "")
     out = re.sub(r"\[([^\]/])\]", r"\1", out)     # glob [o] → o
     out = re.sub(r"\\(.)", r"\1", out)            # \e → e
@@ -412,9 +425,12 @@ def _program_positions(tokens: list[str]) -> list[int]:
     # balayage est SÉPARÉ de la boucle ci-dessous, qui s'arrête au premier
     # programme réel — `find` n'étant pas une enveloppe, elle n'atteignait
     # jamais le `-exec` et la règle était morte.
-    positions += [i + 1 for i, tok in enumerate(tokens)
-                  if tok in ("-exec", "-execdir", "-ok", "-okdir")
-                  and i + 1 < len(tokens)]
+    # On ANALYSE la sous-commande, on ne se contente pas d'en marquer le
+    # premier mot : `-exec sudo curl …` et `-exec env printenv …` masquaient
+    # sinon le programme réel derrière une enveloppe.
+    for i, tok in enumerate(tokens):
+        if tok in ("-exec", "-execdir", "-ok", "-okdir") and i + 1 < len(tokens):
+            positions += [i + 1 + j for j in _program_positions(tokens[i + 1:])]
     i = 0
     while i < len(tokens):
         tok = tokens[i]
@@ -530,6 +546,10 @@ def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
 _METADATA_PROGRAMS = frozenset({"ls", "stat", "file", "du", "test", "dirname",
                                 "basename", "realpath", "readlink"})
 
+#: Options qui font LIRE un fichier à une commande de métadonnées : elles la
+#: sortent de sa catégorie (`stat --files0-from=~/.aws/credentials`).
+_OPT_LIT_UN_FICHIER_RE = re.compile(r"--(files0-from|reference)\b")
+
 
 #: Sous-commandes d'`openssl` purement locales : chiffrement, empreinte, tirage
 #: aléatoire. Rien n'y sort sur le réseau — contrairement à `s_client`.
@@ -541,11 +561,13 @@ _OPENSSL_LOCAL = frozenset({
 
 def _est_usage_local(base: str, suite: list[str]) -> bool:
     """Invocation d'un binaire réseau qui n'ouvre aucune connexion."""
-    if any(t in ("--version", "-V") for t in suite):
+    hors_options = [t for t in suite if not t.startswith("-")]
+    # `--version` ne vaut que SEUL : `curl --version http://tiers/` désarmait
+    # le contrôle alors que le comportement dépend entièrement du binaire.
+    if not hors_options and any(t in ("--version", "-V") for t in suite):
         return True
     if base == "openssl":
-        premier = next((t for t in suite if not t.startswith("-")), "")
-        return premier in _OPENSSL_LOCAL
+        return bool(hors_options) and hors_options[0] in _OPENSSL_LOCAL
     return False
 
 
@@ -556,7 +578,7 @@ def _metadata_seule(command: str) -> bool:
     refusé, et une substitution pourrait cacher n'importe quel lecteur.
     """
     normalized = normalize(command)
-    if _NESTED_RE.search(normalized):
+    if _NESTED_RE.search(normalized) or _OPT_LIT_UN_FICHIER_RE.search(normalized):
         return False
     commandes = tokenize(command)
     if len(commandes) != 1:
@@ -598,10 +620,10 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
             if (reason := check_bash(interne, _profondeur + 1)):
                 return reason
 
-    # Le programme d'un interpréteur donné en ligne est du CODE : ses mots ne
-    # sont pas des arguments, et aucune syntaxe commune ne les délimite.
-    if _INTERPRETE_EN_LIGNE.search(normalized):
-        mots = _MOTS_DE_CODE_RE.findall(normalized)
+    # Ce qui suit une primitive d'exécution est une commande, même sans
+    # parenthèses pour la délimiter.
+    for appel in _APPEL_EXEC_RE.finditer(normalized):
+        mots = _MOTS_DE_CODE_RE.findall(appel.group("args") or appel.group("pcx") or "")
         for idx, mot in enumerate(mots):
             base = _basename(mot)
             if base in ENV_DUMP_PROGRAMS and _est_deversement(base, mots, idx):
