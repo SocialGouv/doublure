@@ -7,19 +7,15 @@ from __future__ import annotations
 
 import ipaddress
 import re
-import sys
 import uuid
-from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "src"))
+from conftest import RecordingDetector
 
-from anonproxy.pipeline import Pseudonymizer  # noqa: E402
-from anonproxy.surrogates.engine import SurrogateEngine  # noqa: E402
-from anonproxy.vault import Vault  # noqa: E402
+from anonproxy.pipeline import Pseudonymizer
+from anonproxy.surrogates.engine import SurrogateEngine
+from anonproxy.vault import Vault
 
 MASTER = "cd" * 32
 
@@ -196,28 +192,16 @@ def test_cache_isole_les_portees(tmp_path):
 
 def test_valeurs_courtes_analysees(tmp_path):
     """Aucun seuil de longueur : `db01` doit passer par le détecteur."""
-    vus: list[str] = []
-
-    class Espion:
-        def detect(self, text, *, strategy=None):
-            vus.append(text)
-            return []
-
-    p = Pseudonymizer(Espion(), engine(tmp_path))
+    espion = RecordingDetector()
+    p = Pseudonymizer(espion, engine(tmp_path))
     p.to_surrogate("db01")
     p.to_surrogate("jdoe")
-    assert vus == ["db01", "jdoe"]
+    assert espion.seen == ["db01", "jdoe"]
 
 
 def test_texte_sans_alphanumerique_ignore(tmp_path):
-    vus: list[str] = []
-
-    class Espion:
-        def detect(self, text, *, strategy=None):
-            vus.append(text)
-            return []
-
-    p = Pseudonymizer(Espion(), engine(tmp_path))
+    espion = RecordingDetector()
+    p = Pseudonymizer(espion, engine(tmp_path))
     for texte in ("", "   ", "\n\t", "--- ***"):
         assert p.to_surrogate(texte) == texte
-    assert vus == [], "un texte sans caractère alphanumérique a été analysé"
+    assert espion.seen == [], "un texte sans caractère alphanumérique a été analysé"

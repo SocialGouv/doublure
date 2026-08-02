@@ -10,15 +10,11 @@ Données 100 % synthétiques.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 
-from anthropic_walker import (  # noqa: E402
+from anthropic_walker import (
     SSERewriter,
     Substituter,
     walk_request,

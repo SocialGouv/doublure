@@ -14,19 +14,14 @@ from __future__ import annotations
 
 import json
 import re
-import sys
-from pathlib import Path
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "src"))
 
-from anonproxy.detect import DetectionUnavailable  # noqa: E402
-from anonproxy.proxy import app as proxy_app  # noqa: E402
+from anonproxy.detect import DetectionUnavailable
+from anonproxy.proxy import app as proxy_app
 
 # --- valeurs synthétiques « sensibles » utilisées dans les requêtes --------- #
 REAL_HOST = "db-master-01-prod.acmecorp.internal"

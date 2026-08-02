@@ -6,7 +6,7 @@ fait la traduction octets ⇄ dict, et rien d'autre.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterator
+from typing import Any
 
 
 def parse_sse_block(block: str) -> dict[str, Any] | None:
@@ -49,6 +49,3 @@ def iter_blocks(chunk: str, buffer: str) -> tuple[list[str], str]:
     return blocks, buffer
 
 
-def passthrough_blocks(blocks: list[str]) -> Iterator[bytes]:
-    for b in blocks:
-        yield (b + "\n\n").encode("utf-8")

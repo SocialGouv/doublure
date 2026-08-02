@@ -19,13 +19,19 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import ipaddress
 import re
 import unicodedata
 from typing import Any
 
 from ..vault import SurrogateConflict, Vault
-from .canonical import Canonical, canonicalize, is_internal_host, split_host
+from .canonical import (
+    INTERNAL_SUFFIXES_LONGEST_FIRST,
+    REPO_HOSTS,
+    Canonical,
+    canonicalize,
+    is_internal_host,
+    split_host,
+)
 from .classes import DataClass, class_of
 from .lexicon import (
     EXTERNAL_TLDS,
@@ -39,6 +45,20 @@ from .lexicon import (
 from .overlap import resolve_overlaps
 
 MAX_ATTEMPTS = 64
+
+#: Suffixes de dépôt conservés tels quels : ils qualifient le rôle, pas l'entité.
+_REPO_SUFFIXES = ("-api", "-service", "-svc", "-lib", "-cli", "-web", "-ui",
+                  "-worker", "-operator", "-controller")
+
+#: Préfixes structurels conservés dans un identifiant générique.
+_GENERIC_PREFIXES = ("svc-", "sa-", "srv-", "ci-", "bot-", "ns-", "app-", "team-")
+
+#: Préfixes de jetons connus : la structure du secret reste plausible (D1).
+_SECRET_PREFIXES = ("ghp_", "gho_", "ghs_", "github_pat_", "xoxb-", "xoxp-",
+                    "sk-", "pk-", "AKIA", "ASIA", "glpat-", "npm_", "dop_v1_")
+
+#: Alphabet des corps de jetons fictifs.
+_TOKEN_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 #: Tags d'image manifestement publics : versions et canaux standard.
 _PLAIN_TAG_RE = re.compile(
@@ -59,7 +79,7 @@ def _display_value(canon: Canonical, value: str) -> str:
     un enregistrement : DNS et e-mails sont insensibles à la casse, un point
     final est significatif pour le résolveur mais pas pour l'identité.
     """
-    v = unicodedata.normalize("NFC", value.strip())
+    v = canon.normalized  # déjà normalisée NFC et détourée par canonicalize()
     if canon.kind in ("host", "email", "repo", "image"):
         return v.rstrip(".").lower()
     return v
@@ -78,6 +98,8 @@ class SurrogateEngine:
         self._master = master_key.encode() if isinstance(master_key, str) else master_key
         # Sel de portée : deux portées ne dérivent jamais le même substitut.
         self._salt = hmac.new(self._master, scope_key.encode(), hashlib.sha256).digest()
+        #: Attributs partagés déjà résolus : (type interne, réel) → substitut.
+        self._shared: dict[tuple[str, str], str] = {}
 
     # -- dérivation --------------------------------------------------------- #
 
@@ -122,7 +144,7 @@ class SurrogateEngine:
             return known
 
         for attempt in range(MAX_ATTEMPTS):
-            candidate = self._candidate(etype, value, attempt)
+            candidate = self._candidate(etype, value, attempt, canon)
             if candidate == value or candidate == stored:
                 continue  # jamais l'identité : ce serait une fuite silencieuse
             try:
@@ -167,8 +189,12 @@ class SurrogateEngine:
 
     # -- génération par type ------------------------------------------------ #
 
-    def _candidate(self, etype: str, value: str, attempt: int) -> str:
-        canon = canonicalize(etype, value)
+    def _candidate(self, etype: str, value: str, attempt: int,
+                   canon: Canonical | None = None) -> str:
+        # La forme canonique est calculée une fois par valeur et repassée à
+        # chaque tentative : la recalculer coûtait une normalisation Unicode et
+        # plusieurs regex par essai, jusqu'à 64 fois sur une collision.
+        canon = canon if canon is not None else canonicalize(etype, value)
         tweak = "" if attempt == 0 else f"#{attempt}"
         if canon.kind == "ip":
             return self._fake_ip(canon, tweak)
@@ -197,9 +223,18 @@ class SurrogateEngine:
     _REGISTRY = "_REGISTRY"
 
     def _alloc_shared(self, etype: str, real: str, gen) -> str:
-        """Alloue (ou retrouve) le substitut d'un attribut partagé."""
+        """Alloue (ou retrouve) le substitut d'un attribut partagé.
+
+        Un attribut partagé ne change jamais une fois lié : on le garde en
+        mémoire, sinon chaque hôte d'une même zone rouvrait une requête SQL
+        pour redemander la même réponse.
+        """
+        cached = self._shared.get((etype, real))
+        if cached is not None:
+            return cached
         known = self.vault.get_surrogate(self.scope_key, etype, real)
         if known is not None:
+            self._shared[(etype, real)] = known
             return known
         for attempt in range(MAX_ATTEMPTS):
             candidate = gen(attempt)
@@ -209,7 +244,9 @@ class SurrogateEngine:
                 # substitueraient alors à eux-mêmes et partiraient EN CLAIR.
                 continue
             try:
-                return self.vault.bind(self.scope_key, etype, real, candidate)
+                bound = self.vault.bind(self.scope_key, etype, real, candidate)
+                self._shared[(etype, real)] = bound
+                return bound
             except SurrogateConflict:
                 continue
         raise SurrogateCollisionError(
@@ -279,8 +316,7 @@ class SurrogateEngine:
             org = self._combo("zone", zone, attempt, ORG_WORDS)
             if internal:
                 # conserve le suffixe interne réel (attribut « interne » préservé)
-                for sfx in (".svc.cluster.local", ".cluster.local", ".internal",
-                            ".local", ".lan", ".intra", ".corp", ".home.arpa"):
+                for sfx in INTERNAL_SUFFIXES_LONGEST_FIRST:
                     if zone.endswith(sfx) or zone.endswith(sfx.lstrip(".")):
                         return f"{org}{sfx}"
                 return f"{org}.internal"
@@ -303,8 +339,7 @@ class SurrogateEngine:
         fake_short = self._fake_short_host(short, env, attempt)
         if not zone:
             return fake_short
-        internal = canon.attrs.get("internal") == "True" or is_internal_host(value)
-        return f"{fake_short}.{self._zone_for(zone, internal)}"
+        return f"{fake_short}.{self._zone_for(zone, canon.attrs['internal'] == 'True')}"
 
     # -- emails : humain vs service, domaine cohérent ------------------------ #
 
@@ -320,8 +355,11 @@ class SurrogateEngine:
         first = self._combo("id-first", canon.key, attempt, IDENTITY_WORDS)
         last = pick(IDENTITY_WORDS, self._idx("id-last", canon.key, str(attempt)))
         local = canon.attrs["local"]
-        sep = "." if "." in local else ("_" if "_" in local else "")
-        return f"{first}{sep}{last}@{fake_domain}" if sep else f"{first}{last}@{fake_domain}"
+        if "." in local:
+            return f"{first}.{last}@{fake_domain}"
+        if "_" in local:
+            return f"{first}_{last}@{fake_domain}"
+        return f"{first}{last}@{fake_domain}"
 
     # -- dépôts et images ---------------------------------------------------- #
 
@@ -334,12 +372,7 @@ class SurrogateEngine:
 
     def _fake_repo_name(self, name: str, attempt: int) -> str:
         word = self._combo("repo-name", name, attempt, SERVICE_WORDS)
-        suffix = ""
-        for known in ("-api", "-service", "-svc", "-lib", "-cli", "-web", "-ui",
-                      "-worker", "-operator", "-controller"):
-            if name.endswith(known):
-                suffix = known
-                break
+        suffix = next((s for s in _REPO_SUFFIXES if name.endswith(s)), "")
         return f"{word}{suffix}"
 
     def _fake_repo(self, canon: Canonical, value: str, attempt: int) -> str:
@@ -349,7 +382,7 @@ class SurrogateEngine:
         if v.startswith("git@"):
             host = v.split("@", 1)[1].split(":", 1)[0]
             return f"git@{host}:{org}/{name}.git"
-        for h in ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org"):
+        for h in REPO_HOSTS:
             if h in v:
                 scheme = "https://" if v.startswith("http") else ""
                 return f"{scheme}{h}/{org}/{name}"
@@ -471,16 +504,10 @@ class SurrogateEngine:
         # défaut : mot du lexique + morphologie (préfixe/suffixe/env/index)
         env = canon.attrs.get("env") or ""
         word = self._combo("generic", canon.key, attempt, SERVICE_WORDS)
-        prefix = ""
-        for p in ("svc-", "sa-", "srv-", "ci-", "bot-", "ns-", "app-", "team-"):
-            if v.lower().startswith(p):
-                prefix = p
-                break
+        prefix = next((p for p in _GENERIC_PREFIXES if v.lower().startswith(p)), "")
         m = re.search(r"(\d{1,6})", v)
         num = m.group(1) if m else ""
-        pieces = [f"{prefix}{word}"]
-        if num:
-            pieces[0] = f"{prefix}{word}{num}"
+        pieces = [f"{prefix}{word}{num}"]
         if env:
             pieces.append(env)
         return "-".join(pieces)
@@ -531,8 +558,7 @@ class SurrogateEngine:
         if etype == "JWT":
             def b64(seed: str, n: int) -> str:
                 d = hashlib.sha256((h + seed).encode()).hexdigest()
-                alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-                return "".join(alphabet[int(d[i:i + 2], 16) % len(alphabet)]
+                return "".join(_TOKEN_ALPHABET[int(d[i:i + 2], 16) % len(_TOKEN_ALPHABET)]
                                for i in range(0, min(len(d), n * 2), 2))
             return f"{b64('h', 12)}.{b64('p', 24)}.{b64('s', 22)}"
 
@@ -545,15 +571,14 @@ class SurrogateEngine:
             lines = [body[i:i + 64] for i in range(0, len(body), 64)]
             return f"-----BEGIN {label}-----\n" + "\n".join(lines) + f"\n-----END {label}-----"
 
-        # Préfixes de jetons connus : la structure reste plausible.
-        for prefix in ("ghp_", "gho_", "ghs_", "github_pat_", "xoxb-", "xoxp-",
-                       "sk-", "pk-", "AKIA", "ASIA", "glpat-", "npm_", "dop_v1_"):
-            if value.startswith(prefix):
-                n = max(len(value) - len(prefix), 16)
-                alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-                body = "".join(alphabet[int(h[i % 64:(i % 64) + 2] or "0", 16) % len(alphabet)]
-                               for i in range(n))
-                return prefix + body
+        prefix = next((p for p in _SECRET_PREFIXES if value.startswith(p)), None)
+        if prefix:
+            n = max(len(value) - len(prefix), 16)
+            body = "".join(
+                _TOKEN_ALPHABET[int(h[i % 64:(i % 64) + 2] or "0", 16) % len(_TOKEN_ALPHABET)]
+                for i in range(n)
+            )
+            return prefix + body
 
         if etype == "PASSWORD_CONTEXT":
             # conserve le préfixe contextuel (« password: »), remplace la valeur

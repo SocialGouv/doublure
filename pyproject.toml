@@ -27,3 +27,6 @@ packages = ["src/anonproxy"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Évite un bloc `sys.path.insert` (et son cortège de `# noqa: E402`) en tête de
+# chaque fichier de test. `.` donne accès à anthropic_walker.py, à la racine.
+pythonpath = [".", "src"]

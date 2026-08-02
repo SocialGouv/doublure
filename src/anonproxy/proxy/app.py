@@ -74,16 +74,29 @@ class ProxyState:
             verify=settings.ca_bundle or True,
         )
         self.unresolved_total = 0
+        self._incoming: tuple[int, Substituter] | None = None
 
     def outgoing(self) -> Substituter:
         """Substituteur du sens sortant (réel → substituts)."""
         return Substituter(to_surrogate=self.pseudonymizer.to_surrogate)
 
     def incoming(self) -> Substituter:
-        """Substituteur du sens entrant, vue coffre à jour (substituts → réel)."""
-        return Substituter(
+        """Substituteur du sens entrant, vue coffre à jour (substituts → réel).
+
+        Mémorisé tant que le coffre n'a pas changé : reconstruire l'objet à
+        chaque requête forçait la recompilation de l'alternation regex de tous
+        les substituts — ~19 ms par requête sur un coffre de 10 000 entrées, et
+        ça croît linéairement. La lecture est sans état, l'instance se partage
+        donc sans risque entre requêtes.
+        """
+        version = self.vault.version
+        if self._incoming is not None and self._incoming[0] == version:
+            return self._incoming[1]
+        sub = Substituter(
             to_surrogate=lambda s: s, surrogates=self.pseudonymizer.surrogates_view()
         )
+        self._incoming = (version, sub)
+        return sub
 
     async def aclose(self) -> None:
         await self.client.aclose()

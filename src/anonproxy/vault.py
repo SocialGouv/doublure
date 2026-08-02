@@ -50,6 +50,9 @@ class Vault:
     def __init__(self, path: str | Path | None = None, *, create_parents: bool = True):
         self.path = Path(path) if path is not None else DEFAULT_VAULT_PATH
         self._lock = threading.RLock()
+        # Incrémenté à chaque nouvelle correspondance : permet à l'appelant de
+        # savoir si sa vue est encore à jour sans relire toute la table.
+        self.version = 0
         try:
             if create_parents:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,6 +131,7 @@ class Vault:
                         "INSERT INTO mapping (scope, etype, real, surrogate) VALUES (?,?,?,?)",
                         (scope, etype, real, surrogate),
                     )
+                self.version += 1
                 return surrogate
             except sqlite3.IntegrityError:
                 existing = self.get_surrogate(scope, etype, real)

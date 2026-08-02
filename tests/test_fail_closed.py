@@ -50,7 +50,7 @@ def test_collision_epuisee_erreur_explicite(tmp_path, monkeypatch):
     # force le générateur à produire toujours le même candidat
     monkeypatch.setattr(
         "anonproxy.surrogates.engine.SurrogateEngine._candidate",
-        lambda self, etype, value, attempt: "collision-fixe",
+        lambda self, etype, value, attempt, canon=None: "collision-fixe",
     )
     eng.substitute_value("K8S_NAMESPACE", "ns-alpha")
     with pytest.raises(SurrogateCollisionError):

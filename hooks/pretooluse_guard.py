@@ -181,6 +181,11 @@ def tokenize(command: str) -> list[list[str]]:
     return [p.split() for p in parts if p.strip()]
 
 
+def _basename(token: str) -> str:
+    """Nom de commande, chemin retiré : `/usr/bin/env` → `env`."""
+    return token.rsplit("/", 1)[-1]
+
+
 def _program_words(tokens: list[str]) -> list[str]:
     """Mots pouvant désigner un programme : ignore les options et les
     affectations, et déplie les enveloppes (`command`, `bash -c`, `xargs`…)."""
@@ -189,15 +194,12 @@ def _program_words(tokens: list[str]) -> list[str]:
                 "zsh", "ksh", "dash", "watch", "script"}
     words = []
     for tok in tokens:
-        if tok.startswith("-") or "=" in tok.split("/")[-1][:1]:
-            continue
-        base = tok.rsplit("/", 1)[-1]
+        if tok.startswith("-") or "=" in tok:
+            continue  # option ou affectation `VAR=x`, jamais un programme
+        base = _basename(tok)
         words.append(base)
         if base not in wrappers:
-            # au-delà du premier programme réel, les mots restants sont des
-            # arguments — sauf derrière une enveloppe, qu'on continue à déplier
-            if words and words[0] not in wrappers:
-                break
+            break  # premier programme réel atteint : la suite, ce sont ses arguments
     return words
 
 
@@ -243,8 +245,7 @@ def check_bash(command: str) -> str | None:
 
     for tokens in tokenize(command):
         for idx, tok in enumerate(tokens):
-            base = tok.rsplit("/", 1)[-1]
-            if base in ENV_DUMP_PROGRAMS and not _is_env_prefix(tokens, idx):
+            if _basename(tok) in ENV_DUMP_PROGRAMS and not _is_env_prefix(tokens, idx):
                 return "déversement de l'environnement (jetons et clés compris)"
         for base in _program_words(tokens):
             if base in NETWORK_CAPABLE:

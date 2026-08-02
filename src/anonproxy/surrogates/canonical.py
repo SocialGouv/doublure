@@ -33,7 +33,13 @@ ENV_TOKENS: tuple[str, ...] = (
 
 _ENV_RE = re.compile(r"(?<![a-z0-9])(" + "|".join(ENV_TOKENS) + r")(?![a-z0-9])", re.I)
 
-_REPO_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org")
+#: Forges reconnues pour la résolution canonique des dépôts. Le moteur de
+#: substituts s'en sert aussi pour reconstruire l'URL : une seule liste.
+REPO_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org")
+
+#: Suffixes internes du plus long au plus court : `x.svc.cluster.local` doit
+#: être reconnu avant `x.local`. Dérivé d'INTERNAL_SUFFIXES, jamais recopié.
+INTERNAL_SUFFIXES_LONGEST_FIRST = tuple(sorted(INTERNAL_SUFFIXES, key=len, reverse=True))
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,7 @@ class Canonical:
     key: str                     # identité canonique (entrée du HMAC)
     kind: str                    # host | ip | email | repo | image | generic | …
     attrs: dict[str, str]        # env, internal, subnet, actor…
+    normalized: str = ""         # valeur NFC, sans espaces de bord
 
 
 def env_of(text: str) -> str | None:
@@ -77,55 +84,41 @@ def canonicalize(etype: str, value: str) -> Canonical:
     v = unicodedata.normalize("NFC", value.strip())
     low = v.lower()
 
+    def canon(key: str, kind: str, **attrs: str) -> Canonical:
+        return Canonical(key=key, kind=kind, attrs=attrs, normalized=v)
+
     if etype == "IP_ADDRESS":
         try:
             ip = ipaddress.ip_address(v)
         except ValueError:
-            return Canonical(key=f"generic:{low}", kind="generic", attrs={})
-        if ip.version == 4:
-            subnet = str(ipaddress.ip_network(f"{ip}/24", strict=False).network_address)
-            return Canonical(
-                key=f"ip:{ip}",
-                kind="ip",
-                attrs={"subnet": subnet, "private": str(ip.is_private), "v": "4"},
-            )
-        subnet = str(ipaddress.ip_network(f"{ip}/64", strict=False).network_address)
-        return Canonical(
-            key=f"ip:{ip}", kind="ip",
-            attrs={"subnet": subnet, "private": str(ip.is_private), "v": "6"},
-        )
+            return canon(f"generic:{low}", "generic")
+        prefixe = 24 if ip.version == 4 else 64
+        subnet = str(ipaddress.ip_network(f"{ip}/{prefixe}", strict=False).network_address)
+        return canon(f"ip:{ip}", "ip", subnet=subnet,
+                     private=str(ip.is_private), v=str(ip.version))
 
-    if etype in ("EMAIL_ADDRESS",) and "@" in v:
+    if etype == "EMAIL_ADDRESS" and "@" in v:
         local, _, domain = v.partition("@")
-        actor = "service" if _looks_like_service(local) else "human"
-        return Canonical(
-            key=f"email:{low}", kind="email",
-            attrs={"actor": actor, "domain": domain.lower(),
-                   "local": local.lower(), "env": env_of(local) or ""},
-        )
+        return canon(f"email:{low}", "email",
+                     actor="service" if _looks_like_service(local) else "human",
+                     domain=domain.lower(), local=local.lower(), env=env_of(local) or "")
 
     if etype in ("URL", "REPO") and (repo := _extract_repo(v)):
         org, name = repo
-        return Canonical(
-            key=f"repo:{org}/{name}", kind="repo",
-            attrs={"org": org, "name": name, "env": env_of(name) or ""},
-        )
+        return canon(f"repo:{org}/{name}", "repo",
+                     org=org, name=name, env=env_of(name) or "")
 
     if etype in ("HOSTNAME", "FQDN", "CERT_CN", "HEX_HOSTNAME"):
         short, zone = split_host(low)
-        return Canonical(
-            key=f"host:{short}", kind="host",
-            attrs={"zone": zone, "internal": str(is_internal_host(low)),
-                   "env": env_of(short) or env_of(zone) or ""},
-        )
+        return canon(f"host:{short}", "host", zone=zone,
+                     internal=str(is_internal_host(low)),
+                     env=env_of(short) or env_of(zone) or "")
 
     if etype == "CONTAINER_IMAGE":
-        return Canonical(key=f"image:{low}", kind="image", attrs={"env": env_of(low) or ""})
+        return canon(f"image:{low}", "image", env=env_of(low) or "")
 
-    return Canonical(
-        key=f"{etype.lower()}:{low}", kind="generic",
-        attrs={"env": env_of(low) or "", "actor": "service" if _looks_like_service(low) else ""},
-    )
+    return canon(f"{etype.lower()}:{low}", "generic", env=env_of(low) or "",
+                 actor="service" if _looks_like_service(low) else "")
 
 
 _SERVICE_PREFIXES = ("svc-", "sa-", "srv-", "service-", "system:", "bot-", "ci-")
@@ -140,7 +133,7 @@ def _looks_like_service(name: str) -> bool:
 def _extract_repo(value: str) -> tuple[str, str] | None:
     """org/nom depuis une URL HTTPS, une forme SSH ou une forme courte."""
     v = value.strip()
-    for host in _REPO_HOSTS:
+    for host in REPO_HOSTS:
         if f"{host}/" in v or f"{host}:" in v:
             tail = re.split(rf"{re.escape(host)}[:/]", v, maxsplit=1)[1]
             tail = tail.split("?")[0].split("#")[0]

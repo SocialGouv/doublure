@@ -14,19 +14,14 @@ Données 100 % synthétiques.
 from __future__ import annotations
 
 import json
-import sys
 import threading
-from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "src"))
 
-from anonproxy.surrogates.engine import SurrogateEngine  # noqa: E402
-from anonproxy.vault import Vault  # noqa: E402
-from anthropic_walker import SSERewriter, Substituter, walk_request, walk_response  # noqa: E402
+from anonproxy.surrogates.engine import SurrogateEngine
+from anonproxy.vault import Vault
+from anthropic_walker import SSERewriter, Substituter, walk_request, walk_response
 
 MASTER = "d6" * 32
 SCOPE = "project:adv"

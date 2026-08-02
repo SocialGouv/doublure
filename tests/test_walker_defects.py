@@ -23,13 +23,9 @@ DÉFAUT 2 — descriptions de propriétés non substituées (fuite)
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
 
-from anthropic_walker import Substituter, walk_request  # noqa: E402
+from anthropic_walker import Substituter, walk_request
 
 
 def marker_sub() -> Substituter:

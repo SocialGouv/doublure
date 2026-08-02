@@ -11,17 +11,16 @@ import logging
 import os
 import sqlite3
 import stat
-import sys
 from pathlib import Path
+
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+from conftest import DeadDetector, RecordingDetector
 
-from anonproxy.pipeline import Pseudonymizer  # noqa: E402
-from anonproxy.surrogates.engine import SurrogateEngine  # noqa: E402
-from anonproxy.vault import SurrogateConflict, Vault, VaultUnavailableError  # noqa: E402
+from anonproxy.pipeline import Pseudonymizer
+from anonproxy.surrogates.engine import SurrogateEngine
+from anonproxy.vault import SurrogateConflict, Vault, VaultUnavailableError
 
 MASTER = "f8" * 32
 SCOPE = "project:hard"
@@ -96,12 +95,6 @@ def test_meme_reel_deux_fois_renvoie_le_meme_substitut(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-class DeadDetector:
-    def detect(self, text, *, strategy=None):
-        from anonproxy.detect import DetectionUnavailable
-        raise DetectionUnavailable("service arrêté")
-
-
 def test_detecteur_hs_propage_sans_texte_en_clair(tmp_path):
     from anonproxy.detect import DetectionUnavailable
 
@@ -136,11 +129,7 @@ def test_journaux_ne_contiennent_pas_de_valeurs_reelles(tmp_path, caplog, capsys
 
 def test_stats_du_pipeline_sont_des_compteurs(tmp_path):
     """Les statistiques exposées par /healthz ne doivent porter aucun texte."""
-    class Fake:
-        def detect(self, text, *, strategy=None):
-            return []
-
-    p = Pseudonymizer(Fake(), engine(tmp_path / "v.db"))
+    p = Pseudonymizer(RecordingDetector(), engine(tmp_path / "v.db"))
     p.to_surrogate("connexion à db-01.acme.internal depuis 10.1.2.3")
     assert all(isinstance(v, int) for v in p.stats.values())
     assert "acme" not in json.dumps(p.stats)
