@@ -32,8 +32,16 @@ def main() -> int:
     if not ancien.exists():
         print(f"coffre source introuvable : {ancien}", file=sys.stderr)
         return 1
-    if nouveau.exists():
-        print(f"la cible existe déjà : {nouveau} — refus d'écraser", file=sys.stderr)
+    # `exists()` renvoie False sur un lien mort : sans le test de lien, le
+    # script suivait un symlink placé à l'avance et écrivait ailleurs.
+    if nouveau.is_symlink() or nouveau.exists():
+        print(f"la cible existe déjà ou est un lien : {nouveau} — refus d'écraser",
+              file=sys.stderr)
+        return 1
+    try:
+        os.close(os.open(nouveau, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600))
+    except OSError as exc:
+        print(f"impossible de créer {nouveau} de façon sûre : {exc}", file=sys.stderr)
         return 1
 
     key_file = Path(os.environ.get("ANONPROXY_MASTER_KEY_FILE", STATE_DIR / "anon_secret_key"))

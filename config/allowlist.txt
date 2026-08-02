@@ -15,17 +15,17 @@ re:golang\.org/x/[A-Za-z0-9/._-]+
 re:sigs\.k8s\.io/[A-Za-z0-9/._-]+
 
 # --- Packages Java/Kotlin publics (com.<org-interne>.* reste sensible) ------
-re:org\.apache\.[A-Za-z0-9._]+
-re:com\.google\.[A-Za-z0-9._]+
-re:io\.netty\.[A-Za-z0-9._]+
+re:org\.apache\.(kafka|hadoop|spark|cassandra|flink|zookeeper|maven|logging|commons|http|tomcat|lucene|camel|beam)[A-Za-z0-9._]*
+re:com\.google\.(common|gson|protobuf|inject|guava|api|cloud|auth|errorprone)[A-Za-z0-9._]*
+re:io\.netty\.(buffer|channel|handler|util|bootstrap|resolver|codec)[A-Za-z0-9._]*
 re:javax\.[A-Za-z0-9._]+
 
 # --- Images publiques --------------------------------------------------------
-re:docker\.io/library/[A-Za-z0-9/._:-]+
-re:gcr\.io/distroless/[A-Za-z0-9/._:-]+
-re:quay\.io/prometheus/[A-Za-z0-9/._:-]+
-re:registry\.k8s\.io/[A-Za-z0-9/._:-]+
-re:mcr\.microsoft\.com/[A-Za-z0-9/._:-]+
+re:docker\.io/library/[a-z0-9._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
+re:gcr\.io/distroless/[a-z0-9/._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
+re:quay\.io/prometheus/[a-z0-9/._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
+re:registry\.k8s\.io/[a-z0-9/._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
+re:mcr\.microsoft\.com/[a-z0-9/._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
 
 # --- Providers Terraform ------------------------------------------------------
 hashicorp/aws
@@ -65,8 +65,11 @@ re:[a-z0-9-]+(\.[a-z]{2}-[a-z]+\d)?\.googleapis\.com
 re:[a-z0-9-]+\.azure\.com
 re:[a-z0-9-]+\.windows\.net
 
-# --- Identifiants de code : PascalCase pointé (Mail.ReadWrite, Policy.ReadWrite.All)
-re:([A-Z][A-Za-z0-9]*)(\.[A-Z][A-Za-z0-9]*)+
+# --- Permissions Microsoft Graph — et ELLES SEULES.
+# La forme générique `PascalCase.PascalCase` rendait publique la moitié des
+# noms de classes et de services d'un SI Java/.NET : `Acme.PaymentsService`,
+# `Company.Client123.Secret` passaient tous en clair.
+re:(Mail|Calendars|Files|Sites|User|Group|Directory|Policy|Application|Team|Chat|Presence|Device|Reports|AuditLog)\.(Read|ReadWrite|ReadBasic|Send|Manage)(\.(All|Shared|Selected))?
 
 # --- Standards et méta-schémas (structurels : les substituer casse le protocole)
 re:https?://json-schema\.org(/[\w./-]*)?

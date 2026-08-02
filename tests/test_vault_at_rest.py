@@ -50,6 +50,86 @@ def test_le_fichier_seul_ne_revele_rien(tmp_path):
             assert reel not in texte
 
 
+def test_le_scelle_est_indistinguable_du_hasard(tmp_path):
+    """« Rien en clair » ne suffit pas : un simple base64 satisferait ce
+    critère tout en étant décodable par quiconque. On exige donc les
+    propriétés d'un vrai chiffrement — entropie et incompressibilité."""
+    import collections
+    import zlib
+
+    p = tmp_path / "v.db"
+    v = remplir(p)
+    # une valeur longue et TRÈS redondante : elle se compresserait à ~2 % si
+    # elle n'était qu'encodée, et l'histogramme trahirait l'alphabet base64.
+    v.bind(SCOPE, "HOSTNAME", "aaaaaaaa." * 40 + "acme.internal", "test.northwind.internal")
+    v.close()
+
+    blob = sqlite3.connect(p).execute(
+        "SELECT real_enc FROM mapping WHERE surrogate='test.northwind.internal'"
+    ).fetchone()[0]
+
+    assert len(zlib.compress(bytes(blob), 9)) > 0.95 * len(blob), \
+        "le scellé se compresse : ce n'est pas du chiffrement"
+    distincts = len(collections.Counter(bytes(blob)))
+    assert distincts > 100, f"seulement {distincts} valeurs d'octets : alphabet restreint"
+
+
+def test_alteration_d_un_octet_detectee(tmp_path):
+    """Chiffrement AUTHENTIFIÉ : avec la BONNE clé, un octet modifié doit
+    faire échouer la lecture. Un simple encodage, ou un condensé non secret,
+    laisserait passer l'altération."""
+    p = tmp_path / "v.db"
+    remplir(p).close()
+
+    conn = sqlite3.connect(p)
+    surrogate, blob = conn.execute("SELECT surrogate, real_enc FROM mapping LIMIT 1").fetchone()
+    altere = bytearray(blob)
+    altere[-1] ^= 0x01  # un seul bit, dans le chiffré
+    conn.execute("UPDATE mapping SET real_enc=? WHERE surrogate=?", (bytes(altere), surrogate))
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(VaultUnavailableError):
+        Vault(p, master_key=KEY_A).get_real(SCOPE, surrogate)
+
+
+def test_scelle_deplace_d_une_ligne_a_l_autre_rejete(tmp_path):
+    """Les données associées lient le scellé à SA ligne : sans elles, qui peut
+    écrire dans le fichier échange deux `real_enc` et inverse silencieusement
+    deux correspondances, sans invalider aucun tag."""
+    p = tmp_path / "v.db"
+    remplir(p).close()
+
+    conn = sqlite3.connect(p)
+    (s1, b1), (s2, b2) = conn.execute(
+        "SELECT surrogate, real_enc FROM mapping LIMIT 2"
+    ).fetchall()
+    conn.execute("UPDATE mapping SET real_enc=? WHERE surrogate=?", (b2, s1))
+    conn.execute("UPDATE mapping SET real_enc=? WHERE surrogate=?", (b1, s2))
+    conn.commit()
+    conn.close()
+
+    v = Vault(p, master_key=KEY_A)
+    with pytest.raises(VaultUnavailableError):
+        v.get_real(SCOPE, s1)
+
+
+def test_longueur_du_scelle_ne_trahit_pas_celle_du_reel(tmp_path):
+    """Sans rembourrage, la taille du chiffré donne la longueur EXACTE de la
+    valeur réelle : couplée au type et au décompte, elle permet d'énumérer des
+    noms plausibles."""
+    p = tmp_path / "v.db"
+    v = Vault(p, master_key=KEY_A)
+    tailles = {}
+    for n in (5, 6, 7, 8, 20, 21, 22):
+        v.bind(SCOPE, "HOSTNAME", "x" * n + ".internal", f"s{n}.northwind.internal")
+    v.close()
+    for surrogate, enc in sqlite3.connect(p).execute("SELECT surrogate, real_enc FROM mapping"):
+        tailles.setdefault(len(enc), []).append(surrogate)
+    assert any(len(v) > 1 for v in tailles.values()), \
+        "chaque longueur réelle produit une taille de scellé distincte"
+
+
 def test_mauvaise_cle_ne_dechiffre_pas(tmp_path):
     """Fail-closed : sans la bonne clé, on refuse, on ne devine pas."""
     p = tmp_path / "v.db"

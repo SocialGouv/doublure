@@ -64,9 +64,11 @@ def sensitive_from_fixture(fixture: Path) -> dict[str, str]:
                 found[f"{label} (fixture #{i + 1})"] = m
     return found
 
-#: Valeurs dont la présence dans la réponse prouve la restauration.
+#: Valeurs dont la présence dans la réponse prouve la restauration. Toutes
+#: sont exigées, et toutes sont DISCRIMINANTES : un fragment court comme
+#: « payments-api » peut apparaître par hasard dans un message d'erreur.
 EXPECT_RESTORED = ["db-master-01-prod.acmecorp.internal", "10.1.2.4",
-                   "payments-api"]
+                   "github.com/acmecorp/payments-api"]
 
 
 def normalize_blob(blob: str) -> str:
@@ -146,15 +148,21 @@ def main() -> int:
         restored_ok += int(present)
         report.append(f"| `{value}` | {'oui' if present else 'non'} |")
 
-    # Substituts visibles côté opérateur = restauration incomplète.
-    fake_hosts = set(re.findall(r"\b[\w-]+\.[\w-]+\.internal\b", answer))
-    real_hosts = {v for v in SENSITIVE.values() if v.endswith(".internal")}
-    residual = sorted(fake_hosts - real_hosts)
+    # Substituts visibles côté opérateur = restauration incomplète. Chercher
+    # les seuls `.internal` laissait passer les zones fictives externes que le
+    # moteur génère aussi (.com, .io, .net, .org, .co, .dev).
+    suffixes = r"internal|local|lan|intra|corp|com|net|io|org|co|dev"
+    fake_hosts = set(re.findall(rf"\b[\w-]+\.[\w-]+\.(?:{suffixes})\b", answer))
+    real_hosts = set(SENSITIVE.values()) | set(sensitive_from_fixture(fixture).values())
+    residual = sorted(h for h in fake_hosts if not any(h in r or r in h for r in real_hosts))
     if residual:
         report.append(f"\n**Substituts non restaurés dans la réponse** : {residual}")
 
     report.append("\n## Verdict\n")
-    ok = leaks == 0 and restored_ok >= 1 and not residual
+    # TOUTES les valeurs attendues, pas une seule : une restauration partielle
+    # est un échec, et un fragment court peut apparaître par hasard dans un
+    # message d'erreur.
+    ok = leaks == 0 and restored_ok == len(EXPECT_RESTORED) and not residual
     if leaks:
         report.append(f"- **ÉCHEC — {leaks} occurrence(s) de valeurs réelles** dans le trafic sortant.")
     else:

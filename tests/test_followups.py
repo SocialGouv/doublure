@@ -85,7 +85,9 @@ def test_ip_substituee_toujours_valide(tmp_path):
     eng = engine(tmp_path)
     for i in range(120):
         real = f"10.{i % 256}.{(i * 7) % 256}.{(i * 13) % 254 + 1}"
-        ipaddress.ip_address(eng.substitute_value("IP_ADDRESS", real))
+        fake = eng.substitute_value("IP_ADDRESS", real)
+        ipaddress.ip_address(fake)          # forme valide (D1)
+        assert fake != real, "l'adresse n'a pas été substituée"
 
 
 def test_ipv6_valide_et_prefixe_stable(tmp_path):
@@ -106,12 +108,17 @@ def test_uuid_version_et_variante_preservees(tmp_path):
                  "12345678-1234-5234-9234-123456789012"):  # v5
         fake = eng.substitute_value("UUID", real)
         assert uuid.UUID(fake)
+        assert fake != real, "l'identifiant n'a pas été substitué"
         assert fake[14] == real[14], f"version changée : {real} → {fake}"
         assert fake[19] == real[19], f"variante changée : {real} → {fake}"
 
 
 def test_mac_format_cisco_preserve(tmp_path):
     eng = engine(tmp_path)
+    # `fake != real` : sans cette assertion, un moteur qui renvoie l'entrée
+    # telle quelle satisfait le contrôle de format.
+    for reel in ("aabb.ccdd.eeff", "aa:bb:cc:dd:ee:ff", "aa-bb-cc-dd-ee-ff"):
+        assert eng.substitute_value("MAC_ADDRESS", reel) != reel
     assert re.fullmatch(r"[0-9a-f]{4}\.[0-9a-f]{4}\.[0-9a-f]{4}",
                         eng.substitute_value("MAC_ADDRESS", "aabb.ccdd.eeff"))
     assert re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}",

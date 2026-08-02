@@ -46,6 +46,9 @@ from .overlap import resolve_overlaps
 
 MAX_ATTEMPTS = 64
 
+#: Une valeur sans caractère alphanumérique ne porte aucun identifiant.
+_HAS_ALNUM = re.compile(r"\w", re.UNICODE)
+
 #: Suffixes de dépôt conservés tels quels : ils qualifient le rôle, pas l'entité.
 _REPO_SUFFIXES = ("-api", "-service", "-svc", "-lib", "-cli", "-web", "-ui",
                   "-worker", "-operator", "-controller")
@@ -132,6 +135,13 @@ class SurrogateEngine:
 
         if etype in ("FILE_PATH", "USER_PATH") and not [p for p in value.strip().split("/") if p]:
             return value  # « / », « // » : la racine ne porte aucun identifiant
+
+        if not _HAS_ALNUM.search(value):
+            # Un fragment sans caractère alphanumérique (un saut de ligne resté
+            # d'un arbitrage de recouvrement) n'a rien à masquer. L'enregistrer
+            # créait une correspondance vers la chaîne VIDE : si le modèle citait
+            # ce substitut, il disparaissait de la réponse de l'opérateur.
+            return value
 
         if klass is DataClass.SECRET:
             # D4 : dérivé, jamais stocké, donc jamais restauré au retour.

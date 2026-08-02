@@ -87,6 +87,14 @@ env -u HTTPS_PROXY -u HTTP_PROXY \
     > "${CLAUDE_OUT}" 2>"${OUT}/claude_stderr.txt"
 CLAUDE_RC=$?
 echo "   code retour claude : ${CLAUDE_RC}"
+if [[ ${CLAUDE_RC} -ne 0 ]]; then
+  # Sans cette garde, une session qui plante donnait « aucune fuite » — pour
+  # la seule raison qu'elle n'avait rien envoyé.
+  echo "ÉCHEC : la session a échoué (code ${CLAUDE_RC}) ; le verdict de fuite" >&2
+  echo "        ne prouverait rien. Sortie :" >&2
+  head -5 "${CLAUDE_OUT}" >&2
+  exit 1
+fi
 
 sleep 2
 cleanup

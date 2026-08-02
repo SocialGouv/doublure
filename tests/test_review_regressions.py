@@ -126,6 +126,11 @@ def test_fragments_non_couverts_conserves():
     for s in kept:
         couvert |= set(range(s["start"], s["end"]))
     assert set(range(0, 46)) <= couvert, "une zone détectée n'est plus couverte"
+    # …et les spans retenus ne se chevauchent plus : sans cette assertion, une
+    # fonction identité (qui ne résout rien) satisferait le test.
+    ordonnes = sorted(kept, key=lambda s: s["start"])
+    for a, b in zip(ordonnes, ordonnes[1:]):
+        assert a["end"] <= b["start"], f"chevauchement résiduel : {a} / {b}"
 
 
 # --------------------------------------------------------------------------- #
@@ -282,6 +287,39 @@ def test_substitut_ne_reprend_pas_un_mot_du_reel(tmp_path):
 @pytest.mark.parametrize("valeur", ["   ", "\n\t", "/", "//"])
 def test_chemin_degenere_ne_boucle_pas(tmp_path, valeur):
     assert engine(tmp_path).substitute_value("FILE_PATH", valeur) == valeur
+
+
+# --------------------------------------------------------------------------- #
+# Revue R1 — classification, blocs longs, fragments vides
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("etype,valeur", [
+    ("PASSWORD", "password=CorrectHorseBatteryStapleV42"),
+    ("CRYPTOGRAPHIC_KEY", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl"),
+    ("CERTIFICATE", "-----BEGIN CERTIFICATE-----\nMIIBogIBAAJBAKj3\n-----END CERTIFICATE-----"),
+    ("AUTH_TOKEN", "ghp_syntheticDemoToken1234567890abcd"),
+])
+def test_secrets_reels_du_detecteur_non_reversibles(tmp_path, etype, valeur):
+    """Les types RÉELLEMENT émis par le détecteur (`PASSWORD`,
+    `CRYPTOGRAPHIC_KEY`, `CERTIFICATE`) n'étaient pas classés : ils tombaient
+    dans le défaut INFRA, donc stockés au coffre et RESTAURABLES. D4 cassé."""
+    eng = engine(tmp_path)
+    faux = eng.substitute_value(etype, valeur)
+    assert faux != valeur
+    assert faux not in eng.surrogates_view(), f"{etype} est réversible : D4 violé"
+    assert valeur not in eng.surrogates_view().values()
+    assert not eng.vault.real_exists("project:rt", valeur)
+
+
+def test_fragment_sans_alphanumerique_non_enregistre(tmp_path):
+    """Un fragment vide de sens (un saut de ligne issu d'un arbitrage) créait
+    une correspondance vers la chaîne VIDE : le substitut, s'il était cité par
+    le modèle, disparaissait de la réponse rendue à l'opérateur."""
+    eng = engine(tmp_path)
+    for fragment in ("\n", "  ", "\n\n", "---"):
+        assert eng.substitute_value("CERTIFICATE", fragment) == fragment
+    assert "" not in eng.surrogates_view().values(), "correspondance vers la chaîne vide"
 
 
 def test_url_ipv6_entre_crochets_reste_valide(tmp_path):

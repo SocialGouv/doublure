@@ -252,9 +252,15 @@ def _walk(node: Any, fn: Callable[[str], str], *, in_schema: bool = False) -> An
         if isinstance(btype, str) and btype in OPAQUE_BLOCK_TYPES:
             return node
 
+        # `data` protege une charge BINAIRE (image, PDF). Mais une source de
+        # document peut etre du texte brut : `{"type": "text", "media_type":
+        # "text/plain", "data": "<texte libre>"}`. Sauter `data` sans regarder
+        # la nature de la source laissait ce texte partir en clair.
+        texte_brut = btype == "text" and str(node.get("media_type", "")).startswith("text/")
+
         out: dict[str, Any] = {}
         for key, value in node.items():
-            if key in SKIP_KEYS:
+            if key in SKIP_KEYS and not (key == "data" and texte_brut):
                 out[key] = value
                 continue
 

@@ -275,6 +275,38 @@ def test_defaut6_sous_arbre_de_controle_inattendu_traverse():
             f"fuite : champ inattendu dans `{cle}` non traversé"
 
 
+def test_defaut7_document_en_texte_brut_traverse():
+    """DÉFAUT 7 — `data` était sauté quelle que soit la nature de la source.
+
+    `data` figure dans SKIP_KEYS pour protéger les charges base64 d'images et
+    de PDF. Mais l'API accepte aussi `document.source = {"type": "text",
+    "media_type": "text/plain", "data": "<texte libre>"}` : c'est le chemin
+    naturel pour joindre un log ou un extrait de configuration. Tout ce texte
+    partait en clair.
+    """
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "document",
+         "source": {"type": "text", "media_type": "text/plain",
+                    "data": "journal du jour : SECRET-HOST est tombé"}},
+        # la source binaire, elle, doit rester intouchée
+        {"type": "document",
+         "source": {"type": "base64", "media_type": "application/pdf",
+                    "data": "JVBERi0xLjQKJSSECRET-HOSTZmFrZQ=="}},
+        {"type": "image",
+         "source": {"type": "base64", "media_type": "image/png", "data": "iVBORSECRET-HOST"}},
+    ]}]}
+    out = walk_request(body, marker_sub())
+    blocs = out["messages"][0]["content"]
+
+    assert "SECRET-HOST" not in blocs[0]["source"]["data"], \
+        "fuite : le texte brut d'un document n'est pas traversé"
+    assert blocs[0]["source"]["media_type"] == "text/plain"
+    # base64 : contenu opaque, on n'y touche pas (le substituer corromprait
+    # le document et n'apporterait rien).
+    assert blocs[1]["source"]["data"] == "JVBERi0xLjQKJSSECRET-HOSTZmFrZQ=="
+    assert blocs[2]["source"]["data"] == "iVBORSECRET-HOST"
+
+
 def test_types_de_blocs_opaques_toujours_respectes():
     """Garde-fou : la correction ne doit pas affaiblir D3."""
     body = {

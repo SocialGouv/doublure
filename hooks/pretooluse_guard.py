@@ -29,6 +29,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 STATE_DIR = Path(os.environ.get("ANONPROXY_STATE_DIR", Path.home() / ".local/state/anonproxy"))
 AUDIT_LOG = Path(os.environ.get("ANONPROXY_AUDIT_LOG", STATE_DIR / "canal2_audit.jsonl"))
@@ -88,6 +89,44 @@ NETWORK_CAPABLE = frozenset({
 _SHELL_SOCKET_RE = re.compile(r"/dev/(tcp|udp)/", re.I)
 
 #: Appels réseau embarqués dans un interpréteur (`python3 -c …`, `node -e …`).
+#: Lecture de l'environnement depuis un interpréteur : `env` est bloqué, mais
+#: `node -e process.env` ou `perl -e %ENV` faisaient exactement la même chose.
+_INLINE_ENV_RE = re.compile(
+    r"(os\s*\.\s*(environ|getenv|putenv)|process\s*\.\s*env|"
+    r"[%$@]ENV\b|\bENV\s*[\[{.]|\bENVIRON\b|\bENV\b(?=\s*[\)\},;]|\s*$)|"
+    r"Sys\.getenv|System\.getenv|getenv\s*\()",
+    re.I,
+)
+
+#: Charge obfusquée réinjectée dans un interpréteur : le hook ne voit que
+#: `base64 -d`, la charge réelle n'apparaît qu'à l'exécution. On refuse le
+#: MONTAGE, faute de pouvoir lire ce qu'il transporte.
+_DECODER_TO_SHELL_RE = re.compile(
+    r"\b(base64|base32|basenc|xxd|od|uudecode|openssl\s+enc|printf|echo)\b[^|]*\|\s*"
+    r"(sudo\s+|env\s+)?(ba|z|k|da)?sh\b|"
+    r"\b(base64|base32|xxd|od)\b[^|]*\|\s*(python3?|perl|ruby|node|php)\b",
+    re.I,
+)
+
+#: Interpréteur lisant son programme sur l'entrée standard : même problème.
+_STDIN_INTERPRETER_RE = re.compile(
+    r"\|\s*(sudo\s+)?(python3?|perl|ruby|node|php|(ba|z|k|da)?sh)\s*(-\s*)?$|"
+    r"\b(python3?|perl|ruby|node|(ba|z|k|da)?sh)\s+-\s*$|"
+    r"\beval\b|\bsource\s+/dev/stdin\b",
+    re.I,
+)
+
+#: Variables d'environnement dont la VALEUR est un secret. `env` est bloqué,
+#: mais `echo $ANTHROPIC_API_KEY` extrayait la même chose, une par une — et
+#: `cat "$ANONPROXY_MASTER_KEY_FILE"` visait directement la clé du coffre.
+_SENSITIVE_VAR_RE = re.compile(
+    r"\$\{?!?\s*[A-Za-z_]*(AWS|GCP|AZURE|ANTHROPIC|OPENAI|GITHUB|GITLAB|SLACK|"
+    r"VAULT|ANONPROXY|DOCKER|NPM|PYPI|DATADOG)[A-Za-z0-9_]*|"
+    r"\$\{?!?\s*[A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|APIKEY|API_KEY|"
+    r"CREDENTIAL|PRIVATE_KEY)[A-Za-z0-9_]*",
+    re.I,
+)
+
 #: (appliqué sur la commande NORMALISÉE : les quotes ont déjà été retirées)
 _INLINE_NETWORK_RE = re.compile(
     r"(urllib|requests\.|httpx\.|socket\s*\.\s*(socket|create_connection)|"
@@ -116,6 +155,27 @@ DENY_COMMAND_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "clé privée en clair dans la commande"),
     (r"\bgpg\b[^|;&]*--export-secret-keys", "export de clé privée GPG"),
     (r"\bsecurity\b[^|;&]*\bfind-generic-password\b", "extraction du trousseau"),
+    # `env` ne montre que SON environnement ; `ps auxe` montre celui de TOUS
+    # les processus — agent, base de données, jetons injectés au login.
+    (r"\bps\b[^|;&]*(\bauxe\b|\beww\b|-\w*e\w*\b[^|;&]*\benviron\b|\benviron\b)",
+     "l'environnement des autres processus (ps) expose leurs jetons"),
+    (r"/proc/[^/\s]+/(environ|cmdline)", "environnement d'un autre processus"),
+    (r"\b(gdb|strace|ltrace|lldb)\b[^|;&]*\s-p\b", "attachement à un processus vivant"),
+    (r"\bsystemctl\b[^|;&]*\b(show-environment|show\b[^|;&]*Environment)\b",
+     "environnement des unités systemd"),
+    (r"\bdocker\b[^|;&]*\binspect\b", "docker inspect expose l'environnement d'un conteneur"),
+    (r"\bgit\b\s+config\b(?![^|;&]*\buser\.(name|email)\b)",
+     "la configuration git peut contenir un jeton dans une URL de remote"),
+    (r"\bgit\b[^|;&]*\bremote\b[^|;&]*(-v|get-url)", "les remotes git peuvent porter un jeton"),
+    (r"\.git/config\b", "la config du dépôt peut contenir un jeton"),
+    (r"\bcrontab\b\s+-l\b", "les tâches planifiées portent souvent des secrets"),
+    (r"\.(bash|zsh|sh)_history\b", "l'historique de shell contient des secrets saisis"),
+    # archivage/copie EN BLOC d'un répertoire de secrets : viser le dossier,
+    # pas seulement les fichiers, sinon `tar ~/.ssh` ne nomme aucun fichier.
+    (r"[~$\w/.]*\.ssh(/|\b)", "le répertoire ~/.ssh contient les clés privées"),
+    (r"[~$\w/.]*\.gnupg(/|\b)", "le trousseau GPG"),
+    (r"\.local/state(/[^/\s]*)*/\*", "accès générique au répertoire d'état (coffre)"),
+    (r"\bfind\b[^|;&]*\.local/state\b", "énumération du répertoire d'état (coffre)"),
 )
 
 #: Hôtes joignables sans contourner la politique (services locaux du projet).
@@ -242,6 +302,13 @@ def check_bash(command: str) -> str | None:
         return "socket ouverte par le shell (/dev/tcp) : contourne le proxy (D9)"
     if _INLINE_NETWORK_RE.search(normalized):
         return "appel réseau embarqué dans un interpréteur : contourne le proxy (D9)"
+    if _INLINE_ENV_RE.search(normalized):
+        return "lecture de l'environnement depuis un interpréteur"
+    if _SENSITIVE_VAR_RE.search(normalized):
+        return "lecture d'une variable d'environnement porteuse de secret"
+    if _DECODER_TO_SHELL_RE.search(normalized) or _STDIN_INTERPRETER_RE.search(normalized):
+        return ("charge décodée puis exécutée : son contenu n'est pas analysable "
+                "avant exécution, la commande est refusée en l'état")
 
     for tokens in tokenize(command):
         for idx, tok in enumerate(tokens):
@@ -250,10 +317,24 @@ def check_bash(command: str) -> str | None:
         for base in _program_words(tokens):
             if base in NETWORK_CAPABLE:
                 urls = re.findall(r"[a-z]+://[^\s'\"]+", normalized, re.I)
-                if urls and all(LOCAL_HOST_RE.search(u) for u in urls):
+                if urls and all(_is_local_url(u) for u in urls):
                     continue  # services locaux du projet
                 return f"`{base}` peut sortir sur le réseau sans passer par le proxy (D9)"
     return None
+
+
+def _is_local_url(url: str) -> bool:
+    """Vrai seulement si l'HÔTE est local.
+
+    Chercher « localhost » n'importe où dans l'URL suffisait à passer :
+    `https://exfil.test/?to=127.0.0.1` et `http://localhost@exfil.test/` sont
+    des sorties vers un tiers.
+    """
+    try:
+        hote = urlsplit(url).hostname or ""
+    except ValueError:
+        return False
+    return hote in ("localhost", "127.0.0.1", "::1", "0.0.0.0") or hote.startswith("127.")
 
 
 def _payload_text(payload: dict) -> str:
@@ -292,15 +373,24 @@ def evaluate(event: dict) -> tuple[dict, str | None]:
         reason = check_vault_access(text) or check_sensitive_files(text)
         if reason is None:
             url = str(payload.get("url", ""))
-            if url and not LOCAL_HOST_RE.search(url):
+            if url and not _is_local_url(url):
                 reason = ("sortie réseau directe hors du proxy (D9) — "
                           "aucune pseudonymisation n'est possible sur ce chemin")
         hint = "Passe par le proxy, ou demande-moi d'ouvrir le domaine explicitement."
     else:
-        # Tout autre outil (Task, MCP…) : on inspecte quand même sa charge,
-        # plutôt que de l'autoriser par défaut faute de l'avoir énuméré.
+        # Tout autre outil (Task, MCP…). Un serveur MCP expose couramment un
+        # champ qui EST une commande : l'inspecter comme telle, sinon
+        # `mcp__x__shell {"cmd": "env"}` contournait toute la politique.
         text = _payload_text(payload)
         reason = check_vault_access(text) or check_sensitive_files(text)
+        if reason is None and isinstance(payload, dict):
+            for champ in ("command", "cmd", "code", "script", "shell", "args", "prompt"):
+                valeur = payload.get(champ)
+                if valeur is None:
+                    continue
+                reason = check_bash(_payload_text(valeur))
+                if reason:
+                    break
         hint = "Cette cible est hors de portée de l'agent par conception."
 
     if reason:

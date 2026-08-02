@@ -6,6 +6,7 @@ partir (fail-closed).
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import httpx
@@ -45,17 +46,33 @@ class DetectClient:
                 f"détection indisponible ({self.base_url}, stratégie={strategy}) : {exc}"
             ) from exc
 
+    #: Blocs délimités qui peuvent dépasser la taille d'un morceau : un
+    #: chevauchement raisonnable ne suffit pas à les recoller, et un PEM coupé
+    #: n'est reconnu par AUCUN des deux morceaux — la clé partait en clair.
+    #: On les repère sur le texte ENTIER avant tout découpage.
+    _BLOCS_LONGS = re.compile(
+        r"-----BEGIN ([A-Z0-9 ]+)-----.*?-----END \1-----", re.S,
+    )
+
+    def _detect_blocs_longs(self, text: str) -> list[dict[str, Any]]:
+        return [
+            {"type": "CERTIFICATE" if "CERTIFICATE" in m.group(1) else "CRYPTOGRAPHIC_KEY",
+             "value": m.group(0), "start": m.start(), "end": m.end(), "score": 0.99}
+            for m in self._BLOCS_LONGS.finditer(text)
+        ]
+
     def _detect_chunked(self, text: str) -> list[dict[str, Any]]:
         """Découpe aux frontières de ligne et recolle les offsets.
 
         Un chevauchement conserve les entités à cheval sur une coupe ; les
         doublons introduits par ce chevauchement sont dédupliqués sur
-        (start, end, type).
+        (start, end, type). Les blocs délimités trop longs pour tenir dans le
+        chevauchement sont détectés séparément, sur le texte entier.
         """
         overlap = 256
         size = max(self.regex_threshold, overlap * 4)
-        out: list[dict[str, Any]] = []
-        seen: set[tuple[int, int, str]] = set()
+        out: list[dict[str, Any]] = self._detect_blocs_longs(text)
+        seen: set[tuple[int, int, str]] = {(e["start"], e["end"], e["type"]) for e in out}
         pos = 0
         while pos < len(text):
             end = min(pos + size, len(text))

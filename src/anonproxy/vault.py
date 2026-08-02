@@ -54,7 +54,16 @@ CREATE TABLE IF NOT EXISTS mapping (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_surrogate_unique ON mapping (scope, surrogate);
 CREATE INDEX IF NOT EXISTS idx_scope ON mapping (scope);
 CREATE INDEX IF NOT EXISTS idx_real ON mapping (scope, real_idx);
+-- une valeur réelle n'a qu'UN substitut par portée, quel que soit son type :
+-- sinon `get_real` peut rendre un hôte pour un substitut d'IP. Les attributs
+-- partagés (types préfixés `_`) sont exemptés : ils décrivent une zone ou un
+-- sous-réseau, pas l'entité elle-même.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_real_unique ON mapping (scope, real_idx)
+    WHERE etype NOT LIKE '\\_%' ESCAPE '\\';
 """
+
+#: Taille de bloc du rembourrage déterministe des valeurs scellées.
+_PAD_BLOCK = 32
 
 
 class VaultUnavailableError(RuntimeError):
@@ -122,20 +131,53 @@ class Vault:
                 pass  # système de fichiers sans permissions POSIX
 
     def _index(self, *parts: str) -> str:
-        msg = "\x1f".join(parts).encode("utf-8")
+        """Index HMAC déterministe, encodage NON AMBIGU.
+
+        Un simple séparateur ne suffit pas : ``HMAC(a, b|c)`` et
+        ``HMAC(a|b, c)`` donneraient le même condensé dès qu'une valeur
+        contient le séparateur. Chaque partie est donc préfixée de sa
+        longueur.
+        """
+        msg = b"".join(
+            len(raw := p.encode("utf-8")).to_bytes(4, "big") + raw for p in parts
+        )
         return hmac.new(self._idx_key, msg, hashlib.sha256).hexdigest()
 
-    def _seal(self, real: str) -> bytes:
-        nonce = os.urandom(12)
-        return nonce + self._aes.encrypt(nonce, real.encode("utf-8"), None)
+    @staticmethod
+    def _aad(scope: str, etype: str, surrogate: str) -> bytes:
+        """Données associées : lient le scellé à SA ligne.
 
-    def _open(self, blob: bytes) -> str:
+        Sans elles, GCM authentifie chaque blob isolément mais rien ne
+        l'attache à sa ligne : qui peut écrire dans le fichier — sauvegarde
+        restaurée ailleurs, opérateur sans la clé — échange deux `real_enc` et
+        inverse silencieusement deux correspondances, sans invalider aucun tag.
+        """
+        return f"{scope}\x1f{etype}\x1f{surrogate}".encode("utf-8")
+
+    def _seal(self, scope: str, etype: str, surrogate: str, real: str) -> bytes:
+        nonce = os.urandom(12)
+        # Rembourrage déterministe : GCM ne pad pas, la taille du chiffré
+        # donnerait la longueur exacte de la valeur réelle. Couplée au type et
+        # au décompte, elle suffit à énumérer des noms d'hôtes plausibles.
+        raw = real.encode("utf-8")
+        padding = (-(len(raw) + 1)) % _PAD_BLOCK
+        payload = len(raw).to_bytes(4, "big") + raw + b"\x00" * padding
+        return nonce + self._aes.encrypt(
+            nonce, payload, self._aad(scope, etype, surrogate)
+        )
+
+    def _open(self, scope: str, etype: str, surrogate: str, blob: bytes) -> str:
         try:
-            return self._aes.decrypt(bytes(blob[:12]), bytes(blob[12:]), None).decode("utf-8")
-        except (InvalidTag, ValueError) as exc:
+            payload = self._aes.decrypt(
+                bytes(blob[:12]), bytes(blob[12:]), self._aad(scope, etype, surrogate)
+            )
+            taille = int.from_bytes(payload[:4], "big")
+            return payload[4:4 + taille].decode("utf-8")
+        except (InvalidTag, ValueError, IndexError) as exc:
             raise VaultUnavailableError(
-                f"déchiffrement impossible ({self.path}) : clé maître incorrecte "
-                "ou coffre altéré. Aucune valeur n'est devinée."
+                f"déchiffrement impossible ({self.path}) : clé maître incorrecte, "
+                "coffre altéré, ou correspondance déplacée d'une ligne à l'autre. "
+                "Aucune valeur n'est devinée."
             ) from exc
 
     # -- lecture ------------------------------------------------------------ #
@@ -151,9 +193,10 @@ class Vault:
     def get_real(self, scope: str, surrogate: str) -> str | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT real_enc FROM mapping WHERE scope=? AND surrogate=?", (scope, surrogate)
+                "SELECT etype, real_enc FROM mapping WHERE scope=? AND surrogate=?",
+                (scope, surrogate),
             ).fetchone()
-        return self._open(row[0]) if row else None
+        return self._open(scope, row[0], surrogate, row[1]) if row else None
 
     def real_exists(self, scope: str, real: str) -> bool:
         with self._lock:
@@ -175,12 +218,12 @@ class Vault:
         Fail-closed (D5) : mieux vaut un substitut non résolu, visible comme
         tel, qu'une valeur plausible et fausse.
         """
-        query = "SELECT surrogate, real_enc FROM mapping WHERE scope=?"
+        query = "SELECT etype, surrogate, real_enc FROM mapping WHERE scope=?"
         if not include_internal:
             query += r" AND etype NOT LIKE '\_%' ESCAPE '\'"
         with self._lock:
             rows = self._conn.execute(query, (scope,)).fetchall()
-        return {s: self._open(enc) for s, enc in rows}
+        return {s: self._open(scope, etype, s, enc) for etype, s, enc in rows}
 
     def count(self, scope: str) -> int:
         with self._lock:
@@ -204,17 +247,38 @@ class Vault:
                         "INSERT INTO mapping (scope, etype, key_idx, real_idx, real_enc,"
                         " surrogate) VALUES (?,?,?,?,?,?)",
                         (scope, etype, self._index(scope, etype, real),
-                         self._index(scope, real), self._seal(real), surrogate),
+                         self._index(scope, real),
+                         self._seal(scope, etype, surrogate, real), surrogate),
                     )
                 self.version += 1
                 return surrogate
             except sqlite3.IntegrityError:
-                existing = self.get_surrogate(scope, etype, real)
+                # Même valeur déjà liée — sous ce type (course entre threads) ou
+                # sous un autre (le même texte ne doit avoir qu'UN substitut par
+                # portée, sinon `get_real` rend une valeur d'un type étranger).
+                existing = self.get_surrogate(scope, etype, real) \
+                    or self._surrogate_for_real(scope, real)
                 if existing is not None:
-                    return existing  # course : un autre thread a lié la même valeur
+                    return existing
                 raise SurrogateConflict(
                     f"substitut déjà pris dans {scope!r} : {surrogate!r}"
                 ) from None
+            except sqlite3.Error as exc:
+                # Base en lecture seule, disque plein… : le contrat annonce
+                # VaultUnavailableError, pas une exception SQLite nue.
+                raise VaultUnavailableError(
+                    f"écriture impossible dans le coffre ({self.path}) : {exc}"
+                ) from exc
+
+    def _surrogate_for_real(self, scope: str, real: str) -> str | None:
+        """Substitut déjà attribué à cette valeur, quel que soit son type."""
+        with self._lock:
+            row = self._conn.execute(
+                r"SELECT surrogate FROM mapping WHERE scope=? AND real_idx=?"
+                r" AND etype NOT LIKE '\_%' ESCAPE '\' LIMIT 1",
+                (scope, self._index(scope, real)),
+            ).fetchone()
+        return row[0] if row else None
 
     def close(self) -> None:
         with self._lock:

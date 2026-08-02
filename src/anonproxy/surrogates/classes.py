@@ -23,24 +23,40 @@ class DataClass(str, Enum):
 
 
 #: Types AnonShield (+ nos types custom) → classe de donnée.
+#:
+#: ATTENTION : ce sont les types RÉELLEMENT ÉMIS par `/detect` qui comptent.
+#: Les recognizers d'AnonShield regroupent plusieurs motifs sous un seul
+#: `supported_entity` : `CERTIFICATE` (et non `CERT_PEM`),
+#: `CRYPTOGRAPHIC_KEY` (et non `JWT`/`RSA_MODULUS`), `PASSWORD` (et non
+#: `PASSWORD_CONTEXT`), `USERNAME`. Classer les noms de motifs individuels
+#: laissait ces quatre types tomber dans le défaut INFRA : mots de passe,
+#: jetons JWT et certificats devenaient RÉVERSIBLES et étaient stockés dans le
+#: coffre — D4 cassé en silence. `tests/test_classes_contract.py` vérifie
+#: désormais que chaque type émis par le détecteur a une classe explicite.
 CLASS_OF: dict[str, DataClass] = {
     # -- secrets : jamais réversibles (D4) ---------------------------------- #
-    "JWT": DataClass.SECRET,
+    "CERTIFICATE": DataClass.SECRET,        # CERT_PEM, CERT_DER, CERT_REQUEST…
+    "CRYPTOGRAPHIC_KEY": DataClass.SECRET,  # JWT, RSA_MODULUS, BASE64_KEY
+    "PASSWORD": DataClass.SECRET,
     "AUTH_TOKEN": DataClass.SECRET,
+    "PGP_BLOCK": DataClass.SECRET,
+    "COOKIE_SESSION": DataClass.SECRET,
+    "API_KEY": DataClass.SECRET,
+    "CREDIT_CARD": DataClass.SECRET,
+    # noms de motifs individuels : jamais émis tels quels, conservés au cas où
+    # une configuration les exposerait directement.
+    "JWT": DataClass.SECRET,
     "PRIVATE_KEY_PEM": DataClass.SECRET,
     "PASSWORD_CONTEXT": DataClass.SECRET,
-    "COOKIE_SESSION": DataClass.SECRET,
     "RSA_MODULUS": DataClass.SECRET,
-    "PGP_BLOCK": DataClass.SECRET,
     "CERT_PEM": DataClass.SECRET,
     "CERT_REQUEST_PEM": DataClass.SECRET,
     "CERT_DER": DataClass.SECRET,
-    "API_KEY": DataClass.SECRET,
-    "CREDIT_CARD": DataClass.SECRET,
     # -- PII ----------------------------------------------------------------- #
     "EMAIL_ADDRESS": DataClass.PII,
     "PERSON": DataClass.PII,
     "PHONE_NUMBER": DataClass.PII,
+    "USERNAME": DataClass.PII,
     "USERNAME_CONTEXT": DataClass.PII,
     "USER_PATH": DataClass.PII,
     "CPF": DataClass.PII,
@@ -67,6 +83,7 @@ CLASS_OF: dict[str, DataClass] = {
     # -- public / standard : jamais substitué -------------------------------- #
     "CVE_ID": DataClass.PUBLIC,
     "CPE": DataClass.PUBLIC,
+    "CPE_STRING": DataClass.PUBLIC,
     "OID": DataClass.PUBLIC,
     "PORT": DataClass.PUBLIC,
     "MALWARE": DataClass.PUBLIC,
@@ -101,7 +118,8 @@ def class_of(etype: str) -> DataClass:
 #: par ce rang AVANT le score, pour un résultat déterministe.
 _PRIORITY: dict[str, int] = {
     # secrets
-    "PRIVATE_KEY_PEM": 0, "PGP_BLOCK": 0, "JWT": 1, "AUTH_TOKEN": 1,
+    "PRIVATE_KEY_PEM": 0, "PGP_BLOCK": 0, "CERTIFICATE": 0,
+    "JWT": 1, "AUTH_TOKEN": 1, "CRYPTOGRAPHIC_KEY": 1, "PASSWORD": 1,
     "API_KEY": 1, "COOKIE_SESSION": 1, "PASSWORD_CONTEXT": 1, "RSA_MODULUS": 1,
     "CERT_PEM": 1, "CERT_REQUEST_PEM": 1, "CERT_DER": 1,
     # instruments financiers
