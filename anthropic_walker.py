@@ -93,22 +93,45 @@ RESPONSE_CONTROL_KEYS: frozenset[str] = frozenset({"usage", "container_id"})
 #: accepte `stop_sequences`, `mcp_servers`, `container`, `tool_choice`, et
 #: Anthropic ajoute des champs sans preavis — une capture reelle montre
 #: `context_management`, `output_config`, `thinking` au premier niveau.
-REQUEST_CONTROL_KEYS: frozenset[str] = frozenset(
-    {
-        "model",
-        "max_tokens",
-        "temperature",
-        "top_p",
-        "top_k",
-        "stream",
-        "service_tier",
-        "betas",
-        "anthropic_version",
-        "thinking",           # {"type": ..., "budget_tokens": ...} : config
-        "output_config",
-        "context_management",
-    }
-)
+#:
+#: Chaque entree donne les sous-cles ADMISES. Une cle inattendue dans le
+#: sous-arbre fait traverser le bloc entier : l'exclusion ne vaut que pour la
+#: forme connue. Sans cela, le fail-closed ne tenait qu'au premier niveau, et
+#: un champ ajoute par une beta a l'interieur de `thinking` ou
+#: `context_management` serait parti brut.
+REQUEST_CONTROL_KEYS: dict[str, frozenset[str]] = {
+    "model": frozenset(),
+    "max_tokens": frozenset(),
+    "temperature": frozenset(),
+    "top_p": frozenset(),
+    "top_k": frozenset(),
+    "stream": frozenset(),
+    "service_tier": frozenset(),
+    "betas": frozenset(),
+    "anthropic_version": frozenset(),
+    "thinking": frozenset({"type", "budget_tokens", "display"}),
+    "output_config": frozenset({"effort"}),
+    "context_management": frozenset(
+        {"edits", "type", "keep", "trigger", "at_least", "value",
+         "clear_at_least", "clear_tool_inputs", "exclude_tools"}
+    ),
+}
+
+
+def _is_known_control(node: Any, allowed: frozenset[str]) -> bool:
+    """Le bloc a-t-il exactement la forme attendue ?
+
+    Les feuilles scalaires sont admises telles quelles (parametres
+    d'inference, noms de beta) ; seule une CLE inconnue disqualifie le bloc.
+    """
+    if isinstance(node, dict):
+        return all(
+            key in allowed and _is_known_control(value, allowed)
+            for key, value in node.items()
+        )
+    if isinstance(node, list):
+        return all(_is_known_control(item, allowed) for item in node)
+    return True
 
 #: Cles de JSON Schema qui sont structurelles, pas du texte libre.
 #: On traverse `description`, on ignore la mecanique du schema : ces valeurs
@@ -302,7 +325,8 @@ def walk_request(body: dict[str, Any], sub: Substituter) -> dict[str, Any]:
     out = dict(body)
 
     for key, value in body.items():
-        if key in REQUEST_CONTROL_KEYS:
+        allowed = REQUEST_CONTROL_KEYS.get(key)
+        if allowed is not None and _is_known_control(value, allowed):
             continue
         out[key] = _walk(value, sub.to_surrogate)
 

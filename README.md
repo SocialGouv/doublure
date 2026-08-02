@@ -30,7 +30,7 @@ deux moitiés du secret ; les perdre rend la dé-anonymisation impossible.**
 ## Vérifier
 
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 289 tests
+uv run pytest tests/ --ignore=tests/egress   # 311 tests
 uv run pytest tests/egress/test_report.py    # 18 tests (harnais Phase 0)
 
 bash tests/egress_capture.sh                 # inventaire d'egress

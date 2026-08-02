@@ -64,9 +64,12 @@ class FakeDetector:
         # ces motifs n'attrapent pas, les tests « aucune fuite » passeraient
         # trivialement — rien à substituer, donc rien à faire fuir. On échoue
         # bruyamment plutôt que de rassurer à tort.
+        # `c in reel` acceptait une couverture PARTIELLE : un motif e-mail
+        # affaibli en `@domaine` « couvrait » alors l'adresse entière, et
+        # `alice.dupont` fuyait sans qu'aucun test ne bronche.
         couverts = {e["value"] for e in out}
         for reel in REAL_VALUES:
-            if reel in text and not any(reel in c or c in reel for c in couverts):
+            if reel in text and not any(reel in c for c in couverts):
                 raise AssertionError(
                     f"FakeDetector ne couvre pas {reel!r} : le test ne prouverait rien. "
                     "Ajouter un motif, ou vérifier ce cas via tests/phase3_e2e.sh."
@@ -211,6 +214,10 @@ def test_aucune_valeur_reelle_ne_sort(proxy):
     sent = json.dumps(upstream.requests[-1]["body"], ensure_ascii=False)
     for real in REAL_VALUES:
         assert real not in sent, f"FUITE : {real!r} est parti à l'amont"
+    # …et pas davantage par MORCEAUX : une substitution partielle laisse
+    # passer l'essentiel de l'information.
+    for fragment in ("alice.dupont", "acmecorp", "payments-api", "db-master-01"):
+        assert fragment not in sent, f"FUITE PARTIELLE : {fragment!r} est parti à l'amont"
 
 
 def test_structure_preservee(proxy):

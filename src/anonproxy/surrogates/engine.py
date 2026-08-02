@@ -124,7 +124,7 @@ class SurrogateEngine:
         if klass is DataClass.PUBLIC:
             return value  # allowlist : laissé en clair
 
-        if etype in ("FILE_PATH", "USER_PATH") and not [p for p in value.split("/") if p]:
+        if etype in ("FILE_PATH", "USER_PATH") and not [p for p in value.strip().split("/") if p]:
             return value  # « / », « // » : la racine ne porte aucun identifiant
 
         if klass is DataClass.SECRET:
@@ -264,8 +264,17 @@ class SurrogateEngine:
         divergeaient. Deux mots portent l'espace à ~5 000, ce qui reste une
         forme parfaitement courante pour un service (`payment-gateway`).
         """
-        a = pick(words, self._idx(f"{ns}-a", key, str(attempt)))
-        b = pick(words, self._idx(f"{ns}-b", key, str(attempt)))
+        # Un mot du lexique peut coïncider avec un mot de la valeur réelle
+        # (`gateway-021` → `gateway-registry-021`) : le substitut garderait
+        # alors un morceau reconnaissable du réel. On décale jusqu'à un tirage
+        # qui n'en reprend aucun.
+        present = set(re.findall(r"[a-z]{3,}", key.lower()))
+        for shift in range(8):
+            seed = str(attempt) if shift == 0 else f"{attempt}~{shift}"
+            a = pick(words, self._idx(f"{ns}-a", key, seed))
+            b = pick(words, self._idx(f"{ns}-b", key, seed))
+            if a not in present and b not in present:
+                break
         if attempt < 16:
             return f"{a}-{b}"
         return f"{a}-{b}{self._idx(f'{ns}-n', key, str(attempt)) % 900 + 100}"
@@ -513,25 +522,59 @@ class SurrogateEngine:
         return "-".join(pieces)
 
     def _fake_authority(self, authority: str, attempt: int) -> tuple[str, str]:
-        """(hôte fictif, port) depuis la partie autorité d'une URL.
+        """(autorité fictive, port) depuis la partie autorité d'une URL.
 
-        Gère le littéral IPv6 entre crochets (`[fd00::1]:8080`), que le
-        découpage naïf sur « : » transformait en hôte tronqué.
+        RFC 3986 : ``authority = [userinfo "@"] host [":" port]``. Découper
+        naïvement sur le premier « : » prenait `user` pour l'hôte et recopiait
+        `:motdepasse@hote.reel` tel quel dans le « port » — le mot de passe ET
+        le domaine réel partaient en clair.
         """
-        if authority.startswith("["):
-            literal, sep, after = authority.partition("]")
+        userinfo, at, hostport = authority.rpartition("@")
+        prefix = ""
+        if at:
+            # L'identifiant et le mot de passe sont des SECRETS : dérivés, non
+            # réversibles, jamais restaurés dans une commande générée (D4).
+            user, sep, password = userinfo.partition(":")
+            fake_user = self._combo("url-user", user, attempt, SERVICE_WORDS)
+            # Le mot de passe SEUL : `_secret_reference` préserve le libellé qui
+            # précède, et lui donner `user:password` republierait le nom réel.
+            prefix = f"{fake_user}:{self._secret_reference('API_KEY', password)}@" \
+                if sep else f"{fake_user}@"
+
+        if hostport.startswith("["):  # littéral IPv6 : [fd00::1]:8443
+            literal, sep, after = hostport.partition("]")
             fake = self.substitute_value("IP_ADDRESS", literal[1:])
-            return f"[{fake}]", (after if sep else "")
-        host, sep, port = authority.partition(":")
-        fake = self._fake_host(canonicalize("HOSTNAME", host), host, attempt)
-        return fake, (f":{port}" if sep else "")
+            return f"{prefix}[{fake}]", (after if sep else "")
+
+        if hostport.count(":") > 1:
+            # IPv6 sans crochets : « host:port » n'a plus de sens, tout ce qui
+            # suivait le premier « : » était recopié tel quel.
+            return f"{prefix}{self.substitute_value('IP_ADDRESS', hostport)}", ""
+
+        host, sep, port = hostport.partition(":")
+        # `substitute_value` et non `_fake_host` : l'hôte d'une URL doit être
+        # ENREGISTRÉ comme n'importe quel hôte. Le générer sans passer par le
+        # coffre laissait son substitut libre, et un autre hôte réel pouvait
+        # ensuite obtenir le même — la restauration désignait alors la mauvaise
+        # machine (D6).
+        return f"{prefix}{self.substitute_value('HOSTNAME', host)}", (f":{port}" if sep else "")
 
     def _fake_query(self, tail: str, attempt: int) -> str:
-        """Substitue les VALEURS d'une query string, garde les noms de
-        paramètres (ils font partie du contrat de l'API appelée)."""
+        """Substitue les VALEURS d'une query string ou d'un fragment.
+
+        Les NOMS de paramètres sont conservés : ils font partie du contrat de
+        l'API appelée. Le fragment (`#…`), lui, est une valeur entière — le
+        traiter comme une paire `nom=valeur` le laissait intact, alors qu'il
+        porte couramment un identifiant (`#tenant-acme-nda`).
+        """
         if not tail:
             return ""
         sep, rest = tail[0], tail[1:]
+        if sep == "#":
+            return f"#{self._combo('url-frag', rest, attempt, SERVICE_WORDS)}" if rest else "#"
+
+        # une query peut se terminer par un fragment : `?a=b#section`
+        rest, hash_sep, frag = rest.partition("#")
         parts = []
         for chunk in re.split(r"([&;])", rest):
             if chunk in ("&", ";"):
@@ -540,8 +583,12 @@ class SurrogateEngine:
             name, eq, value = chunk.partition("=")
             if eq and value:
                 value = self._combo("url-arg", f"{name}:{value}", attempt, SERVICE_WORDS)
+            elif not eq and name:
+                # paramètre sans valeur : c'est la donnée elle-même
+                name = self._combo("url-arg", name, attempt, SERVICE_WORDS)
             parts.append(f"{name}{eq}{value}")
-        return sep + "".join(parts)
+        out = sep + "".join(parts)
+        return out + self._fake_query(f"#{frag}", attempt) if hash_sep else out
 
     # -- secrets (D4) -------------------------------------------------------- #
 

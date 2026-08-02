@@ -37,6 +37,22 @@ _ENV_RE = re.compile(r"(?<![a-z0-9])(" + "|".join(ENV_TOKENS) + r")(?![a-z0-9])"
 #: substituts s'en sert aussi pour reconstruire l'URL : une seule liste.
 REPO_HOSTS = ("github.com", "gitlab.com", "bitbucket.org", "codeberg.org")
 
+def _is_bare_host(value: str) -> bool:
+    """Une « URL » qui n'est qu'un nom d'hôte : ni schéma, ni chemin, ni query.
+
+    C'est le MÊME objet qu'un HOSTNAME et il doit recevoir le même substitut,
+    sinon le modèle voit deux machines. La règle porte sur la forme effective,
+    pas sur une expression stricte : un span détecté peut traîner des points de
+    troncature (`...api.acme.internal`), et le traiter à part créait une
+    seconde entrée de coffre pour un substitut déjà pris — conflit d'unicité
+    que la régénération ne pouvait pas résoudre.
+    """
+    return (
+        "://" not in value
+        and "." in value
+        and not any(c in value for c in "/?#@ \t")
+    )
+
 #: Suffixes internes du plus long au plus court : `x.svc.cluster.local` doit
 #: être reconnu avant `x.local`. Dérivé d'INTERNAL_SUFFIXES, jamais recopié.
 INTERNAL_SUFFIXES_LONGEST_FIRST = tuple(sorted(INTERNAL_SUFFIXES, key=len, reverse=True))
@@ -82,6 +98,17 @@ def canonicalize(etype: str, value: str) -> Canonical:
     # cyrillique reste une entité distincte, et doit le rester (sinon deux
     # réels différents partageraient un substitut : collision).
     v = unicodedata.normalize("NFC", value.strip())
+    if etype in ("URL", "REPO"):
+        # Les identifiants d'accès d'une URL (`https://user:jeton@hôte/…`) sont
+        # des SECRETS : ils ne doivent pas entrer dans la clé du coffre, sinon
+        # la colonne `real` les rend restaurables (D4).
+        v = _strip_userinfo(v)
+        # `https://hôte` et `https://hôte/` désignent la même ressource. Les
+        # garder distincts créait deux enregistrements pour un substitut
+        # identique — conflit d'unicité que la régénération ne pouvait pas
+        # résoudre, puisque l'hôte fictif est stable.
+        if v.endswith("/") and v.count("/") == 3:
+            v = v[:-1]
     low = v.lower()
 
     def canon(key: str, kind: str, **attrs: str) -> Canonical:
@@ -108,6 +135,14 @@ def canonicalize(etype: str, value: str) -> Canonical:
         return canon(f"repo:{org}/{name}", "repo",
                      org=org, name=name, env=env_of(name) or "")
 
+    if etype == "URL" and _is_bare_host(v):
+        # Une URL réduite à un nom d'hôte EST un hôte : sans cela le même
+        # serveur recevait deux identités fictives selon le type détecté.
+        short, zone = split_host(low)
+        return canon(f"host:{short}", "host", zone=zone,
+                     internal=str(is_internal_host(low)),
+                     env=env_of(short) or env_of(zone) or "")
+
     if etype in ("HOSTNAME", "FQDN", "CERT_CN", "HEX_HOSTNAME"):
         short, zone = split_host(low)
         return canon(f"host:{short}", "host", zone=zone,
@@ -123,6 +158,18 @@ def canonicalize(etype: str, value: str) -> Canonical:
 
 _SERVICE_PREFIXES = ("svc-", "sa-", "srv-", "service-", "system:", "bot-", "ci-")
 _SERVICE_SUFFIXES = ("-svc", "-sa", "-bot", "-agent", "-runner", "-job", "-operator")
+
+
+def _strip_userinfo(url: str) -> str:
+    """Retire `user:motdepasse@` d'une URL, en gardant le reste intact."""
+    scheme, sep, rest = url.partition("://")
+    if not sep:
+        return url
+    authority, slash, tail = rest.partition("/")
+    _userinfo, at, hostport = authority.rpartition("@")
+    if not at:
+        return url
+    return f"{scheme}://{hostport}{slash}{tail}"
 
 
 def _looks_like_service(name: str) -> bool:

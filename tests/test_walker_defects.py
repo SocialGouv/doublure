@@ -241,6 +241,40 @@ def test_defaut5bis_message_delta_streame_restaure():
     assert out[1]["error"]["message"] == "échec sur db-01.acme.internal"
 
 
+def test_defaut6_sous_arbre_de_controle_inattendu_traverse():
+    """DÉFAUT 6 — une clé de contrôle excluait tout son SOUS-ARBRE.
+
+    Le fail-closed de `walk_request` ne valait qu'au premier niveau : le jour
+    où Anthropic ajoute un champ porteur de texte DANS `thinking`,
+    `output_config` ou `context_management`, il sortait brut. Or ces blocs
+    évoluent avec les betas.
+
+    Règle retenue : on ne saute un bloc de contrôle que si sa FORME est celle
+    qu'on connaît. Toute clé inattendue le fait traverser.
+    """
+    connu = {
+        "thinking": {"type": "adaptive", "display": "omitted"},
+        "output_config": {"effort": "max"},
+        "context_management": {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]},
+        "betas": ["context-management-2025-06-27"],
+        "messages": [{"role": "user", "content": "bonjour"}],
+    }
+    out = walk_request(connu, marker_sub())
+    assert out["thinking"] == connu["thinking"], "forme connue : ne pas toucher"
+    assert out["output_config"] == connu["output_config"]
+    assert out["context_management"] == connu["context_management"]
+    assert out["betas"] == connu["betas"]
+
+    for cle, valeur in (
+        ("thinking", {"type": "adaptive", "custom_prompt": "cible SECRET-HOST"}),
+        ("output_config", {"effort": "max", "prompt_hint": "sur SECRET-HOST"}),
+        ("context_management", {"edits": [{"type": "clear", "description": "SECRET-HOST"}]}),
+    ):
+        out = walk_request({cle: valeur, "messages": []}, marker_sub())
+        assert "SECRET-HOST" not in json.dumps(out[cle]), \
+            f"fuite : champ inattendu dans `{cle}` non traversé"
+
+
 def test_types_de_blocs_opaques_toujours_respectes():
     """Garde-fou : la correction ne doit pas affaiblir D3."""
     body = {

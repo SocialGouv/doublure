@@ -65,7 +65,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**307 tests verts** (289 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**329 tests verts** (311 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -173,6 +173,43 @@ substituts qui entrent en collision de tirage — ramené de **40 % à ~4 %** en
 composant deux mots dès la première tentative. Sans effet en pratique (un
 projet n'a qu'un coffre, créé une fois) ; compte pour la reproductibilité
 d'une reconstruction de coffre. Borné par `test_ordre_d_insertion_effet_borne`.
+
+## Troisième revue adversariale (2026-08-02, après /simplify)
+Failles trouvées APRÈS deux passes de revue — toutes corrigées, toutes avec
+non-régression dans `tests/test_review_regressions.py` :
+- **CRITIQUE — mot de passe d'URL en clair.** `_fake_authority` découpait sur
+  le premier « : » : `https://alice:motdepasse@hôte.réel/` donnait `alice`
+  pour hôte et recopiait `:motdepasse@hôte.réel` en guise de port. Le mot de
+  passe ET le domaine réel partaient. RFC 3986 appliquée ; les identifiants
+  sont désormais traités comme des secrets (D4).
+- **CRITIQUE — jeton restaurable via le coffre.** Une URL de dépôt portant un
+  jeton (`https://oauth2:ghp_…@github.com/org/repo`) stockait le jeton dans la
+  colonne `real` : il redevenait restaurable, violation de D4. L'userinfo est
+  retiré avant la canonicalisation.
+- **CRITIQUE — hôte d'URL non enregistré.** `_fake_authority` appelait
+  `_fake_host` directement, hors coffre : le substitut restait libre et un
+  AUTRE hôte réel pouvait l'obtenir → la restauration désignait la mauvaise
+  machine (D6). Passe désormais par `substitute_value`.
+- **MAJEUR — fragment d'URL (`#…`) jamais substitué** : traité comme une paire
+  `nom=valeur`, donc ignoré. `#tenant-acme-nda` partait en clair.
+- **MAJEUR — IPv6 sans crochets** : tout ce qui suivait le premier « : » était
+  recopié tel quel.
+- **MAJEUR — une URL réduite à un hôte recevait sa propre identité**, donc
+  deux machines fictives pour un seul serveur réel.
+- **MODÉRÉ — un mot du lexique pouvait coïncider avec un mot du réel**
+  (`gateway-021` → `gateway-registry-021`, ~2 % des cas) : le tirage évite
+  maintenant les mots présents dans l'entrée.
+- **Tests complaisants** : le garde-fou du FakeDetector acceptait une
+  couverture PARTIELLE (`c in reel`) — un motif e-mail affaibli laissait fuir
+  `alice.dupont` sans qu'aucun test ne bronche ; l'assertion de recouvrement
+  ne cherchait qu'une seule sous-chaîne ; le test d'identité unique oubliait
+  le type URL. Les trois sont durcis, plus des assertions de fuite PARTIELLE.
+
+**Régression introduite puis corrigée pendant ces correctifs** : unifier
+l'hôte nu a fait entrer en conflit deux entrées de coffre pour un même
+substitut (`https://x` vs `https://x/`, spans avec points de troncature) —
+503 en pleine session, attrapé par `phase3_e2e.sh`, pas par les tests
+unitaires. C'est l'argument pour garder les preuves E2E réelles.
 
 ## Déviations assumées à valider par jo
 - **Allowlist cloud resserrée vs §6 du plan** : `*.amazonaws.com` littéral

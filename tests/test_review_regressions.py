@@ -76,8 +76,9 @@ def test_span_invalide_refuse(tmp_path, start, end):
 
 def test_meme_hote_sous_plusieurs_types_une_seule_identite(tmp_path):
     eng = engine(tmp_path)
+    # URL inclus : un hôte nu détecté comme URL recevait sa propre identité.
     subs = {eng.substitute_value(t, "db-01.acme.internal")
-            for t in ("HOSTNAME", "FQDN", "CERT_CN", "HEX_HOSTNAME")}
+            for t in ("HOSTNAME", "FQDN", "CERT_CN", "HEX_HOSTNAME", "URL")}
     assert len(subs) == 1, f"{len(subs)} identités fictives pour un seul hôte : {subs}"
 
 
@@ -109,7 +110,10 @@ def test_recouvrement_partiel_ne_laisse_rien_en_clair(tmp_path):
         {"type": "EMAIL_ADDRESS", "start": 33, "end": 46, "value": text[33:46], "score": 0.99},
     ]
     out = eng.transform(text, spans)
-    assert "acme.com" not in out, f"domaine réel en clair après arbitrage : {out!r}"
+    # Assertion élargie : ne chercher que « acme.com » laissait passer un
+    # `_fake_query` neutralisé, qui pourtant recopiait la query et `alice`.
+    for fragment in ("acme.com", "acme", "sales", "alice", "login=alice"):
+        assert fragment not in out, f"fuite : {fragment!r} dans {out!r}"
 
 
 def test_fragments_non_couverts_conserves():
@@ -167,6 +171,106 @@ def test_valeurs_de_query_substituees(tmp_path):
     out = eng.substitute_value("URL", "https://portail.acme.internal/x?tenant=acmecorp&id=42")
     assert "acmecorp" not in out
     assert "tenant=" in out and "id=" in out, f"noms de paramètres perdus : {out}"
+
+
+# --------------------------------------------------------------------------- #
+# Revue finale — l'autorité et le fragment d'une URL fuyaient
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("url,interdits", [
+    # userinfo : `partition(":")` prenait `user` pour l'hôte et recopiait
+    # `:motdepasse@hôte.réel` en guise de « port ».
+    ("https://alice.dupont:MyR3alPass@backend.acme.internal:5432/health",
+     ["alice.dupont", "MyR3alPass", "acme.internal"]),
+    ("postgres://user:s3cret@internal-db.acme.corp/mydb", ["s3cret", "acme.corp"]),
+    ("https://svc-deploy@registry.acme.internal/v2/", ["svc-deploy", "acme.internal"]),
+    # fragment : traité comme une paire `nom=valeur`, donc jamais substitué
+    ("https://portal.acmecorp.com/#tenant-acmecorp-nda-project",
+     ["acmecorp", "nda-project"]),
+    ("https://wiki.acme.internal/page#SECRET-CUSTOMER", ["SECRET-CUSTOMER", "acme"]),
+    ("https://api.acme.internal/x?a=b#alice-dupont-migration", ["alice-dupont"]),
+    # paramètre sans valeur : la donnée EST le nom
+    ("https://api.acme.internal/x?acmecorp-tenant", ["acmecorp"]),
+    # IPv6 sans crochets : tout ce qui suivait le premier « : » était recopié
+    ("https://fd00:1234:5678::42:8080/health", ["fd00:1234", "::42"]),
+])
+def test_url_aucune_partie_reelle_ne_survit(tmp_path, url, interdits):
+    out = engine(tmp_path).substitute_value("URL", url)
+    fuites = [m for m in interdits if m in out]
+    assert not fuites, f"{fuites} survivent dans {out!r}"
+
+
+def test_hote_d_url_enregistre_dans_le_coffre(tmp_path):
+    """L'hôte d'une URL était généré sans passer par le coffre : son substitut
+    restait libre, et un AUTRE hôte réel pouvait ensuite l'obtenir — la
+    restauration désignait alors la mauvaise machine (D6)."""
+    eng = engine(tmp_path)
+    url = eng.substitute_value("URL", "http://aabc.acmecorp.internal/api")
+    hote_fictif = url.split("//", 1)[1].split("/", 1)[0]
+    vue = eng.surrogates_view()
+    assert vue.get(hote_fictif) == "aabc.acmecorp.internal", \
+        "l'hôte de l'URL n'est pas enregistré : son substitut est réattribuable"
+    # aucun autre hôte réel ne peut désormais obtenir ce substitut
+    autres = {eng.substitute_value("HOSTNAME", f"aa{c}.acmecorp.internal") for c in "bcdefghij"}
+    assert hote_fictif not in autres
+
+
+@pytest.mark.parametrize("valeur", [
+    "...policy.consolidated.dev",   # points de troncature d'un span détecté
+    "api.acme.internal",
+    "acme.internal.",               # point final significatif pour le résolveur
+    "sous.domaine.tres.long.acme.internal",
+])
+def test_url_hote_nu_partage_l_identite_de_l_hote(tmp_path, valeur):
+    """Une URL réduite à un hôte EST cet hôte. La traiter à part créait une
+    seconde entrée de coffre pour un substitut déjà pris : conflit d'unicité
+    insoluble par régénération, donc 503 en pleine session."""
+    eng = engine(tmp_path)
+    assert eng.substitute_value("URL", valeur) == eng.substitute_value("HOSTNAME", valeur)
+
+
+def test_url_avec_et_sans_slash_final_identiques(tmp_path):
+    """`https://hôte` et `https://hôte/` sont la même ressource : deux
+    enregistrements pour un même substitut bloquaient la substitution."""
+    eng = engine(tmp_path)
+    assert eng.substitute_value("URL", "https://portail.acme.internal") == \
+           eng.substitute_value("URL", "https://portail.acme.internal/")
+
+
+def test_identifiants_d_url_jamais_stockes(tmp_path):
+    """D4 — une URL de dépôt porteuse d'un jeton mettait le jeton dans la
+    colonne `real` du coffre : il redevenait restaurable."""
+    eng = engine(tmp_path)
+    jeton = "ghp_syntheticDemoToken1234567890abcd"
+    eng.substitute_value("URL", f"https://oauth2:{jeton}@github.com/acmecorp/payments")
+    stocke = "\n".join(f"{k} {v}" for k, v in eng.surrogates_view().items())
+    assert jeton not in stocke, "le jeton est dans le coffre, donc restaurable"
+    assert "oauth2" not in stocke
+
+
+def test_substitut_ne_reprend_pas_un_mot_du_reel(tmp_path):
+    """Un mot du lexique peut coïncider avec un mot de la valeur réelle : le
+    substitut garderait un morceau reconnaissable de l'original (D1)."""
+    eng = engine(tmp_path)
+    fuites = [
+        s for i in range(200)
+        if "gateway" in (s := eng.substitute_value("HOSTNAME", f"gateway-{i:03d}.internal"))
+    ]
+    assert not fuites, f"{len(fuites)} substituts reprennent « gateway » : {fuites[:3]}"
+
+
+@pytest.mark.parametrize("valeur", ["   ", "\n\t", "/", "//"])
+def test_chemin_degenere_ne_boucle_pas(tmp_path, valeur):
+    assert engine(tmp_path).substitute_value("FILE_PATH", valeur) == valeur
+
+
+def test_url_ipv6_entre_crochets_reste_valide(tmp_path):
+    import ipaddress
+    out = engine(tmp_path).substitute_value("URL", "https://[fd00:1234:5678:9abc::1]:8443/x")
+    literal = out.split("[", 1)[1].split("]", 1)[0]
+    assert ipaddress.ip_address(literal).version == 6
+    assert ":8443/" in out and "fd00:1234" not in out
 
 
 # --------------------------------------------------------------------------- #
