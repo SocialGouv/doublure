@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**494 tests verts** (476 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**538 tests verts** (520 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -171,6 +171,56 @@ identité propre au lieu de rejoindre la zone fictive de `db-01.acme.internal`.
 Le « correctif » évident passerait par `_zone_for`, donc par un attribut
 PARTAGÉ — exclu de la vue de restauration : l'hôte deviendrait non
 restaurable. La co-appartenance vaut moins que la restauration.
+
+## Cinquième revue adversariale (2026-08-03, round 4 — 3 agents opus effort max)
+Le round 3 avait durci des SURFACES ; le round 4 a trouvé que le durcissement
+s'appliquait au mauvais PÉRIMÈTRE, plus deux plantages que j'avais introduits.
+
+**Fuite critique — SKIP_KEYS appliqué aux données utilisateur.** `name`, `id`,
+`type`, `role`, `data`… étaient recopiés verbatim à CHAQUE niveau, y compris
+dans `tool_use.input` et `metadata`, où ce sont des noms de paramètres
+ordinaires (kubectl, Terraform, tout CRUD). Double effet : la valeur SORTAIT en
+clair, et elle n'était pas RESTAURÉE au retour — l'outil s'exécutait sur l'hôte
+FICTIF. Corollaire trouvé en vérifiant : l'opacité était FORGEABLE, un
+`{"type": "thinking"}` dans un argument rendait le sous-arbre verbatim. D'où
+`USER_DATA_KEYS` : sous `input`/`metadata`, ni SKIP_KEYS ni les blocs opaques
+ne s'appliquent.
+
+**Deux plantages introduits au round 3** (aucun test unitaire ne les voyait) :
+`_extract_repo` comparait une autorité minuscule avec un `re.split` sensible à
+la casse — `https://GitHub.com/…` levait `IndexError`, non rattrapé par le
+proxy, donc **500** ; et `https://github.com` seul n'avait rien à découper.
+Écrire « visite GitHub.com/torvalds/linux » cassait la session.
+
+**Collision insoluble → 503.** `example.com/` (hôte nu AVEC slash final, sans
+schéma) tombait à côté de la normalisation (`count("/") == 3`) et réclamait le
+substitut déjà pris par l'hôte.
+
+**Fuites de nom de query encore ouvertes** : `?ident=` (valeur VIDE — `eq` vrai
+mais `value` faux, les deux branches rataient) et percent-encoding (`%2E` est
+un point). Le test porte désormais sur la forme décodée.
+
+**Surfaces de schéma rendues verbatim à tort au round 3** : `pattern` est une
+regex qui peut contraindre à un hôte précis (`^srv-\d+\.acme\.internal$`) — je
+l'avais classé structurel, c'était une fuite de ma main. Idem pour les CLÉS de
+`patternProperties` (ce sont des regex) et un `$ref` vers un schéma hébergé en
+interne. `type`, `format`, `required` restent verbatim ; `$ref`/`$schema` ne le
+restent que pour une ancre locale ou le vocabulaire json-schema.org.
+
+**Séparateur SSE** : `\r\n\r\n|\r\r|\n\n` ratait les formes mixtes
+(`\n\r\n`…). Remplacé par deux fins de ligne, groupe ATOMIQUE — sans lui la
+répétition rétro-traque et coupe un simple `\r\n` en deux, faisant de chaque
+LIGNE un bloc.
+
+**Rejeté après vérification** : `mcp_servers[].name` reste verbatim. C'est la
+clé de routage des noms d'outils (`mcp__<name>__<outil>`) ; la substituer
+casserait la correspondance avec `tools[].name`. Même fuite assumée que
+`tools[].name` et `tool_choice.name` — une convention de nommage, pas une
+valeur.
+
+**Limite documentée** : un nom de paramètre de query sans point, arobase ni
+deux-points (`?db-01=`, `?jdoe=`) n'est pas substitué — indiscernable d'un nom
+d'API. Le seul vrai correctif serait de soumettre chaque nom au détecteur.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

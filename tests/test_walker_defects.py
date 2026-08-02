@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
 
-from anthropic_walker import Substituter, walk_request
+from anthropic_walker import Substituter, walk_request, walk_response
 
 
 def marker_sub() -> Substituter:
@@ -425,8 +426,7 @@ def test_defaut10_les_mots_cles_de_schema_ne_sont_pas_substitues():
             "properties": {
                 "app_id": {"default": None, "type": ["string", "null"]},
                 "pid": {"format": "int64", "minimum": 0,
-                        "type": ["integer", "null"],
-                        "pattern": r"^\d+$"},
+                        "type": ["integer", "null"]},
             },
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "required": ["app_id"],
@@ -437,7 +437,6 @@ def test_defaut10_les_mots_cles_de_schema_ne_sont_pas_substitues():
     assert schema["properties"]["app_id"]["type"] == ["string", "null"]
     assert schema["properties"]["pid"]["type"] == ["integer", "null"]
     assert schema["properties"]["pid"]["format"] == "int64"
-    assert schema["properties"]["pid"]["pattern"] == r"^\d+$"
     assert schema["required"] == ["app_id"]
     assert schema["$schema"].startswith("https://json-schema.org/")
 
@@ -473,3 +472,101 @@ def test_defaut8_la_forme_connue_de_cache_control_reste_verbatim():
                         "cache_control": {"type": "ephemeral", "ttl": "5m"}}]}
     out = walk_request(body, sabotage)
     assert out["system"][0]["cache_control"] == {"type": "ephemeral", "ttl": "5m"}
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 11 — SKIP_KEYS appliqué aux DONNÉES UTILISATEUR
+#
+# SKIP_KEYS vaut à CHAQUE niveau de la traversée, y compris dans
+# `tool_use.input` et `metadata`, où `name`, `id`, `type`, `role`, `data` sont
+# des noms de paramètres parfaitement ordinaires (kubectl, Terraform, tout
+# CRUD). Double effet : la valeur SORT en clair, et elle n'est pas RESTAURÉE au
+# retour — l'outil s'exécute alors avec le nom fictif.
+# Corollaire : dans un argument d'outil, `{"type": "thinking"}` n'est pas un
+# bloc signé mais une valeur que n'importe qui peut écrire — l'opacité y était
+# FORGEABLE.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("cle", [
+    "name", "id", "type", "role", "model", "data", "signature",
+    "media_type", "stop_reason", "tool_use_id",
+])
+def test_defaut11_les_arguments_d_outil_sont_substitues(cle):
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "tool_use", "id": "t1", "name": "kubectl",
+         "input": {cle: "SECRET-HOST"}}]}]}
+    sortie = json.dumps(walk_request(body, marker_sub()))
+    assert "SECRET-HOST" not in sortie, f"input.{cle} sorti en clair : {sortie}"
+
+
+@pytest.mark.parametrize("cle", ["id", "name", "role", "type", "user_id"])
+def test_defaut11_metadata_est_un_dict_libre(cle):
+    sortie = json.dumps(walk_request({"metadata": {cle: "SECRET-HOST"}}, marker_sub()))
+    assert "SECRET-HOST" not in sortie, f"metadata.{cle} sorti en clair : {sortie}"
+
+
+def test_defaut11_l_opacite_n_est_pas_forgeable_dans_un_argument():
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "tool_use", "id": "t1", "name": "k",
+         "input": {"payload": {"type": "thinking", "thinking": "SECRET-HOST"}}}]}]}
+    sortie = json.dumps(walk_request(body, marker_sub()))
+    assert "SECRET-HOST" not in sortie, f"opacité forgée : {sortie}"
+
+
+def test_defaut11_les_vrais_blocs_thinking_restent_opaques():
+    """Le pendant : dans `content`, `thinking` est signé (D3)."""
+    bloc = {"type": "thinking", "thinking": "SECRET-HOST", "signature": "sig"}
+    body = {"messages": [{"role": "assistant", "content": [bloc]}]}
+    assert walk_request(body, marker_sub())["messages"][0]["content"][0] == bloc
+
+
+def test_defaut11_l_outil_recoit_la_valeur_reelle():
+    """Sans restauration, Claude Code exécuterait l'outil sur un hôte fictif."""
+    sub = Substituter(to_surrogate=lambda s: s, surrogates={"fake-host": "vrai-host"})
+    reponse = {"content": [{"type": "tool_use", "id": "t1", "name": "kubectl",
+                            "input": {"name": "fake-host", "id": "fake-host"}}]}
+    restaure, _ = walk_response(reponse, sub)
+    assert restaure["content"][0]["input"] == {"name": "vrai-host", "id": "vrai-host"}
+    # le nom de l'OUTIL, lui, reste le contrat passé au modèle
+    assert restaure["content"][0]["name"] == "kubectl"
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 12 — surfaces de TEXTE rendues verbatim dans un JSON Schema
+#
+# `pattern` (une regex peut contraindre à un hôte précis), les CLÉS de
+# `patternProperties` (ce sont des regex, pas des noms déclarés) et un `$ref`
+# vers un schéma hébergé en interne portent tous des identifiants.
+# --------------------------------------------------------------------------- #
+
+
+def test_defaut12_les_surfaces_de_texte_du_schema_sont_substituees():
+    body = {"tools": [{
+        "name": "query", "description": "x",
+        "input_schema": {
+            "type": "object",
+            "properties": {"h": {"type": "string", "pattern": "^srv-SECRET-HOST$"}},
+            "patternProperties": {"^SECRET-HOST-[0-9]+$": {"type": "string"}},
+            "$ref": "https://schemas.SECRET-HOST/creds.json",
+        },
+    }]}
+    sortie = json.dumps(walk_request(body, marker_sub()))
+    assert "SECRET-HOST" not in sortie, f"identifiant laissé dans le schéma : {sortie}"
+
+
+def test_defaut12_les_references_locales_restent_intactes():
+    """Le pendant : substituer une ancre casserait la résolution du schéma."""
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {"tools": [{
+        "name": "q", "description": "x",
+        "input_schema": {
+            "type": "object",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {"u": {"$ref": "#/$defs/User"}},
+            "$defs": {"User": {"type": "object"}},
+        },
+    }]}
+    schema = walk_request(body, sabotage)["tools"][0]["input_schema"]
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["properties"]["u"]["$ref"] == "#/$defs/User"

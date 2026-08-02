@@ -11,7 +11,8 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 3 traité, round 4 à lancer.**
+**Boucle en cours. Round 4 traité (walker + moteur) ; l'agent hook du
+round 4 n'avait pas rendu au moment du commit — vérifier son rapport.**
 
 Protocole appliqué à chaque round :
 1. Lancer 2-3 agents `general-purpose`, `model: opus`, en parallèle, sur des
@@ -29,7 +30,7 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**476 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**520 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
@@ -45,12 +46,12 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
 
 ## 3. À FAIRE au prochain round
 
-1. **Lancer le round 4.** Zones jamais relues depuis les correctifs du round 3,
-   donc les plus suspectes : la récursion sur régions imbriquées du hook
-   (`_regions_imbriquees` + `_program_positions`, réécriture profonde),
-   `STRUCTURED_SKIP_KEYS` / `SCHEMA_STRUCTURAL_KEYS` élargis, le nouvel ordre
-   PUBLIC dans `_sort_key`, la substitution des noms de query, et
-   `_erreur_restauree` côté proxy.
+1. **Lancer le round 5** sur ce que le round 4 vient de réécrire :
+   `USER_DATA_KEYS` (périmètre de SKIP_KEYS), `SCHEMA_REF_KEYS`,
+   `_extract_repo` (deux plantages corrigés), la normalisation `hôte/`,
+   `_fake_query` (valeur vide + percent-encoding), le séparateur SSE atomique.
+   Deux rounds de suite ont produit des régressions de mes propres correctifs :
+   il n'y a pas de raison que celui-ci fasse exception.
 2. Points **non corrigés**, à re-arbitrer ou à traiter :
    - **M3 — fragmentation de substituts** : le détecteur renvoie parfois un
      span URL tronqué (`https://acme.int`) qui chevauche un span HOSTNAME ;
@@ -81,6 +82,11 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
      `git clone` vers un remote arbitraire, `docker pull/push`, `helm pull`.
      **Ne pas empiler des motifs pour ceux-là** : le hook est un rideau, pas
      un mur, et c'est écrit dans son en-tête.
+   - **Nom de query court** : `?db-01=`, `?jdoe=`, `?tenant_acme=` ne sont pas
+     substitués — sans point, arobase ni deux-points, ils sont indiscernables
+     d'un nom d'API. Vrai correctif : soumettre chaque nom au détecteur.
+   - **`mcp_servers[].name`** reste verbatim : c'est la clé de routage des noms
+     d'outils (`mcp__<name>__<outil>`). Vérifié, PAS un finding.
    - **Jeton de contrôle nu** : une valeur sous une clé de `REQUEST_CONTROL_KEYS`
      qui a la forme d'un jeton de protocole (`db01`, sans point ni espace) n'est
      pas traversée. Le motif attrape les formes sensibles réelles (FQDN, e-mail,

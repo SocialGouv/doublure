@@ -184,12 +184,22 @@ def _is_known_control(
 #: `type` y figure pour sa forme UNION (`["string", "null"]`) : le saut par
 #: SKIP_KEYS ne protegeait que la forme scalaire, et substituer les mots-cles
 #: rend le schema invalide (API 400).
-#: `format` et `pattern` sont des contrats de validation, pas du texte :
-#: `"format": "int64"` devenait un nom fictif — sans erreur, `format` etant une
-#: annotation, mais c'est de la corruption silencieuse.
+#: `format` prend ses valeurs dans un vocabulaire ferme : `"format": "int64"`
+#: devenait un nom fictif — sans erreur, `format` etant une annotation, mais
+#: c'est de la corruption silencieuse.
+#: `pattern` n'y figure PAS : une regex est du texte libre, et une contrainte
+#: du genre `^srv-\d+\.acme\.internal$` exposerait le domaine interne. Elle est
+#: donc substituee ; le risque residuel est qu'un substitut y introduise un
+#: metacaractere desequilibre, tres improbable et prefere a une fuite.
 SCHEMA_STRUCTURAL_KEYS: frozenset[str] = frozenset(
-    {"required", "$schema", "$ref", "type", "format", "pattern"}
+    {"required", "type", "format"}
 )
+
+#: `$ref` / `$schema` : recopies tant qu'ils designent une ancre LOCALE ou le
+#: vocabulaire public. Un schema herberge en interne
+#: (`https://schemas.acme.corp/user.json`) est une adresse, pas une structure.
+SCHEMA_REF_KEYS: frozenset[str] = frozenset({"$ref", "$schema"})
+_REF_SANS_DONNEE_RE = re.compile(r"#\S*|https?://json-schema\.org/\S*", re.I)
 
 #: Conteneurs de sous-schemas dont les CLES sont des noms declares par l'outil :
 #: on preserve les noms et on traverse chaque definition. Les traiter
@@ -281,7 +291,23 @@ class Substituter:
 # --------------------------------------------------------------------------- #
 
 
-def _walk(node: Any, fn: Callable[[str], str], *, in_schema: bool = False) -> Any:
+#: Sous-arbres dont les CLES sont choisies par l'utilisateur, pas par le
+#: protocole : arguments d'outil et `metadata` (dict libre cote client).
+#: SKIP_KEYS et OPAQUE_BLOCK_TYPES n'y ont aucun sens — `name`, `id`, `type`,
+#: `role`, `data` y sont des noms de parametres parfaitement ordinaires
+#: (`kubectl`, Terraform, tout CRUD), et les traiter comme du protocole faisait
+#: sortir leur valeur en clair ET empechait sa restauration au retour :
+#: l'outil s'executait alors avec le nom FICTIF.
+USER_DATA_KEYS: frozenset[str] = frozenset({"input", "metadata"})
+
+
+def _walk(
+    node: Any,
+    fn: Callable[[str], str],
+    *,
+    in_schema: bool = False,
+    in_user_data: bool = False,
+) -> Any:
     """
     Traverse recursivement une structure JSON et applique `fn` a chaque chaine
     de texte libre.
@@ -289,21 +315,28 @@ def _walk(node: Any, fn: Callable[[str], str], *, in_schema: bool = False) -> An
     Generique par construction : gere les types de blocs actuels ET futurs
     (server_tool_use, mcp_tool_use, web_search_tool_result, document, ...)
     sans enumeration exhaustive. Les exclusions passent par SKIP_KEYS et
-    OPAQUE_BLOCK_TYPES.
+    OPAQUE_BLOCK_TYPES — et ne valent QUE hors des sous-arbres de donnees
+    utilisateur (USER_DATA_KEYS).
     """
     if isinstance(node, str):
         return fn(node)
 
     if isinstance(node, list):
-        return [_walk(item, fn, in_schema=in_schema) for item in node]
+        return [
+            _walk(item, fn, in_schema=in_schema, in_user_data=in_user_data)
+            for item in node
+        ]
 
     if isinstance(node, dict):
         # Bloc opaque : rendu tel quel, y compris ses enfants.
         # `type` peut porter autre chose qu'une chaine (propriete de schema
         # nommee "type", JSON arbitraire dans un tool_result) : on ne teste
         # l'appartenance que sur une chaine, sinon TypeError (non hashable).
+        # Dans un argument d'outil, `{"type": "thinking"}` n'est pas un bloc
+        # signe mais une valeur que n'importe qui peut ecrire : l'opacite y
+        # serait FORGEABLE.
         btype = node.get("type")
-        if isinstance(btype, str) and btype in OPAQUE_BLOCK_TYPES:
+        if not in_user_data and isinstance(btype, str) and btype in OPAQUE_BLOCK_TYPES:
             return node
 
         # `data` protege une charge BINAIRE (image, PDF). Une source de
@@ -320,20 +353,21 @@ def _walk(node: Any, fn: Callable[[str], str], *, in_schema: bool = False) -> An
 
         out: dict[str, Any] = {}
         for key, value in node.items():
-            structure = STRUCTURED_SKIP_KEYS.get(key)
-            if structure is not None and _is_known_control(value, structure):
-                out[key] = value
-                continue
-
-            if key in SKIP_KEYS and not (key == "data" and texte_brut):
-                # Le saut ne vaut que pour un SCALAIRE protocolaire. Ces cles
-                # portent parfois une structure — `cache_control` s'enrichit
-                # (`{"type": "ephemeral", "ttl": "5m"}`) et `metadata` est un
-                # dict libre cote client. La recopier verbatim laissait sortir
-                # tout son sous-arbre sans passer par le detecteur.
-                if not isinstance(value, (dict, list)):
+            if not in_user_data:
+                structure = STRUCTURED_SKIP_KEYS.get(key)
+                if structure is not None and _is_known_control(value, structure):
                     out[key] = value
                     continue
+
+                if key in SKIP_KEYS and not (key == "data" and texte_brut):
+                    # Le saut ne vaut que pour un SCALAIRE protocolaire. Ces
+                    # cles portent parfois une structure — `cache_control`
+                    # s'enrichit (`{"type": "ephemeral", "ttl": "5m"}`). La
+                    # recopier verbatim laissait sortir tout son sous-arbre
+                    # sans passer par le detecteur.
+                    if not isinstance(value, (dict, list)):
+                        out[key] = value
+                        continue
 
             # Les noms de proprietes d'un schema sont un contrat avec le modele :
             # on preserve les cles et on traverse chaque definition. Teste AVANT
@@ -342,10 +376,19 @@ def _walk(node: Any, fn: Callable[[str], str], *, in_schema: bool = False) -> An
             # et laisserait passer la description d'une propriete nommee
             # "name" / "id" / "data".
             if in_schema and key in SCHEMA_NAMED_SUBSCHEMAS and isinstance(value, dict):
+                # Les cles de `patternProperties` sont des REGEX, pas des noms
+                # declares : elles peuvent porter un littéral d'hote.
+                nom = fn if key == "patternProperties" else (lambda p: p)
                 out[key] = {
-                    pname: _walk(pdef, fn, in_schema=True)
+                    nom(pname): _walk(pdef, fn, in_schema=True)
                     for pname, pdef in value.items()
                 }
+                continue
+
+            if in_schema and key in SCHEMA_REF_KEYS:
+                out[key] = value if (
+                    isinstance(value, str) and _REF_SANS_DONNEE_RE.fullmatch(value)
+                ) else _walk(value, fn, in_schema=True)
                 continue
 
             # A l'interieur d'un JSON Schema, on ne touche qu'aux descriptions
@@ -363,7 +406,11 @@ def _walk(node: Any, fn: Callable[[str], str], *, in_schema: bool = False) -> An
                 continue
 
             entering_schema = in_schema or key == "input_schema"
-            out[key] = _walk(value, fn, in_schema=entering_schema)
+            out[key] = _walk(
+                value, fn,
+                in_schema=entering_schema,
+                in_user_data=in_user_data or key in USER_DATA_KEYS,
+            )
         return out
 
     # int, float, bool, None
@@ -406,7 +453,10 @@ def walk_request(body: dict[str, Any], sub: Substituter) -> dict[str, Any]:
         motif = _CONTROL_VALUE_RE.get(key, _CONTROL_TOKEN_RE)
         if allowed is not None and _is_known_control(value, allowed, motif):
             continue
-        out[key] = _walk(value, sub.to_surrogate)
+        # `walk_request` attaque la RACINE : la cle n'est traversee par personne,
+        # c'est ici qu'il faut reconnaitre `metadata`.
+        out[key] = _walk(value, sub.to_surrogate,
+                         in_user_data=key in USER_DATA_KEYS)
 
     return out
 
@@ -443,7 +493,7 @@ def walk_response(
     for key, value in body.items():
         if key in RESPONSE_CONTROL_KEYS:
             continue
-        out[key] = _walk(value, _resolve)
+        out[key] = _walk(value, _resolve, in_user_data=key in USER_DATA_KEYS)
 
     if strict and unresolved:
         raise UnresolvedSurrogate(f"substituts inconnus : {sorted(set(unresolved))}")
@@ -555,7 +605,8 @@ class SSERewriter:
             for key, value in event.items():
                 if key in RESPONSE_CONTROL_KEYS or key == "type":
                     continue
-                out[key] = _walk(value, self._resolve)
+                out[key] = _walk(value, self._resolve,
+                                 in_user_data=key in USER_DATA_KEYS)
             yield out
 
         else:
@@ -679,7 +730,10 @@ class SSERewriter:
             self.unresolved.extend(missing)
             return resolved
 
-        return json.dumps(_walk(parsed, _resolve), ensure_ascii=False)
+        # La racine EST l'argument d'outil : aucune cle n'y est protocolaire.
+        return json.dumps(
+            _walk(parsed, _resolve, in_user_data=True), ensure_ascii=False
+        )
 
 
 # --------------------------------------------------------------------------- #

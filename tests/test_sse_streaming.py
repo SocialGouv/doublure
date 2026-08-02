@@ -367,3 +367,30 @@ def test_les_trois_separateurs_sse_sont_reconnus(sep):
     blocks, reste = iter_blocks(flux, "")
     assert len(blocks) == 1, f"séparateur {sep!r} non reconnu"
     assert reste == ""
+
+
+@pytest.mark.parametrize("sep", ["\r\n\r\n", "\r\r", "\n\n", "\n\r\n", "\r\n\r", "\n\r"])
+def test_toutes_les_fins_de_ligne_sse_sont_reconnues(sep):
+    """Un séparateur = DEUX fins de ligne, chacune CR, LF ou CRLF, mélangeables."""
+    from anonproxy.sse import iter_blocks
+    blocks, reste = iter_blocks(f"data: a{sep}data: b{sep}", "")
+    assert len(blocks) == 2, f"séparateur {sep!r} non reconnu"
+    assert reste == ""
+
+
+def test_un_crlf_simple_n_est_pas_un_separateur():
+    """Sinon la répétition rétro-traque et chaque LIGNE devient un bloc."""
+    from anonproxy.sse import iter_blocks
+    blocks, reste = iter_blocks("event: ping\r\ndata: {}\r\n\r\n", "")
+    assert len(blocks) == 1, f"un \\r\\n simple a été pris pour un séparateur : {blocks}"
+    assert blocks[0] == "event: ping\r\ndata: {}"
+
+
+def test_un_separateur_coupe_entre_deux_chunks_n_est_pas_invente():
+    """`data: a\\r` + `\\nb` : le CRLF est une seule fin de ligne, pas deux."""
+    from anonproxy.sse import iter_blocks
+    blocks, reste = iter_blocks("data: a\r", "")
+    assert blocks == []
+    blocks, reste = iter_blocks("\nb", reste)
+    assert blocks == [], f"bloc inventé sur une coupure de chunk : {blocks}"
+    assert reste == "data: a\r\nb"

@@ -37,10 +37,14 @@ def encode_sse(event: dict[str, Any]) -> bytes:
     return f"event: {etype}\ndata: {data}\n\n".encode("utf-8")
 
 
-#: Séparateur de blocs SSE. Les trois formes sont valides (RFC EventSource) :
-#: ne chercher que ``\n\n`` sur un flux en CRLF ne rend AUCUN bloc — le tampon
-#: grossit sans fin et l'opérateur ne voit rien passer, sans la moindre erreur.
-_SEPARATEUR_BLOC = re.compile(r"\r\n\r\n|\r\r|\n\n")
+#: Séparateur de blocs SSE : DEUX fins de ligne consécutives, chacune pouvant
+#: être ``\r\n``, ``\r`` ou ``\n`` (RFC EventSource) — y compris mélangées.
+#: Énumérer les combinaisons en ratait la moitié, et un flux non reconnu ne
+#: rend AUCUN bloc : le tampon grossit sans fin, l'opérateur ne voit rien
+#: passer, et aucune erreur ne remonte.
+#: Le groupe est ATOMIQUE : sans lui, la répétition rétro-traque et consomme un
+#: simple ``\r\n`` comme DEUX fins de ligne — chaque ligne deviendrait un bloc.
+_SEPARATEUR_BLOC = re.compile(r"(?>\r\n|\r|\n){2}")
 
 
 def iter_blocks(chunk: str, buffer: str) -> tuple[list[str], str]:

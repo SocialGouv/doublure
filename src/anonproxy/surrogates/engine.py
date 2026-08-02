@@ -22,6 +22,7 @@ import hmac
 import re
 import unicodedata
 from typing import Any, Callable
+from urllib.parse import unquote_plus
 
 from ..vault import SurrogateConflict, Vault
 from .canonical import (
@@ -602,21 +603,25 @@ class SurrogateEngine:
                 parts.append(chunk)
                 continue
             name, eq, value = chunk.partition("=")
-            if eq and value:
+            if eq:
                 # Le NOM d'un paramètre est un contrat d'API (`page`, `limit`,
                 # `cursor`) : le substituer casserait le sens que le modèle
                 # doit lire. Mais il porte parfois la donnée elle-même
                 # (`?db-01.acme.internal=1`), et un nom d'API ne contient
                 # jamais de point, d'arobase ni de deux-points.
+                # Test sur la forme DÉCODÉE : `%2E` est un point, et un client
+                # HTTP qui encode par défaut suffisait à contourner la règle.
                 nom_sortant = (
                     self._combo("url-arg", name, attempt, SERVICE_WORDS)
-                    if _IDENT_EN_NOM_RE.search(name) else name
+                    if _IDENT_EN_NOM_RE.search(unquote_plus(name)) else name
                 )
-                # dérivé du nom RÉEL : le substitut du nom ne doit pas décaler
-                # celui de la valeur
-                value = self._combo("url-arg", f"{name}:{value}", attempt, SERVICE_WORDS)
+                if value:
+                    # dérivé du nom RÉEL : le substitut du nom ne doit pas
+                    # décaler celui de la valeur
+                    value = self._combo("url-arg", f"{name}:{value}", attempt,
+                                        SERVICE_WORDS)
                 name = nom_sortant
-            elif not eq and name:
+            elif name:
                 # paramètre sans valeur : c'est la donnée elle-même
                 name = self._combo("url-arg", name, attempt, SERVICE_WORDS)
             parts.append(f"{name}{eq}{value}")

@@ -107,7 +107,11 @@ def canonicalize(etype: str, value: str) -> Canonical:
         # garder distincts créait deux enregistrements pour un substitut
         # identique — conflit d'unicité que la régénération ne pouvait pas
         # résoudre, puisque l'hôte fictif est stable.
-        if v.endswith("/") and v.count("/") == 3:
+        # `https://hôte/` en compte trois, `hôte/` (sans schéma) un seul : le
+        # second tombait à côté et recevait sa propre entrée de coffre, liée au
+        # substitut DÉJÀ pris par l'hôte — collision insoluble, donc 503 en
+        # pleine session pour un simple « visite example.com/ ».
+        if v.endswith("/") and v.count("/") in (1, 3):
             v = v[:-1]
     low = v.lower()
 
@@ -130,7 +134,7 @@ def canonicalize(etype: str, value: str) -> Canonical:
                      actor="service" if _looks_like_service(local) else "human",
                      domain=domain.lower(), local=local.lower(), env=env_of(local) or "")
 
-    if etype in ("URL", "REPO") and (repo := _extract_repo(v)):
+    if etype in ("URL", "REPO") and (repo := _extract_repo(v, etype)):
         org, name = repo
         return canon(f"repo:{org}/{name}", "repo",
                      org=org, name=name, env=env_of(name) or "")
@@ -184,7 +188,7 @@ def _repo_authority(value: str) -> str:
     return re.split(r"[:/]", reste, maxsplit=1)[0].lower()
 
 
-def _extract_repo(value: str) -> tuple[str, str] | None:
+def _extract_repo(value: str, etype: str = "REPO") -> tuple[str, str] | None:
     """org/nom depuis une URL HTTPS, une forme SSH ou une forme courte."""
     v = value.strip()
     # L'hôte est comparé en ENTIER : une simple sous-chaîne faisait passer
@@ -192,15 +196,31 @@ def _extract_repo(value: str) -> tuple[str, str] | None:
     # alors `github.com` — une confiance fabriquée, que le modèle peut lire.
     autorite = _repo_authority(v)
     for host in REPO_HOSTS:
-        if autorite == host or autorite.endswith(f".{host}"):
-            tail = re.split(rf"{re.escape(autorite)}[:/]", v, maxsplit=1)[1]
-            tail = tail.split("?")[0].split("#")[0]
-            if tail.endswith(".git"):
-                tail = tail[:-4]
-            parts = [p for p in tail.strip("/").split("/") if p]
-            if len(parts) >= 2:
-                return parts[0].lower(), parts[1].lower()
+        if autorite != host and not autorite.endswith(f".{host}"):
+            continue
+        # `autorite` est en minuscules, `v` non : sans `re.I`, `GitHub.com`
+        # ne correspond à rien et `re.split` renvoie une liste d'UN élément —
+        # `IndexError`, que le proxy ne rattrape pas (500). Et une URL réduite
+        # à l'hôte (`https://github.com`) n'a rien à découper du tout.
+        morceaux = re.split(rf"{re.escape(autorite)}[:/]", v, maxsplit=1, flags=re.I)
+        if len(morceaux) < 2:
             return None
+        tail = morceaux[1]
+        # `https://github.com:443/org/dépôt` : le port n'est pas l'organisation.
+        tail = re.sub(r"^\d+/", "", tail)
+        tail = tail.split("?")[0].split("#")[0]
+        if tail.endswith(".git"):
+            tail = tail[:-4]
+        parts = [p for p in tail.strip("/").split("/") if p]
+        if len(parts) >= 2:
+            return parts[0].lower(), parts[1].lower()
+        return None
+    # Forme courte `org/dépôt`. Elle ne vaut QUE pour un type REPO : sur une
+    # URL, `example.com/api` et `admin/config` sont des chemins relatifs, et
+    # les traiter en dépôt fabriquait une URL `github.com/…` que le modèle
+    # pouvait croire clonable.
+    if etype != "REPO":
+        return None
     m = re.fullmatch(r"([A-Za-z0-9][\w.-]*)/([A-Za-z0-9][\w.-]*)", v)
     if m:
         return m.group(1).lower(), m.group(2).lower()

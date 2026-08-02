@@ -472,3 +472,57 @@ def test_un_hote_qui_contient_github_n_est_pas_github(tmp_path):
 def test_les_vraies_formes_de_depot_restent_reconnues(url):
     from anonproxy.surrogates.canonical import _extract_repo
     assert _extract_repo(url) == ("acme", "payments-api"), url
+
+
+# --------------------------------------------------------------------------- #
+# Round 4 — deux plantages introduits en resserrant `_extract_repo` : l'autorité
+# est minuscule mais `re.split` ne l'était pas, et une URL réduite à l'hôte n'a
+# rien à découper. `IndexError` n'est pas rattrapé par le proxy → 500.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("url, attendu", [
+    ("https://GitHub.com/acme/payments-api", ("acme", "payments-api")),
+    ("https://GITHUB.COM/acme/payments-api", ("acme", "payments-api")),
+    ("git@GitHub.com:acme/payments-api.git", ("acme", "payments-api")),
+    ("https://Internal.GitHub.com/acme/payments-api", ("acme", "payments-api")),
+    # l'hôte seul n'est pas un dépôt, et ne doit pas lever
+    ("https://github.com", None),
+    ("https://GitHub.com", None),
+    # le port n'est pas l'organisation
+    ("https://github.com:443/acme/payments-api", ("acme", "payments-api")),
+])
+def test_extraction_de_depot_insensible_a_la_casse(url, attendu):
+    from anonproxy.surrogates.canonical import _extract_repo
+    assert _extract_repo(url, "URL") == attendu
+
+
+@pytest.mark.parametrize("valeur", ["example.com/", "acme.internal/",
+                                    "portail.acme.internal/"])
+def test_un_hote_nu_avec_slash_final_ne_provoque_pas_de_collision(tmp_path, valeur):
+    """`hôte/` sans schéma tombait à côté de la normalisation et réclamait le
+    substitut DÉJÀ pris par l'hôte : collision insoluble, 503 en session."""
+    sortie = engine(tmp_path).substitute_value("URL", valeur)
+    assert sortie and valeur.rstrip("/") not in sortie
+
+
+def test_la_forme_courte_org_depot_ne_vaut_que_pour_un_depot():
+    """`example.com/api` est un chemin relatif, pas un dépôt clonable."""
+    from anonproxy.surrogates.canonical import _extract_repo
+    assert _extract_repo("example.com/api", "URL") is None
+    assert _extract_repo("admin/config", "URL") is None
+    assert _extract_repo("torvalds/linux", "REPO") == ("torvalds", "linux")
+
+
+@pytest.mark.parametrize("url, reel", [
+    # `name=` : `eq` est vrai mais `value` vide — les deux branches rataient
+    ("https://api.example.com/?db-01.acme.internal=", "db-01.acme.internal"),
+    ("https://api.example.com/?alice@acme.example=", "alice@acme.example"),
+    ("https://api.example.com/?a&db.acme.internal=", "db.acme.internal"),
+    # percent-encoding : `%2E` est un point, `%40` une arobase
+    ("https://api.example.com/?db-01%2Eacme%2Einternal=1", "db-01%2Eacme%2Einternal"),
+    ("https://api.example.com/?alice%40acme%2Eexample=1", "alice%40acme%2Eexample"),
+])
+def test_nom_de_query_sans_valeur_ou_encode_est_substitue(tmp_path, url, reel):
+    sortie = engine(tmp_path).substitute_value("URL", url)
+    assert reel not in sortie, f"identifiant laissé dans un nom de query : {sortie!r}"
