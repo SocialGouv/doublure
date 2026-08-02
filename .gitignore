@@ -1,0 +1,14 @@
+# Sorties de capture egress — peuvent contenir du trafic de session réel
+captures/
+
+# Clones de référence et upstream GPL (jamais committés ici)
+.repos/
+services/anonshield/upstream/
+
+# Corpus réel (Phase 5) — seules les annotations synthétiques sont versionnées
+corpus/real/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
