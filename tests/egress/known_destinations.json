@@ -1,0 +1,15 @@
+{
+  "api.anthropic.com": "Trafic modèle (canal 1) — la cible du proxy de pseudonymisation (Phase 3)",
+  "statsig.anthropic.com": "Télémétrie Claude Code (feature flags/metrics) — désactivable : CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+  "*.statsig.com": "Télémétrie Claude Code (statsig) — désactivable : CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+  "*.sentry.io": "Rapport d'erreurs Claude Code — désactivable : CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+  "claude.ai": "OAuth / compte Claude (rafraîchissement de jeton)",
+  "*.claude.ai": "OAuth / services compte Claude",
+  "downloads.claude.ai": "Téléchargement de mise à jour Claude Code (auto-updater) — désactivable : DISABLE_AUTOUPDATER=1",
+  "registry.npmjs.org": "Vérification de version (registre npm, réponses 304 sans contenu) par l'auto-updater / résolution de paquets MCP",
+  "api.githubcopilot.com": "Serveur MCP GitHub distant du plugin github officiel (endpoint hébergé par GitHub) — retirer le plugin si non voulu",
+  "console.anthropic.com": "OAuth / console Anthropic",
+  "mcp-proxy.anthropic.com": "Proxy Anthropic des serveurs MCP distants (connecteurs claude.ai configurés : Gmail/Calendar/Drive). ATTENTION Phase 3 : ce canal ne passe pas par ANTHROPIC_BASE_URL — surface canal 2, à gérer via PreToolUse (Phase 4)",
+  "example.com": "Cible WebFetch volontaire de la session de référence (tests/egress/reference_session.md)",
+  "mcp.context7.com": "Serveur MCP context7 (documentation de bibliothèques), configuré dans l'environnement utilisateur"
+}
