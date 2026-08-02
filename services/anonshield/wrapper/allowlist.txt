@@ -1,0 +1,80 @@
+# Allowlist anti-faux-positifs (§6 du plan) — point de départ, à calibrer en
+# Phase 5 sur le corpus doré.
+#
+# Formes acceptées :
+#   - ligne simple      : le span détecté est ignoré s'il est ÉGAL à la ligne
+#   - ligne `re:<regex>`: le span est ignoré si la regex matche INTÉGRALEMENT
+#
+# RÈGLE : n'ajouter ici QUE du public/standard. `com.<org-interne>.*`,
+# `github.com/<org-interne>/...` sont SENSIBLES et n'y entrent jamais.
+
+# --- Chemins d'import Go publics (ce sont littéralement des domaines) -------
+github.com/spf13/cobra
+re:k8s\.io(/[A-Za-z0-9/._-]+)?
+re:golang\.org/x/[A-Za-z0-9/._-]+
+re:sigs\.k8s\.io/[A-Za-z0-9/._-]+
+
+# --- Packages Java/Kotlin publics (com.<org-interne>.* reste sensible) ------
+re:org\.apache\.[A-Za-z0-9._]+
+re:com\.google\.[A-Za-z0-9._]+
+re:io\.netty\.[A-Za-z0-9._]+
+re:javax\.[A-Za-z0-9._]+
+
+# --- Images publiques --------------------------------------------------------
+re:docker\.io/library/[A-Za-z0-9/._:-]+
+re:gcr\.io/distroless/[A-Za-z0-9/._:-]+
+re:quay\.io/prometheus/[A-Za-z0-9/._:-]+
+re:registry\.k8s\.io/[A-Za-z0-9/._:-]+
+re:mcr\.microsoft\.com/[A-Za-z0-9/._:-]+
+
+# --- Providers Terraform ------------------------------------------------------
+hashicorp/aws
+hashicorp/kubernetes
+hashicorp/helm
+
+# --- Namespaces Kubernetes standard ------------------------------------------
+kube-system
+kube-public
+kube-node-lease
+default
+istio-system
+cert-manager
+monitoring
+ingress-nginx
+
+# --- Adresses réservées et endpoints publics ---------------------------------
+localhost
+127.0.0.1
+::1
+169.254.169.254
+8.8.8.8
+1.1.1.1
+# DÉVIATION ASSUMÉE vs §6 du plan, à valider par jo.
+# Le plan liste `*.amazonaws.com` / `*.googleapis.com` / `*.azure.com` en
+# allowlist. Pris au pied de la lettre, c'est une FUITE : un endpoint de
+# RESSOURCE client porte l'identifiant du compte
+#   db-prod.cluster-abc123.eu-west-3.rds.amazonaws.com
+#   mon-bucket.s3.amazonaws.com
+# alors qu'un endpoint de SERVICE est public
+#   sts.amazonaws.com · ec2.eu-west-3.amazonaws.com
+# Mesuré par tests/corpus_eval.py (cas `tf-001`). On n'autorise donc que la
+# forme <service>[.<région>].<cloud> : au-delà, c'est une ressource.
+sts.amazonaws.com
+re:[a-z0-9-]+(\.[a-z]{2}-[a-z]+-\d)?\.amazonaws\.com
+re:[a-z0-9-]+(\.[a-z]{2}-[a-z]+\d)?\.googleapis\.com
+re:[a-z0-9-]+\.azure\.com
+re:[a-z0-9-]+\.windows\.net
+
+# --- Identifiants de code : PascalCase pointé (Mail.ReadWrite, Policy.ReadWrite.All)
+re:([A-Z][A-Za-z0-9]*)(\.[A-Z][A-Za-z0-9]*)+
+
+# --- Standards et méta-schémas (structurels : les substituer casse le protocole)
+re:https?://json-schema\.org(/[\w./-]*)?
+re:https?://(www\.)?w3\.org(/[\w./-]*)?
+re:https?://spdx\.org(/[\w./-]*)?
+re:https?://schema\.org(/[\w./-]*)?
+re:https?://(docs\.)?(anthropic|claude)\.com(/[\w./-]*)?
+re:https?://platform\.claude\.com(/[\w./-]*)?
+re:https?://(www\.)?github\.com/(anthropics|modelcontextprotocol)(/[\w./-]*)?
+re:https?://(registry\.)?npmjs\.(org|com)(/[\w./-]*)?
+re:https?://pypi\.org(/[\w./-]*)?

@@ -1,0 +1,64 @@
+[
+  {
+    "_comment": "SECRETS — motifs universels que les recognizers fournis ne couvrent pas. Mesuré par tests/corpus_eval.py : sans eux, un jeton `ghp_…` traverse le pipeline en clair. Le rappel sur les secrets est le seul seuil non négociable du plan (§5 Phase 5). Ces entrées sont classées SECRET côté moteur : substitut plausible, JAMAIS réversible (D4).",
+    "entity_type": "AUTH_TOKEN",
+    "pattern": "\\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}\\b",
+    "score": 0.95
+  },
+  {
+    "entity_type": "AUTH_TOKEN",
+    "pattern": "\\bgithub_pat_[A-Za-z0-9_]{20,}\\b",
+    "score": 0.95
+  },
+  {
+    "entity_type": "AUTH_TOKEN",
+    "pattern": "\\bglpat-[A-Za-z0-9_-]{16,}\\b",
+    "score": 0.95
+  },
+  {
+    "entity_type": "AUTH_TOKEN",
+    "pattern": "\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b",
+    "score": 0.95
+  },
+  {
+    "entity_type": "AUTH_TOKEN",
+    "pattern": "\\bsk-[A-Za-z0-9_-]{20,}\\b",
+    "score": 0.9
+  },
+  {
+    "entity_type": "AUTH_TOKEN",
+    "pattern": "\\b(?:AKIA|ASIA)[A-Z0-9]{16}\\b",
+    "score": 0.95
+  },
+  {
+    "entity_type": "AUTH_TOKEN",
+    "pattern": "\\bdop_v1_[a-f0-9]{32,}\\b",
+    "score": 0.95
+  },
+  {
+    "entity_type": "AUTH_TOKEN",
+    "pattern": "\\bnpm_[A-Za-z0-9]{30,}\\b",
+    "score": 0.95
+  },
+  {
+    "_comment": "CONVENTIONS D'ENVIRONNEMENT — à écrire AVEC jo (§6 du plan). Les entrées ci-dessous sont SYNTHÉTIQUES : elles valident le mécanisme et servent de modèle. Remplacer `acmecorp`/`demo-` par les conventions réelles (préfixes de services, organisations de dépôts, registry privé, comptes techniques) — de préférence après la Phase 3, pour que ces conventions ne transitent pas en clair.",
+    "entity_type": "REPO",
+    "pattern": "\\bacmecorp/[A-Za-z0-9._-]+\\b",
+    "score": 0.9
+  },
+  {
+    "entity_type": "K8S_NAMESPACE",
+    "pattern": "\\bdemo-(?:apps|system)\\b",
+    "score": 0.9
+  },
+  {
+    "entity_type": "SERVICE_ACCOUNT",
+    "pattern": "\\bsvc-[a-z0-9-]+-(?:prod|staging|dev)\\b",
+    "score": 0.9
+  },
+  {
+    "entity_type": "CONTAINER_IMAGE",
+    "pattern": "\\bregistry\\.acmecorp\\.io/[A-Za-z0-9._/-]+(?::[A-Za-z0-9._-]+)?",
+    "score": 0.9
+  }
+]
