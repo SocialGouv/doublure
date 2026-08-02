@@ -95,6 +95,26 @@ suffisait à tout lire. Corrigé :
 - Reste hors MVP : chiffrement d'enveloppe KMS/HSM, rotation de clé, journal
   d'accès immuable, protection contre l'énumération.
 
+## D9 — arbitrage jo (2026-08-02) : PAS de pare-feu local
+D9 se traite au **déploiement**, pas sur le poste : environnement
+conteneurisé, et/ou intégration dans un système plus vaste doté d'un bac à
+sable. Ne pas reproposer de règles `nft`/`ufw` locales.
+
+Fait qui invalide toute règle par IP : `api.anthropic.com` et
+`mcp-proxy.anthropic.com` résolvent vers **la même adresse** (160.79.104.10).
+Un pare-feu ne voit pas les noms d'hôtes → impossible d'autoriser l'API modèle
+en bloquant les connecteurs à ce niveau. Les connecteurs se désactivent CÔTÉ
+CLIENT (réglages claude.ai), gratuitement.
+
+Forme cible : réseau `internal: true` pour l'agent, le proxy seul à cheval sur
+les deux réseaux. Ce n'est pas une règle à maintenir mais une **absence de
+route** — rien à contourner, et le problème du « même IP » disparaît. Détail,
+variante Kubernetes et points d'attention (DNS, MCP distants, isolation du
+coffre) : `docs/d9-blocage-reseau.md`.
+
+**Tant que ce n'est pas déployé ainsi, D9 n'est pas tenue** : le harnais
+d'egress détecte, il n'empêche pas. À énoncer tel quel au DPO.
+
 ## Comment lancer (ordre)
 ```bash
 services/anonshield/wrapper/install-cuda.sh   # après tout uv sync dans upstream/

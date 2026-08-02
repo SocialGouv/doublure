@@ -4,12 +4,17 @@
 
 Le proxy (canal 1) et le hook `PreToolUse` (canal 2) protègent le chemin
 NORMAL. Ni l'un ni l'autre n'empêche un processus déterminé d'ouvrir une
-socket directe. La réponse définitive est un blocage au pare-feu.
+socket directe. D9 exige donc une contrainte que l'agent ne peut pas lever
+lui-même.
 
-## Ce que l'on observe réellement
+**Arbitrage jo (2026-08-02) : pas de mise en place sur le poste.** D9 se
+traite au niveau du DÉPLOIEMENT — environnement conteneurisé, et/ou intégration
+dans un système plus vaste disposant déjà d'un bac à sable. Ce document décrit
+la contrainte à satisfaire, pas une procédure à exécuter localement.
 
-Mesuré par `tests/datadog_probe.sh` (session synthétique, télémétrie non
-désactivée, 2026-08-02) — 34 flux vers 5 destinations :
+## Ce qui échappe au proxy, mesuré
+
+`tests/datadog_probe.sh`, session synthétique du 2026-08-02, 34 flux :
 
 | Destination | Flux | Passe par `ANTHROPIC_BASE_URL` ? |
 |---|---|---|
@@ -21,71 +26,93 @@ désactivée, 2026-08-02) — 34 flux vers 5 destinations :
 
 **Quatre destinations sur cinq échappent au proxy.** Aucune ne transporte la
 conversation modèle, mais toutes transportent des requêtes formulées par
-l'agent (donc potentiellement des identifiants internes dans une requête MCP).
+l'agent — donc potentiellement des identifiants internes dans une requête MCP.
 
-### Datadog : la coupure fonctionne, le contenu reste inconnu
+## Pourquoi une règle par IP ne peut pas marcher
 
-La Phase 0 (2026-08-01) avait mesuré ~343 Ko envoyés à
-`http-intake.logs.us5.datadoghq.com`. La sonde du 2026-08-02 ne capte **aucun**
-flux Datadog, alors que le harnais voyait bien 34 autres flux.
-
-**Attention à la lecture.** Entre les deux mesures, `~/.claude/settings.json`
-a reçu `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1`,
-`DISABLE_ERROR_REPORTING=1` et `DO_NOT_TRACK`. Claude Code injecte le bloc
-`env` de ses settings dans la session : ne pas poser la variable dans
-l'environnement du script ne suffit donc pas à la neutraliser. La sonde a
-tourné télémétrie déjà coupée.
-
-Ce qui est établi : **la coupure par settings fonctionne** (deux mesures
-concordantes). Ce qui ne l'est pas : le contenu des payloads, jamais inspecté
-faute de flux à inspecter.
-
-Pour le mesurer, il faudrait lancer la session avec un fichier de settings
-temporaire dépourvu de ces variables (`claude --settings /tmp/probe.json`), et
-non en jouant sur l'environnement. Tant que ce n'est pas fait, Datadog reste
-**volontairement absent** de `tests/egress/known_destinations.json` : sa
-réapparition doit faire ÉCHOUER le garde-fou d'egress, pas passer inaperçue.
-
-## Politique proposée (à valider par jo)
-
-Le principe : autoriser en sortie ce qui est nécessaire, refuser le reste, et
-n'autoriser `api.anthropic.com` **que** depuis le processus du proxy.
-
-```bash
-# Groupe dédié : seuls les processus du proxy peuvent joindre l'API modèle.
-sudo groupadd -f anonproxy-net
-# lancer le proxy sous ce groupe : sg anonproxy-net -c 'scripts/run-proxy.sh'
-
-# nftables — squelette, à adapter à la distribution
-sudo nft add table inet anonproxy
-sudo nft add chain inet anonproxy output \
-  '{ type filter hook output priority 0; policy accept; }'
-
-# 1. api.anthropic.com : réservé au groupe du proxy
-sudo nft add rule inet anonproxy output \
-  ip daddr @anthropic_ips tcp dport 443 skgid != anonproxy-net drop
-
-# 2. connecteurs et MCP distants : refusés tant qu'ils ne sont pas arbitrés
-sudo nft add rule inet anonproxy output ip daddr @mcp_proxy_ips drop
+```
+api.anthropic.com        → 160.79.104.10
+mcp-proxy.anthropic.com  → 160.79.104.10
 ```
 
-Points d'attention :
+**Même adresse.** Un pare-feu réseau ne voit pas les noms d'hôtes : il est donc
+impossible d'autoriser l'API modèle tout en bloquant les connecteurs par une
+règle IP. Toute politique qui prétend séparer les deux à ce niveau est fausse.
 
-- Les adresses d'`api.anthropic.com` changent (CDN) : résoudre régulièrement
-  et alimenter un `set` nftables, ou filtrer par SNI avec un pare-feu
-  applicatif. Un filtrage par IP figée se périme silencieusement.
-- Le filtrage par groupe (`skgid`) suppose que le proxy tourne sous un compte
-  ou un groupe dédié — ce qui rejoint la recommandation d'isoler le coffre
-  (réponse §3.5 : aujourd'hui « local, même utilisateur », gap assumé).
-- `mcp-proxy.anthropic.com` : à couper tant que les connecteurs claude.ai ne
-  sont pas arbitrés, ou à désactiver côté paramètres de connecteurs — c'est
-  plus simple et réversible qu'une règle réseau.
-- Toute règle ajoutée doit être vérifiée par `tests/egress_capture.sh` : une
-  politique non testée n'est pas une politique.
+Deux conséquences :
 
-## Ce qui reste vrai sans pare-feu
+1. **Les connecteurs claude.ai se désactivent côté client**, dans les réglages
+   de connecteurs — pas au réseau. C'est gratuit, réversible, et ça retire 12
+   flux sur 34.
+2. La contrainte réseau utile n'est pas « bloquer telle destination » mais
+   **« l'agent n'a aucun chemin de sortie, sauf le proxy »**. Formulée ainsi,
+   elle ne dépend ni des IP (qui changent), ni du DNS, ni du SNI.
 
-Le harnais d'egress (Phase 0) reste le garde-fou de non-régression : il
+## La forme cible : une absence de route, pas une règle
+
+Dans un environnement conteneurisé, D9 ne s'exprime pas par une règle de
+filtrage à maintenir mais par une **topologie** : l'agent vit sur un réseau
+sans route vers l'extérieur ; le proxy est le seul à avoir un pied des deux
+côtés.
+
+```yaml
+# docker compose — la forme canonique
+services:
+  agent:                     # Claude Code
+    networks: [interne]      # aucune route sortante
+    environment:
+      ANTHROPIC_BASE_URL: http://proxy:8090
+  proxy:
+    networks: [interne, externe]
+    depends_on: [detecteur]
+  detecteur:                 # AnonShield, côté GPL
+    networks: [interne]      # n'a jamais besoin de sortir
+
+networks:
+  interne:
+    internal: true           # ← c'est TOUTE la politique
+  externe: {}
+```
+
+C'est strictement plus fort qu'une règle `drop` : il n'y a rien à contourner,
+puisqu'il n'y a pas de route. Le problème du « même IP » disparaît de lui-même
+— l'agent ne joint ni `api.anthropic.com` ni `mcp-proxy.anthropic.com`, et le
+proxy ne relaie que ce qu'il sait pseudonymiser.
+
+Points d'attention pour cette forme :
+
+- **DNS** : sur un réseau `internal`, l'agent ne résout plus les noms publics.
+  C'est cohérent (il n'a rien à joindre publiquement) mais certains outils
+  échouent bruyamment plutôt que proprement. À vérifier au cas par cas.
+- **Serveurs MCP distants et `npm install`** cessent de fonctionner depuis
+  l'agent. C'est l'effet recherché ; s'il faut en garder, ils passent par le
+  réseau externe via un relais explicite, ce qui les rend visibles et
+  arbitrables au lieu d'être implicites.
+- Le **coffre** doit rester hors du conteneur de l'agent (volume monté côté
+  proxy uniquement) : c'est ce qui ferme enfin le gap « coffre local, même
+  utilisateur » de la réponse §3.5.
+
+### Kubernetes
+
+Même principe : `NetworkPolicy` d'egress sur le pod agent, n'autorisant que le
+service du proxy ; le proxy porte sa propre politique d'egress vers
+`api.anthropic.com`. La séparation des identités (ServiceAccount distinct pour
+le proxy) donne au passage l'isolation du coffre.
+
+### Intégration dans un système à bac à sable
+
+Si l'hôte dispose déjà d'un mécanisme de sandbox avec contrôle d'egress, D9 se
+réduit à une ligne de politique : **déclarer le proxy comme unique destination
+autorisée** pour le processus agent. C'est le cas le plus simple, et le plus
+probable en pratique.
+
+## Ce qui reste vrai en attendant
+
+Le harnais d'egress (Phase 0) est le garde-fou de non-régression : il
 inventorie ce qui sort et **échoue** sur toute destination non justifiée. Il
-détecte, il n'empêche pas. C'est la différence entre un contrôle et une
-alarme — et c'est pourquoi D9 n'est pas encore tenue.
+détecte, il n'empêche pas.
+
+C'est la différence entre un contrôle et une alarme — et c'est pourquoi **D9
+n'est pas tenue tant que le déploiement n'est pas conteneurisé ou encadré par
+un bac à sable**. À énoncer tel quel dans l'analyse de risque : le proxy
+réduit la surface, il ne la ferme pas.

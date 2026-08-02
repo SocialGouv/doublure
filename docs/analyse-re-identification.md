@@ -67,8 +67,10 @@ une fois le MVP en service.
 1. Annoter le corpus réel et rejouer `tests/corpus_eval.py --real` (Phase 5).
 2. Fixer avec jo les seuils de rappel par classe d'identifiant.
 3. Trancher la politique Datadog et `mcp-proxy.anthropic.com`.
-4. Décider du blocage pare-feu (D9) — un contrôle contournable n'est pas un
-   contrôle.
+4. Déployer en environnement conteneurisé ou sous bac à sable : c'est la seule
+   forme où D9 est tenue (arbitrage jo du 2026-08-02 — pas de pare-feu sur le
+   poste). Tant que ce n'est pas fait, **le proxy réduit la surface, il ne la
+   ferme pas** : cf. `docs/d9-blocage-reseau.md`.
 5. Revue juridique / DPO sur la base du présent document.
 6. Chiffrement d'enveloppe du coffre (KMS/HSM), rotation de clé, journal
    d'accès immuable — non implémentés dans le MVP.

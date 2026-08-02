@@ -55,7 +55,7 @@ bash tests/datadog_probe.sh                  # que part-il vers la télémétrie
 | `hooks/` | Garde PreToolUse (canal 2) |
 | `corpus/` | Jeu doré ; `corpus/real/` est gitignoré |
 | `docs/analyse-re-identification.md` | Livrable DPO |
-| `docs/d9-blocage-reseau.md` | Ce qui échappe au proxy, et la politique pare-feu |
+| `docs/d9-blocage-reseau.md` | Ce qui échappe au proxy, et la forme de déploiement qui le corrige |
 
 ## Configuration
 
@@ -80,8 +80,14 @@ n'importe jamais depuis ce dossier (décision D7).
 ## Limites connues
 
 Le canal 2 (Bash, MCP) n'est pas réversible : le hook bloque, il ne
-pseudonymise pas. `mcp-proxy.anthropic.com` ne passe pas par
-`ANTHROPIC_BASE_URL`. Un contrôle contournable n'est pas un contrôle : la
-réponse définitive est le blocage pare-feu (D9). Voir
-`docs/analyse-re-identification.md` pour l'inventaire complet des risques
+pseudonymise pas. Quatre destinations sur cinq ne passent pas par
+`ANTHROPIC_BASE_URL` — serveurs MCP distants, connecteurs, registre npm.
+
+**Sur un poste, D9 n'est pas tenue** : le harnais d'egress détecte, il
+n'empêche pas. La seule forme où le proxy est réellement le seul chemin est un
+déploiement conteneurisé (réseau `internal`, proxy à cheval) ou encadré par un
+bac à sable — `docs/d9-blocage-reseau.md`. En clair : le proxy réduit la
+surface, il ne la ferme pas.
+
+`docs/analyse-re-identification.md` donne l'inventaire complet des risques
 résiduels et des fuites assumées.
