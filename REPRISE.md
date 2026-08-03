@@ -11,10 +11,14 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 6 traité (hook + walker). Round 7 à lancer :
-le round 6 a réécrit `normalize` (réduction des expansions, accolades),
-`_OPT_AVEC_VALEUR` (table par enveloppe), `_APPEL_EXEC_RE`, l'inspection de
-TOUS les champs d'outil, et l'héritage du drapeau `protocole` dans `_walk`.**
+**Boucle en cours. Round 7 : le HOOK est traité. L'agent walker/moteur du
+round 7 n'avait pas rendu au moment du commit — vérifier son rapport.**
+
+Leçon des rounds 6-7, à garder en tête : chaque fois que j'ai modélisé un
+mécanisme de bash par une approximation à UNE valeur (une alternative
+d'accolade, une branche d'expansion, un token sauté), le round suivant a
+trouvé le cas où bash en produit plusieurs. Émettre TOUTES les possibilités
+coûte un faux positif potentiel ; en émettre une seule coûte un contournement.
 
 Protocole appliqué à chaque round :
 1. Lancer 2-3 agents `general-purpose`, `model: opus`, en parallèle, sur des
@@ -32,12 +36,12 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**715 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**747 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 715
+uv run pytest tests/ --ignore=tests/egress   # 747
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session réelle + capture

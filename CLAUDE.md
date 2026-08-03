@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**733 tests verts** (715 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**765 tests verts** (747 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -382,6 +382,38 @@ erreur d'API. C'est le troisième mode d'échec distinct que seul l'E2E révèle
 reste verbatim. C'est un FILTRE évalué contre les noms exposés par le serveur
 MCP — le substituer casserait l'outil en silence. Même arbitrage que
 `tools[].name`.
+
+## Huitième revue adversariale (2026-08-04, round 7 — hook)
+Cinq contournements, TOUS issus de mes correctifs du round 6. Le pire ratio de
+la boucle, et il tient à une même erreur répétée : j'ai modélisé chaque
+mécanisme de bash par une approximation à une seule valeur, là où bash en
+produit plusieurs ou choisit entre deux branches.
+
+- **Expansion d'accolades** : je gardais l'alternative la plus longue. Bash en
+  produit PLUSIEURS mots, préfixe et suffixe recollés — `{curl,autrechose} URL`
+  lance bel et bien `curl`. Le mot entier est désormais expansé.
+- **Repli d'expansion** : `${x:-env}` vaut le REPLI quand `x` est vide, et bash
+  l'EXÉCUTE ; je ne rendais que `$x`. Les deux branches sont maintenant émises,
+  séparées par `;` — sans ce séparateur, `$x` occupait la position de programme
+  et masquait le repli. Cela referme aussi `${x:-$(env)}`, dont la substitution
+  était jetée avec le repli.
+- **`env -S`** : sa valeur est une COMMANDE entière, pas un token. Le déclarer
+  « option à valeur » faisait sauter le programme.
+- **`X= env`** : mon saut de token après une affectation confondait le préfixe
+  d'affectation VIDE avec le marqueur d'une substitution. On ne saute plus que
+  le marqueur.
+- **Heredoc au pipe collé** (`<<'FIN' |bash`) : le découpage sur les espaces
+  donnait le token `|bash`, absent des interpréteurs.
+
+**Faux positif réintroduit puis re-corrigé** : `_APPEL_EXEC_RE` balayait la
+commande ENTIÈRE, si bien que
+`git commit -m 'fix subprocess.run for curl backend'` était refusé — exactement
+le défaut que le round 5 venait d'éliminer. La règle est de nouveau réservée au
+code donné EN LIGNE ; les formes parenthésées restent couvertes partout par
+`_NESTED_RE`.
+
+**Attente de test corrigée** : `{env,foolong}` donne `env foolong`, qui EXÉCUTE
+`foolong` au lieu de déverser l'environnement — j'attendais un refus à tort.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

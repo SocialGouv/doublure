@@ -360,8 +360,32 @@ def allow() -> dict:
 #: Expansion de paramètre à opérateur : `${VAR:-def}`, `${VAR##x}`, `${#VAR}`…
 _EXPANSION_RE = re.compile(r"\$\{(?P<pre>#?)(?P<nom>[A-Za-z_]\w*)(?P<reste>[^}]*)\}")
 
-#: Expansion d'accolades sans variable : `{env,}`, `{p,}rintenv`, `c{ur,ur}l`.
+#: MOT contenant une expansion d'accolades : `{env,}`, `{p,}rintenv`,
+#: `c{ur,ur}l`, `{curl,autrechose}`. C'est le mot ENTIER qu'il faut expanser,
+#: préfixe et suffixe compris.
+_MOT_ACCOLADE_RE = re.compile(r"\S*\{[^{}$\s]*,[^{}$\s]*\}\S*")
 _ACCOLADES_RE = re.compile(r"\{(?P<alts>[^{}$\s]*,[^{}$\s]*)\}")
+
+
+def _expanser_mot(mot: str, profondeur: int = 0) -> str:
+    """Expanse un mot en TOUTES ses alternatives, comme bash.
+
+    Ne garder que la plus longue était faux : `{curl,autrechose} http://tiers/`
+    donne `curl autrechose http://tiers/` — curl s'exécute bel et bien.
+    """
+    trouve = _ACCOLADES_RE.search(mot)
+    if not trouve or profondeur > 4:
+        return mot
+    avant, apres = mot[:trouve.start()], mot[trouve.end():]
+    return " ".join(
+        _expanser_mot(avant + alt + apres, profondeur + 1)
+        for alt in trouve.group("alts").split(",")
+    )
+
+
+#: Opérateurs qui rendent SOIT la valeur de la variable, SOIT le texte de
+#: repli : les deux branches doivent être analysées.
+_OP_REPLI = (":-", ":=", ":?", "-", "=", "?")
 
 
 def _reduire_expansion(m: re.Match[str]) -> str:
@@ -376,7 +400,15 @@ def _reduire_expansion(m: re.Match[str]) -> str:
         return reste[2:]
     if reste.startswith("+"):
         return reste[1:]
-    return f"${nom}"  # toute autre forme dérive de la VALEUR de la variable
+    for operateur in _OP_REPLI:
+        if reste.startswith(operateur):
+            # `${x:-env}` EXÉCUTE `env` quand x est vide : ne renvoyer que
+            # `$x` perdait le repli, et avec lui la commande réellement
+            # lancée. Le `;` sépare les deux branches en commandes simples —
+            # sans lui, `$x` occupait la position de programme et masquait le
+            # repli.
+            return f"${nom} ; {reste[len(operateur):]}"
+    return f"${nom}"  # formes dérivées (`##`, `%%`, `/`, `^^`, `:0:5`…)
 
 
 def normalize(command: str) -> str:
@@ -405,10 +437,9 @@ def normalize(command: str) -> str:
     # références indirectes.
     out = _EXPANSION_RE.sub(_reduire_expansion, out)
     # `{env,}`, `{p,}rintenv`, `c{ur,ur}l` : l'expansion d'accolades reconstruit
-    # un nom de commande. On garde l'alternative la plus longue, celle qui
-    # porte le mot ({,env} comme {env,}).
-    out = _ACCOLADES_RE.sub(
-        lambda m: max(m.group("alts").split(","), key=len), out)
+    # un nom de commande. Bash produit PLUSIEURS mots, préfixe et suffixe
+    # recollés à chaque alternative — on fait de même.
+    out = _MOT_ACCOLADE_RE.sub(lambda m: _expanser_mot(m.group(0)), out)
     # Une référence collée AU MILIEU d'un mot ne sert qu'à le découper —
     # y compris sous forme indirecte (`e${!q}nv`).
     out = re.sub(r"(?<=\w)\$\{!?[A-Za-z_]\w*\}(?=\w)", "", out)
@@ -476,7 +507,9 @@ _OPT_AVEC_VALEUR: dict[str, frozenset[str]] = {
     "nsenter": frozenset({"-t", "--target", "-S", "--setuid", "-G", "--setgid"}),
     "unshare": frozenset({"-S", "--map-user", "-G", "--map-group"}),
     "stdbuf": frozenset({"-i", "-o", "-e"}),
-    "env": frozenset({"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}),
+    # `-S` en est ABSENT à dessein : sa valeur est une COMMANDE entière
+    # (`env -S "printenv CLE"`), pas un token. La sauter masquait le programme.
+    "env": frozenset({"-u", "--unset", "-C", "--chdir"}),
     "systemd-run": frozenset({"-p", "--property", "-u", "--unit"}),
     "strace": frozenset({"-o", "--output", "-E", "-P", "-s"}),
     "ltrace": frozenset({"-o", "--output", "-e", "-l"}),
@@ -519,10 +552,13 @@ def _program_positions(tokens: list[str]) -> list[int]:
             i += 2 if tok in _OPT_AVEC_VALEUR.get(enveloppe, frozenset()) else 1
             continue
         if "=" in tok or _DUREE_RE.fullmatch(tok):
-            # `D=$(ls)` : le token suivant est la VALEUR de l'affectation, pas
-            # un programme. Sans ça, la substitution retirée laissait son
-            # marqueur en position de programme et l'affectation était refusée.
-            i += 2 if tok.endswith("=") else 1
+            # `D=$(ls)` : le marqueur laissé par la substitution est la VALEUR
+            # de l'affectation, pas un programme. On ne saute QUE lui — `X= env`
+            # est un préfixe d'affectation vide, et `env` y est bien exécuté.
+            if tok.endswith("=") and tokens[i + 1:i + 2] == [_MARQUEUR_SUBSTITUTION]:
+                i += 2
+            else:
+                i += 1
             continue
         base = _basename(tok)
         if base == "command" and any(t in ("-v", "-V") for t in tokens[i + 1:]):
@@ -708,7 +744,11 @@ def _neutralise_heredocs(command: str) -> str:
         # `cat <<'FIN' | bash` exécute bel et bien ce que le heredoc contient,
         # et ne regarder que la tête (`cat`) le rendait invisible.
         suite = m.group("corps").split("\n", 1)[0]
-        if {_basename(t) for t in f"{tete} {suite}".split()} & _INTERPRETES:
+        # Découpage sur les opérateurs AVANT les espaces : `<<'FIN' |bash`
+        # (pipe collé) donnait le token `|bash`, introuvable parmi les
+        # interpréteurs, et le corps était retiré alors qu'il est exécuté.
+        mots = re.split(r"[|;&<>()]+|\s+", f"{tete} {suite}")
+        if {_basename(t) for t in mots if t} & _INTERPRETES:
             return m.group(0)  # le corps EST exécuté : on le garde
         return f"<<{m.group('mark')}\n{m.group('mark')}\n"
 
@@ -751,8 +791,13 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
                 return reason
 
     # Ce qui suit une primitive d'exécution est une commande, même sans
-    # parenthèses pour la délimiter.
-    for appel in _APPEL_EXEC_RE.finditer(normalized):
+    # parenthèses pour la délimiter. Réservé au CODE donné en ligne : sans
+    # cette porte, `git commit -m 'fix subprocess.run for curl backend'`
+    # était refusé — la prose redevenait du code, précisément le défaut que
+    # la séparation avait éliminé. Les formes PARENTHÉSÉES restent couvertes
+    # partout par `_NESTED_RE`.
+    for appel in (_APPEL_EXEC_RE.finditer(normalized)
+                  if _INTERPRETE_EN_LIGNE.search(normalized) else ()):
         mots = _MOTS_DE_CODE_RE.findall(appel.group("args") or appel.group("pcx") or "")
         for idx, mot in enumerate(mots):
             base = _basename(mot)
