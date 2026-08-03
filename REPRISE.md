@@ -11,9 +11,10 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 5 : hook et moteur traités (moteur = 0 finding
-haut/critique). L'agent walker/proxy est tombé sur une erreur d'API et a été
-RELANCÉ — son rapport n'était pas revenu au moment du commit.**
+**Boucle en cours. Round 5 traité EN ENTIER (hook + moteur + walker).
+Round 6 à lancer : le round 5 a encore réécrit `_walk` (périmètre de
+`CONTRACT_KEYS`), la validation de `cache_control`, la liste des deltas résolus
+et la robustesse SSE — rien de tout cela n'a été relu.**
 
 Protocole appliqué à chaque round :
 1. Lancer 2-3 agents `general-purpose`, `model: opus`, en parallèle, sur des
@@ -31,12 +32,12 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**622 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**651 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 622
+uv run pytest tests/ --ignore=tests/egress   # 651
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session réelle + capture

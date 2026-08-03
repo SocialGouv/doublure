@@ -38,7 +38,9 @@ from ..allowlist import Allowlist  # noqa: E402
 from ..config import Settings, read_master_key  # noqa: E402
 from ..detect import DetectClient, DetectionUnavailable  # noqa: E402
 from ..pipeline import Pseudonymizer  # noqa: E402
-from ..sse import encode_sse, iter_blocks, parse_sse_block  # noqa: E402
+from ..sse import (  # noqa: E402
+    FluxSSEInvalide, encode_sse, iter_blocks, parse_sse_block,
+)
 from ..surrogates.engine import SurrogateCollisionError, SurrogateEngine  # noqa: E402
 from ..vault import Vault, VaultUnavailableError  # noqa: E402
 
@@ -270,11 +272,21 @@ async def _stream(state: ProxyState, safe_body: dict[str, Any], headers: dict[st
                             continue
                         for out_event in rewriter.feed(event):
                             yield encode_sse(out_event)
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, FluxSSEInvalide) as exc:
             logger.error("flux amont interrompu : %s", exc)
             yield encode_sse({
                 "type": "error",
                 "error": {"type": "api_error", "message": f"flux interrompu : {exc}"},
+            })
+        except (TypeError, AttributeError, ValueError, KeyError) as exc:
+            # Un événement amont mal typé tuait la génératrice SANS rien
+            # émettre : le client perdait le flux en silence. On remonte une
+            # erreur SSE exploitable plutôt qu'une connexion coupée.
+            logger.exception("événement SSE amont inexploitable")
+            yield encode_sse({
+                "type": "error",
+                "error": {"type": "api_error",
+                          "message": f"événement amont inexploitable : {exc}"},
             })
         finally:
             _note_unresolved(state, rewriter.unresolved)

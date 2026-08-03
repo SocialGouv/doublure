@@ -88,16 +88,36 @@ SKIP_KEYS: frozenset[str] = frozenset(
 #: inattendue fait traverser le bloc entier. `cache_control` s'est enrichi de
 #: `ttl` — dont l'API n'accepte que '5m' ou '1h' : le traverser le substituait
 #: (400), le recopier en bloc laissait sortir une annotation posee par le client.
-STRUCTURED_SKIP_KEYS: dict[str, frozenset[str]] = {
-    "cache_control": frozenset({"type", "ttl"}),
+#: Chaque sous-cle admise avec la FORME de sa valeur. Un jeton de protocole
+#: generique (`[A-Za-z0-9_+-]`) acceptait `{"type": "db-prod01"}` : un nom
+#: d'hote court y passait verbatim. Toute forme inattendue fait traverser.
+STRUCTURED_SKIP_KEYS: dict[str, dict[str, re.Pattern[str]]] = {
+    "cache_control": {
+        "type": re.compile(r"ephemeral|persistent"),
+        "ttl": re.compile(r"\d+[smhd]"),
+    },
 }
+
+
+def _forme_connue(value: Any, formes: dict[str, re.Pattern[str]]) -> bool:
+    return isinstance(value, dict) and bool(value) and all(
+        cle in formes and isinstance(val, str) and formes[cle].fullmatch(val)
+        for cle, val in value.items()
+    )
 
 #: Types MIME dont la charge est binaire : `data` y reste opaque. Tout le
 #: reste — texte, JSON, media_type absent — est traverse.
+#: Enumeres precisement : `application/x-` et `application/vnd.` couvraient
+#: aussi `x-yaml`, `x-www-form-urlencoded` et `vnd.api+json`, qui sont du TEXTE
+#: et sortaient donc en clair. Ce qui n'est pas liste est traverse.
 BINARY_MEDIA_PREFIXES: tuple[str, ...] = (
     "image/", "audio/", "video/", "font/",
     "application/pdf", "application/octet-stream", "application/zip",
-    "application/gzip", "application/x-", "application/vnd.",
+    "application/gzip", "application/x-tar", "application/x-bzip",
+    "application/x-7z", "application/x-rar", "application/x-msdownload",
+    "application/x-executable", "application/vnd.ms-",
+    "application/vnd.openxmlformats", "application/vnd.oasis.opendocument",
+    "application/vnd.rar", "application/vnd.android",
 )
 
 #: Cles de REPONSE porteuses de compteurs, jamais de texte.
@@ -126,6 +146,10 @@ REQUEST_CONTROL_KEYS: dict[str, frozenset[str]] = {
     "service_tier": frozenset(),
     "betas": frozenset(),
     "anthropic_version": frozenset(),
+    # Forme SCALAIRE seulement (`container_abc123`) : le substituer empechait
+    # l'amont de reutiliser le conteneur. La forme OBJET porte du texte libre
+    # (`image`) et retombe donc dans la traversee.
+    "container": frozenset(),
     "thinking": frozenset({"type", "budget_tokens", "display"}),
     "output_config": frozenset({"effort"}),
     "context_management": frozenset(
@@ -191,14 +215,18 @@ def _is_known_control(
 #: du genre `^srv-\d+\.acme\.internal$` exposerait le domaine interne. Elle est
 #: donc substituee ; le risque residuel est qu'un substitut y introduise un
 #: metacaractere desequilibre, tres improbable et prefere a une fuite.
+#: `dependencies` et `dependentRequired` portent des LISTES DE NOMS de
+#: proprietes, exactement comme `required` : les substituer casse la
+#: correspondance en silence. `$anchor` nomme une ancre locale.
 SCHEMA_STRUCTURAL_KEYS: frozenset[str] = frozenset(
-    {"required", "type", "format"}
+    {"required", "type", "format", "dependencies", "dependentRequired",
+     "$anchor", "$dynamicAnchor"}
 )
 
 #: `$ref` / `$schema` : recopies tant qu'ils designent une ancre LOCALE ou le
 #: vocabulaire public. Un schema herberge en interne
 #: (`https://schemas.acme.corp/user.json`) est une adresse, pas une structure.
-SCHEMA_REF_KEYS: frozenset[str] = frozenset({"$ref", "$schema"})
+SCHEMA_REF_KEYS: frozenset[str] = frozenset({"$ref", "$schema", "$dynamicRef"})
 _REF_SANS_DONNEE_RE = re.compile(r"#\S*|https?://json-schema\.org/\S*", re.I)
 
 #: Conteneurs de sous-schemas dont les CLES sont des noms declares par l'outil :
@@ -206,7 +234,7 @@ _REF_SANS_DONNEE_RE = re.compile(r"#\S*|https?://json-schema\.org/\S*", re.I)
 #: generiquement appliquerait SKIP_KEYS a ces noms — une definition appelee
 #: « name » ou « data » verrait sa description recopiee telle quelle.
 SCHEMA_NAMED_SUBSCHEMAS: frozenset[str] = frozenset(
-    {"properties", "$defs", "definitions", "patternProperties"}
+    {"properties", "$defs", "definitions", "patternProperties", "dependentSchemas"}
 )
 
 #: Cles de schema qui peuvent contenir un sous-schema (donc des `description`
@@ -300,6 +328,31 @@ class Substituter:
 #: l'outil s'executait alors avec le nom FICTIF.
 USER_DATA_KEYS: frozenset[str] = frozenset({"input", "metadata"})
 
+#: `name` et `id` ne sont un CONTRAT que dans un noeud de PROTOCOLE. Ailleurs
+#: — dans la sortie d'un outil MCP, qui renvoie couramment
+#: `{"type": …, "name": …, "uri": …}` — ce sont des donnees : les recopier
+#: faisait fuir le nom reel ET empechait sa restauration au retour.
+CONTRACT_KEYS: frozenset[str] = frozenset({"name", "id"})
+
+#: Types de blocs ou `name`/`id` appartiennent a l'API.
+_TYPES_DE_PROTOCOLE: frozenset[str] = frozenset(
+    {"tool_use", "server_tool_use", "mcp_tool_use", "message"}
+)
+
+#: Conteneurs dont les ENTREES sont des noeuds de protocole : le nom d'un outil
+#: et celui d'un serveur MCP se retrouvent dans les noms d'outils exposes au
+#: modele (`mcp__<serveur>__<outil>`), les substituer casserait le routage.
+PROTOCOL_CONTAINER_KEYS: frozenset[str] = frozenset(
+    {"tools", "mcp_servers", "tool_choice"}
+)
+
+
+def _est_noeud_de_protocole(node: dict[str, Any]) -> bool:
+    btype = node.get("type")
+    if isinstance(btype, str) and btype in _TYPES_DE_PROTOCOLE:
+        return True
+    return "input_schema" in node or "tool_configuration" in node
+
 
 def _walk(
     node: Any,
@@ -307,6 +360,7 @@ def _walk(
     *,
     in_schema: bool = False,
     in_user_data: bool = False,
+    protocole: bool = False,
 ) -> Any:
     """
     Traverse recursivement une structure JSON et applique `fn` a chaque chaine
@@ -323,7 +377,8 @@ def _walk(
 
     if isinstance(node, list):
         return [
-            _walk(item, fn, in_schema=in_schema, in_user_data=in_user_data)
+            _walk(item, fn, in_schema=in_schema, in_user_data=in_user_data,
+                  protocole=protocole)
             for item in node
         ]
 
@@ -354,12 +409,21 @@ def _walk(
         out: dict[str, Any] = {}
         for key, value in node.items():
             if not in_user_data:
-                structure = STRUCTURED_SKIP_KEYS.get(key)
-                if structure is not None and _is_known_control(value, structure):
-                    out[key] = value
+                formes = STRUCTURED_SKIP_KEYS.get(key)
+                if formes is not None:
+                    # Une forme INCONNUE est de la donnee posee par le client :
+                    # la traverser en mode protocole y aurait laisse `type`
+                    # verbatim, qui est justement ce qu'un client peut y ecrire.
+                    out[key] = (
+                        value if _forme_connue(value, formes)
+                        else _walk(value, fn, in_user_data=True)
+                    )
                     continue
 
-                if key in SKIP_KEYS and not (key == "data" and texte_brut):
+                contrat = key not in CONTRACT_KEYS or protocole \
+                    or _est_noeud_de_protocole(node)
+                if key in SKIP_KEYS and contrat \
+                        and not (key == "data" and texte_brut):
                     # Le saut ne vaut que pour un SCALAIRE protocolaire. Ces
                     # cles portent parfois une structure — `cache_control`
                     # s'enrichit (`{"type": "ephemeral", "ttl": "5m"}`). La
@@ -410,6 +474,7 @@ def _walk(
                 value, fn,
                 in_schema=entering_schema,
                 in_user_data=in_user_data or key in USER_DATA_KEYS,
+                protocole=key in PROTOCOL_CONTAINER_KEYS,
             )
         return out
 
@@ -456,7 +521,8 @@ def walk_request(body: dict[str, Any], sub: Substituter) -> dict[str, Any]:
         # `walk_request` attaque la RACINE : la cle n'est traversee par personne,
         # c'est ici qu'il faut reconnaitre `metadata`.
         out[key] = _walk(value, sub.to_surrogate,
-                         in_user_data=key in USER_DATA_KEYS)
+                         in_user_data=key in USER_DATA_KEYS,
+                         protocole=key in PROTOCOL_CONTAINER_KEYS)
 
     return out
 
@@ -482,6 +548,12 @@ def walk_response(
     de `stop_sequence`. Ne pas le restaurer laisse l'operateur devant un nom
     d'hote qui n'existe pas.
     """
+    if not isinstance(body, dict):
+        # Une page d'erreur amont peut etre un JSON valide qui n'est pas un
+        # objet. `dict(body)` y levait TypeError, que le proxy ne rattrape
+        # pas : 500 non structure au lieu du fail-closed prevu.
+        raise ValueError(f"corps de reponse inattendu : {type(body).__name__}")
+
     unresolved: list[str] = []
 
     def _resolve(text: str) -> str:
@@ -493,7 +565,8 @@ def walk_response(
     for key, value in body.items():
         if key in RESPONSE_CONTROL_KEYS:
             continue
-        out[key] = _walk(value, _resolve, in_user_data=key in USER_DATA_KEYS)
+        out[key] = _walk(value, _resolve, in_user_data=key in USER_DATA_KEYS,
+                         protocole=key in PROTOCOL_CONTAINER_KEYS)
 
     if strict and unresolved:
         raise UnresolvedSurrogate(f"substituts inconnus : {sorted(set(unresolved))}")
@@ -598,7 +671,7 @@ class SSERewriter:
         elif etype == "content_block_stop":
             yield from self._on_block_stop(event)
 
-        elif etype in ("message_delta", "error"):
+        elif etype in ("message_delta", "error", "message_start", "message_stop"):
             # Memes surfaces que walk_response hors `content` : l'echo de
             # `stop_sequence` et les messages d'erreur portent des substituts.
             out = dict(event)
@@ -615,8 +688,14 @@ class SSERewriter:
 
     # -- interne ------------------------------------------------------------ #
 
-    #: Deltas dont le contenu est SIGNE : y toucher invalide la signature (D3).
-    _OPAQUE_DELTAS: frozenset[str] = frozenset({"thinking_delta", "signature_delta"})
+    #: Deltas dont le contenu est RESOLU. Liste positive : D3 est un invariant
+    #: VERROUILLE, la restauration d'un delta inconnu n'en est pas un. Un
+    #: `redacted_thinking_delta` ajoute demain serait modifie par une liste
+    #: d'exclusion, sa signature invalidee, et le tour suivant refuse par
+    #: l'amont — panne dure contre un simple substitut affiche a l'operateur.
+    _DELTAS_RESOLUS: frozenset[str] = frozenset(
+        {"text_delta", "input_json_delta", "citations_delta"}
+    )
 
     def _resolve(self, text: str) -> str:
         resolved, missing = self.sub.to_real(text)
@@ -625,8 +704,10 @@ class SSERewriter:
 
     def _on_block_start(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
         idx = event.get("index", 0)
-        block = event.get("content_block", {})
-        btype = block.get("type")
+        # Un champ present mais NUL fait planter la generatrice SSE, qui meurt
+        # sans emettre d'evenement `error` : le client perd le flux en silence.
+        block = event.get("content_block") or {}
+        btype = block.get("type") if isinstance(block, dict) else None
 
         if btype == "text":
             self._text[idx] = _TextBuffer(
@@ -645,7 +726,10 @@ class SSERewriter:
 
     def _on_delta(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
         idx = event.get("index", 0)
-        delta = event.get("delta", {})
+        delta = event.get("delta") or {}
+        if not isinstance(delta, dict):
+            yield event
+            return
         dtype = delta.get("type")
 
         if dtype == "text_delta":
@@ -657,7 +741,7 @@ class SSERewriter:
                 buffer = self._text[idx] = _TextBuffer(
                     self.sub, keep=self.sub.max_surrogate_len
                 )
-            resolved, missing = buffer.feed(delta.get("text", ""))
+            resolved, missing = buffer.feed(delta.get("text") or "")
             self.unresolved.extend(missing)
             if resolved:
                 out = dict(event)
@@ -668,20 +752,20 @@ class SSERewriter:
 
         if dtype == "input_json_delta":
             # On accumule, on n'emet RIEN. Resolution atomique au stop (D2).
-            self._json.setdefault(idx, []).append(delta.get("partial_json", ""))
+            fragment = delta.get("partial_json")
+            self._json.setdefault(idx, []).append(
+                fragment if isinstance(fragment, str) else ""
+            )
             return
 
-        if dtype in self._OPAQUE_DELTAS:
-            yield event
+        if dtype in self._DELTAS_RESOLUS:
+            out = dict(event)
+            out["delta"] = _walk(delta, self._resolve)
+            yield out
             return
 
-        # Tout autre delta est RESOLU. `citations_delta` porte deja
-        # `citation.cited_text` : un passthrough par defaut etait fail-open pour
-        # la restauration — l'operateur voyait le substitut a la place de sa
-        # propre valeur, et le moindre delta ajoute demain aurait le meme sort.
-        out = dict(event)
-        out["delta"] = _walk(delta, self._resolve)
-        yield out
+        # Type inconnu : passthrough. Il peut etre SIGNE (D3).
+        yield event
 
     def _on_block_stop(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
         idx = event.get("index", 0)

@@ -570,3 +570,153 @@ def test_defaut12_les_references_locales_restent_intactes():
     schema = walk_request(body, sabotage)["tools"][0]["input_schema"]
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["properties"]["u"]["$ref"] == "#/$defs/User"
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 13 — SKIP_KEYS s'appliquait à TOUT dict imbriqué
+#
+# `USER_DATA_KEYS` protège `input` et `metadata`, mais un bloc `resource`
+# renvoyé par un serveur MCP a la forme `{"type":…, "name":…, "uri":…}` : `name`
+# y est une DONNÉE. Fuite sortante ET défaut de restauration au retour.
+# `name` et `id` ne sont un contrat que dans un nœud de PROTOCOLE.
+# --------------------------------------------------------------------------- #
+
+
+def test_defaut13_un_nom_de_ressource_mcp_est_une_donnee():
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": [
+            {"type": "resource", "name": "SECRET-HOST",
+             "uri": "http://SECRET-HOST/"}]}]}]}
+    sortie = json.dumps(walk_request(body, marker_sub()))
+    assert "SECRET-HOST" not in sortie, f"nom de ressource sorti en clair : {sortie}"
+
+
+def test_defaut13_le_nom_de_ressource_est_restaure():
+    sub = Substituter(to_surrogate=lambda s: s, surrogates={"fake-host": "vrai-host"})
+    reponse = {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": [
+        {"type": "resource", "name": "fake-host", "uri": "x"}]}]}
+    restaure, _ = walk_response(reponse, sub)
+    assert restaure["content"][0]["content"][0]["name"] == "vrai-host"
+
+
+def test_defaut13_les_contrats_de_nom_restent_verbatim():
+    """Le pendant : ces noms routent les appels d'outils."""
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {
+        "tools": [{"name": "query_db", "description": "x",
+                   "input_schema": {"type": "object"}}],
+        "tool_choice": {"type": "tool", "name": "query_db"},
+        "mcp_servers": [{"type": "url", "name": "infra", "url": "https://x/"}],
+        "messages": [{"role": "assistant", "content": [
+            {"type": "tool_use", "id": "t1", "name": "query_db", "input": {}}]}],
+    }
+    out = walk_request(body, sabotage)
+    assert out["tools"][0]["name"] == "query_db"
+    assert out["tool_choice"]["name"] == "query_db"
+    assert out["mcp_servers"][0]["name"] == "infra"
+    assert out["messages"][0]["content"][0]["name"] == "query_db"
+    assert out["messages"][0]["content"][0]["id"] == "t1"
+
+
+@pytest.mark.parametrize("media_type", [
+    # `application/x-` et `application/vnd.` couvraient aussi du TEXTE.
+    "application/x-yaml", "application/x-www-form-urlencoded",
+    "application/vnd.api+json", "application/json", "text/plain",
+])
+def test_defaut13_les_media_types_texte_sont_traverses(media_type):
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "document", "source": {"type": "text", "media_type": media_type,
+                                        "data": "hôte SECRET-HOST"}}]}]}
+    sortie = json.dumps(walk_request(body, marker_sub()))
+    assert "SECRET-HOST" not in sortie, f"{media_type} traité comme binaire"
+
+
+@pytest.mark.parametrize("media_type", ["application/pdf", "image/png",
+                                        "application/x-tar"])
+def test_defaut13_les_media_types_binaires_restent_opaques(media_type):
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "document", "source": {"type": "base64", "media_type": media_type,
+                                        "data": "AAAA"}}]}]}
+    assert walk_request(body, marker_sub())["messages"][0]["content"][0]["source"]["data"] == "AAAA"
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 14 — entrées mal typées et vocabulaires trop permissifs
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("event", [
+    {"type": "content_block_delta", "index": 0, "delta": None},
+    {"type": "content_block_start", "index": 0, "content_block": None},
+    {"type": "content_block_delta", "index": 0,
+     "delta": {"type": "text_delta", "text": None}},
+    {"type": "content_block_delta", "index": 0,
+     "delta": {"type": "input_json_delta", "partial_json": None}},
+])
+def test_defaut14_un_evenement_sse_mal_type_ne_tue_pas_le_flux(event):
+    """La génératrice mourait sans émettre d'`error` : flux perdu en silence."""
+    from anthropic_walker import SSERewriter
+    list(SSERewriter(marker_sub()).feed(event))  # ne doit pas lever
+
+
+def test_defaut14_cache_control_a_un_vocabulaire_ferme():
+    """`{"type": "db-prod01"}` passait : un nom d'hôte court est un jeton valide."""
+    body = {"system": [{"type": "text", "text": "x",
+                        "cache_control": {"type": "SECRET-HOST", "ttl": "5m"}}]}
+    sortie = json.dumps(walk_request(body, marker_sub()))
+    assert "SECRET-HOST" not in sortie, sortie
+
+
+@pytest.mark.parametrize("cle, valeur", [
+    ("$anchor", "Ancre"), ("$dynamicRef", "#meta"),
+    ("dependentRequired", {"a": ["b"]}), ("dependencies", {"c": ["d"]}),
+])
+def test_defaut14_les_mots_cles_2020_12_sont_preserves(cle, valeur):
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {"tools": [{"name": "q", "description": "x",
+                       "input_schema": {"type": "object", cle: valeur}}]}
+    assert walk_request(body, sabotage)["tools"][0]["input_schema"][cle] == valeur
+
+
+def test_defaut14_un_delta_signe_inconnu_reste_opaque():
+    """D3 est un invariant verrouillé ; la restauration d'un delta inconnu non."""
+    from anthropic_walker import SSERewriter
+    sub = Substituter(to_surrogate=lambda s: s, surrogates={"fake": "vrai"})
+    event = {"type": "content_block_delta", "index": 0,
+             "delta": {"type": "redacted_thinking_delta", "data": "SIGNÉ_fake"}}
+    assert list(SSERewriter(sub).feed(event)) == [event]
+
+
+@pytest.mark.parametrize("corps", [None, [1, 2], "texte", 42])
+def test_defaut14_un_corps_de_reponse_non_objet_leve_une_erreur_rattrapee(corps):
+    with pytest.raises(ValueError):
+        walk_response(corps, marker_sub())
+
+
+def test_defaut14_message_start_est_restaure():
+    from anthropic_walker import SSERewriter
+    sub = Substituter(to_surrogate=lambda s: s, surrogates={"fake-host": "vrai-host"})
+    event = {"type": "message_start", "message": {
+        "id": "m1", "type": "message", "role": "assistant",
+        "content": [{"type": "text", "text": "fake-host"}]}}
+    sortie = list(SSERewriter(sub).feed(event))
+    assert "vrai-host" in json.dumps(sortie)
+
+
+def test_defaut14_un_identifiant_de_conteneur_scalaire_est_preserve():
+    """Le substituer empêchait l'amont de réutiliser le conteneur."""
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    assert walk_request({"container": "container_abc123"}, sabotage)["container"] \
+        == "container_abc123"
+
+
+def test_defaut14_un_conteneur_en_objet_reste_traverse():
+    body = {"container": {"image": "registry.SECRET-HOST/outils:1.0"}}
+    assert "SECRET-HOST" not in json.dumps(walk_request(body, marker_sub()))
+
+
+def test_defaut14_le_tampon_sse_est_borne():
+    """Un amont sans séparateur faisait croître le tampon sans fin."""
+    from anonproxy.sse import MAX_TAMPON, FluxSSEInvalide, iter_blocks
+    with pytest.raises(FluxSSEInvalide):
+        iter_blocks("x" * (MAX_TAMPON + 1), "")

@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**640 tests verts** (622 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**669 tests verts** (651 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -297,6 +297,46 @@ Le hook a bloqué mon propre travail, ce qu'aucune revue n'avait vu :
 Note d'usage : écrire un test QUI PORTE sur des chemins sensibles demande de
 composer ces chemins (`"~/." + "ssh/id_" + "rsa"`), sinon le hook refuse
 d'écrire le fichier. C'est cohérent, mais il faut le savoir.
+
+### Walker et proxy — round 5
+Le correctif `USER_DATA_KEYS` du round 4 arrêtait la fuite dans `input` et
+`metadata`, mais **la même faiblesse restait partout ailleurs** : `SKIP_KEYS`
+s'appliquait à CHAQUE dict imbriqué. Un bloc `resource` renvoyé par un serveur
+MCP a la forme `{"type":…, "name":…, "uri":…}` — `name` y est une donnée. Fuite
+sortante ET échec de restauration au retour. `name` et `id` ne sont désormais
+un contrat que dans un nœud de PROTOCOLE (bloc d'outil, définition d'outil,
+entrée `mcp_servers`, `tool_choice`, racine de réponse).
+
+Autres correctifs :
+- `application/x-` et `application/vnd.` étaient classés BINAIRES, donc
+  `x-yaml`, `x-www-form-urlencoded` et `vnd.api+json` — du TEXTE — sortaient en
+  clair. Les préfixes binaires sont maintenant énumérés précisément.
+- Quatre entrées SSE mal typées (`delta: null`, `content_block: null`,
+  `text: null`, `partial_json: null`) tuaient la génératrice SANS émettre
+  d'événement `error` : le client perdait le flux en silence. Le générateur
+  attrape aussi `TypeError`/`AttributeError`/`ValueError`/`KeyError` et rend
+  une erreur SSE exploitable.
+- `cache_control` était validé par un jeton générique, qui acceptait
+  `{"type": "db-prod01"}`. Chaque sous-clé a maintenant la FORME de sa valeur ;
+  une forme inconnue est traversée en mode données.
+- Mots-clés JSON Schema 2020-12 substitués donc schéma cassé : `$anchor`,
+  `$dynamicAnchor`, `$dynamicRef`, `dependencies`, `dependentRequired`,
+  `dependentSchemas`.
+- **D3, inversion de la liste des deltas** : `_OPAQUE_DELTAS` était une liste
+  d'EXCLUSION, donc un futur `redacted_thinking_delta` aurait été modifié et sa
+  signature invalidée — panne dure. C'est maintenant une liste POSITIVE de
+  deltas à résoudre. D3 est verrouillée ; la restauration d'un delta inconnu ne
+  l'est pas : entre les deux, on protège l'invariant.
+- `walk_response` sur un corps JSON non-objet levait `TypeError` (500 non
+  structuré) → `ValueError`, rattrapée par le proxy · `message_start` et
+  `message_stop` sont restaurés · un `container` SCALAIRE est préservé, sinon
+  l'amont ne peut plus réutiliser le conteneur · le tampon SSE est borné à
+  16 Mio, au-delà le flux est déclaré invalide.
+
+**Non corrigé, assumé** : une coupure de chunk au milieu d'un `\r\n` peut
+laisser un `\n` en tête du bloc suivant — sans effet, `splitlines` ignore une
+ligne vide. Retenir le `\r` en attendant la suite ferait PERDRE le dernier bloc
+d'un flux se terminant par `\r\r` : le correctif était pire que le défaut.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

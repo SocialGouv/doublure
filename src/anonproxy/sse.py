@@ -47,6 +47,15 @@ def encode_sse(event: dict[str, Any]) -> bytes:
 _SEPARATEUR_BLOC = re.compile(r"(?>\r\n|\r|\n){2}")
 
 
+#: Aucun événement SSE légitime n'approche cette taille. Un amont qui n'émet
+#: jamais de séparateur ferait sinon croître le tampon sans fin.
+MAX_TAMPON = 16 * 1024 * 1024
+
+
+class FluxSSEInvalide(RuntimeError):
+    """Le flux amont ne ressemble pas à du SSE : on refuse de l'accumuler."""
+
+
 def iter_blocks(chunk: str, buffer: str) -> tuple[list[str], str]:
     """Découpe un flux SSE en blocs complets. Retourne (blocs, reste tamponné)."""
     buffer += chunk
@@ -54,6 +63,15 @@ def iter_blocks(chunk: str, buffer: str) -> tuple[list[str], str]:
     while (found := _SEPARATEUR_BLOC.search(buffer)):
         blocks.append(buffer[:found.start()])
         buffer = buffer[found.end():]
+    # Une coupure de chunk au milieu d'un `\r\n` peut laisser un `\n` en tête
+    # du bloc suivant. `parse_sse_block` s'appuie sur `splitlines`, qui ignore
+    # une ligne vide : sans effet. Retenir le `\r` en attendant la suite
+    # perdrait, lui, le dernier bloc d'un flux qui se termine par `\r\r`.
+    if len(buffer) > MAX_TAMPON:
+        raise FluxSSEInvalide(
+            f"aucun séparateur SSE après {len(buffer)} octets : flux amont "
+            "invalide, on refuse de continuer à accumuler"
+        )
     return blocks, buffer
 
 
