@@ -11,8 +11,10 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 7 : le HOOK est traité. L'agent walker/moteur du
-round 7 n'avait pas rendu au moment du commit — vérifier son rapport.**
+**Boucle en cours. Round 7 traité EN ENTIER (hook + walker). Round 8 à
+lancer : le round 7 a réécrit la réduction des expansions, l'expansion
+d'accolades au niveau du MOT, la propagation du drapeau `protocole` à l'entrée
+d'un schéma, et le vidage des accumulateurs SSE.**
 
 Leçon des rounds 6-7, à garder en tête : chaque fois que j'ai modélisé un
 mécanisme de bash par une approximation à UNE valeur (une alternative
@@ -36,12 +38,12 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**747 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**757 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 747
+uv run pytest tests/ --ignore=tests/egress   # 757
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session réelle + capture
@@ -176,7 +178,9 @@ restauration partielle acceptée.
   par `.venv/bin/python` direct (c'est ce que fait `run.sh`).
 - **Le détecteur doit être REDÉMARRÉ** après toute modification de
   `config/allowlist.txt` ou `config/custom_patterns.json` : la config est lue
-  au démarrage.
+  au démarrage. Le redémarrage prend ~2 min (chargement du modèle), et
+  `pkill -f wrapper/app.py` ne l'attrape pas — il tourne sous `uvicorn`.
+  Identifier le PID par le port 9000, puis `kill`.
 - **Deux régressions ont été attrapées par `phase3_e2e.sh`, pas par les tests
   unitaires** (503 en pleine session). Toujours rejouer l'E2E réel après une
   modification du moteur ou du coffre.

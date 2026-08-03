@@ -485,8 +485,12 @@ def _walk(
                 # HERITE : `mcp_servers[].tool_configuration.allowed_tools` est
                 # deux crans sous son conteneur. La propagation s'arrete aux
                 # frontieres de donnees — un `content` sous une racine de
-                # reponse ne devient PAS protocolaire.
-                protocole=protocole or key in PROTOCOL_CONTAINER_KEYS,
+                # reponse ne devient PAS protocolaire — et a l'entree d'un
+                # SCHEMA : `default`, `example`, `const` y portent des valeurs
+                # d'exemple, ou `name` et `id` sont des donnees, jamais des
+                # cles de routage.
+                protocole=False if entering_schema
+                else (protocole or key in PROTOCOL_CONTAINER_KEYS),
             )
         return out
 
@@ -523,6 +527,11 @@ def walk_request(body: dict[str, Any], sub: Substituter) -> dict[str, Any]:
     Un champ ajoute par l'API demain est donc pseudonymise par defaut, pas
     laisse en clair.
     """
+    if not isinstance(body, dict):
+        # `body.items()` levait `AttributeError`/`TypeError`, que le proxy ne
+        # rattrape pas : 500 non structure au lieu d'un refus lisible.
+        raise ValueError(f"corps de requete inattendu : {type(body).__name__}")
+
     out = dict(body)
 
     for key, value in body.items():
@@ -684,6 +693,12 @@ class SSERewriter:
             yield from self._on_block_stop(event)
 
         elif etype in ("message_delta", "error", "message_start", "message_stop"):
+            if etype in ("message_delta", "message_stop"):
+                # Le message se termine : ce qui reste dans les accumulateurs
+                # doit sortir AVANT. Vider en fin de flux seulement plaçait ces
+                # deltas APRES `message_stop` — hors protocole, donc ignorés en
+                # silence par le client, ou fatals selon son parseur.
+                yield from self.close()
             # Memes surfaces que walk_response hors `content` : l'echo de
             # `stop_sequence` et les messages d'erreur portent des substituts.
             out = dict(event)

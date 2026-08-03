@@ -779,3 +779,81 @@ def test_defaut15_un_json_accumule_sur_un_bloc_texte_n_est_pas_perdu():
                                       "partial_json": '{"h": "fake"}'}}))
     sortie += list(rw.feed({"type": "content_block_stop", "index": 0}))
     assert "vrai" in json.dumps(sortie)
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 16 — le drapeau « protocole » se propageait dans le SCHÉMA
+#
+# Posé par `tools`, il descendait jusqu'aux clés d'un `input_schema` autres que
+# `properties` : `default`, `example`, `const` portent des valeurs d'exemple, où
+# `name` et `id` sont des DONNÉES. Un schéma est structurel — aucun nom n'y est
+# une clé de routage.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("cle", ["default", "example", "examples", "const"])
+def test_defaut16_les_exemples_d_un_schema_sont_des_donnees(cle):
+    body = {"tools": [{
+        "name": "query", "description": "x",
+        "input_schema": {
+            "type": "object",
+            "properties": {"c": {"type": "string"}},
+            cle: {"id": "SECRET-HOST", "name": "SECRET-HOST"},
+        },
+    }]}
+    sortie = json.dumps(walk_request(body, marker_sub()))
+    assert "SECRET-HOST" not in sortie, f"{cle} : {sortie}"
+
+
+def test_defaut16_les_noms_de_routage_restent_verbatim():
+    """Le pendant : hors schéma, ces noms routent les appels d'outils."""
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {
+        "tools": [{"name": "query_db", "description": "x",
+                   "input_schema": {"type": "object"}}],
+        "tool_choice": {"type": "tool", "name": "query_db"},
+        "mcp_servers": [{"type": "url", "name": "infra", "url": "https://x/",
+                         "tool_configuration": {"allowed_tools": ["query_db"]}}],
+    }
+    out = walk_request(body, sabotage)
+    assert out["tools"][0]["name"] == "query_db"
+    assert out["tool_choice"]["name"] == "query_db"
+    assert out["mcp_servers"][0]["name"] == "infra"
+    assert out["mcp_servers"][0]["tool_configuration"]["allowed_tools"] == ["query_db"]
+
+
+def test_defaut16_les_accumulateurs_sont_vides_avant_la_fin_du_message():
+    """Émis APRÈS `message_stop`, ces deltas sont hors protocole : le client
+    les ignore en silence, ou son parseur tombe."""
+    from anthropic_walker import SSERewriter
+    sub = Substituter(to_surrogate=lambda s: s, surrogates={"fake": "vrai"})
+    rw = SSERewriter(sub)
+    sortie = []
+    for event in [
+        {"type": "content_block_start", "index": 0,
+         "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0,
+         "delta": {"type": "text_delta", "text": "vu fake"}},
+        # pas de `content_block_stop` : le bloc reste ouvert
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}},
+        {"type": "message_stop"},
+    ]:
+        sortie += list(rw.feed(event))
+    sortie += list(rw.close())
+
+    types = [e["type"] for e in sortie]
+    apres = types[types.index("message_stop"):]
+    assert "content_block_delta" not in apres, f"delta après message_stop : {types}"
+    # Le tampon de queue émet une partie du texte pendant le flux et le reste
+    # au vidage : plusieurs deltas sont NORMAUX. Ce qui compte est le texte
+    # reconstitué — ni perdu, ni dupliqué.
+    texte = "".join(e["delta"]["text"] for e in sortie
+                    if e["type"] == "content_block_delta"
+                    and e["delta"].get("type") == "text_delta")
+    assert texte == "vu vrai", f"texte reconstitué : {texte!r}"
+
+
+@pytest.mark.parametrize("corps", [[], None, 123, "texte"])
+def test_defaut16_un_corps_de_requete_non_objet_leve_une_erreur_rattrapee(corps):
+    with pytest.raises(ValueError):
+        walk_request(corps, marker_sub())

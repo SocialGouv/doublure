@@ -83,3 +83,15 @@ re:https?://platform\.claude\.com(/[\w./-]*)?
 re:https?://(www\.)?github\.com/(anthropics|modelcontextprotocol)(/[\w./-]*)?
 re:https?://(registry\.)?npmjs\.(org|com)(/[\w./-]*)?
 re:https?://pypi\.org(/[\w./-]*)?
+
+# --------------------------------------------------------------------------- #
+# Noms de FICHIERS dont l'extension coïncide avec un TLD. Le détecteur classe
+# `infra.md` en URL (`.md` = Moldavie) : tout fichier Markdown nommé dans un
+# prompt voit son extension muée en faux domaine, et l'agent ne retrouve plus
+# le fichier que l'opérateur lui a désigné. Mesuré sur `tests/phase3_e2e.sh`.
+#
+# N'y figurent QUE des extensions dont l'usage comme nom d'hôte interne est
+# invraisemblable. `.io`, `.ai`, `.dev`, `.app`, `.co`, `.sh` en sont
+# volontairement ABSENTS : ce sont des domaines réellement utilisés.
+# --------------------------------------------------------------------------- #
+re:[\w.-]+\.(md|markdown|txt|log|json|ya?ml|toml|ini|cfg|conf|sql|csv|tsv|lock|pdf|png|jpe?g|gif|svg|ico|zip|tar|gz|py|rb|java|kt|swift|rs|go|php|pl|lua|tf|tfvars|sum|mod|cs|vb|scala|clj|ex|exs|erl|hs|ml|r|jl|ipynb)

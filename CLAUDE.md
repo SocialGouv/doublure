@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**765 tests verts** (747 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**775 tests verts** (757 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -414,6 +414,31 @@ code donné EN LIGNE ; les formes parenthésées restent couvertes partout par
 
 **Attente de test corrigée** : `{env,foolong}` donne `env foolong`, qui EXÉCUTE
 `foolong` au lieu de déverser l'environnement — j'attendais un refus à tort.
+
+### Walker — round 7
+- **Le drapeau `protocole` se propageait dans le SCHÉMA.** Posé par `tools`, il
+  descendait jusqu'aux clés d'un `input_schema` autres que `properties` :
+  `default`, `example`, `const` portent des valeurs d'exemple, où `name` et
+  `id` sont des DONNÉES. Un schéma est structurel — aucun nom n'y est une clé
+  de routage. Encore une conséquence de mon correctif du round 6.
+- **`close()` émettait APRÈS `message_stop`** : ces deltas sont hors protocole,
+  donc ignorés en silence par le client ou fatals selon son parseur. Les
+  accumulateurs sont désormais vidés à l'arrivée de `message_delta`.
+- `walk_request` sur un corps non-objet levait `AttributeError`/`TypeError`,
+  que le proxy ne rattrape pas → `ValueError`.
+
+### Faux positif du DÉTECTEUR trouvé par l'E2E — déviation à valider par jo
+`tests/phase3_e2e.sh` a commencé à échouer par « limite de tours atteinte ».
+Cause : le détecteur classe `infra.md` en URL — `.md` est le TLD de la
+Moldavie. **Tout fichier Markdown nommé dans un prompt voyait son extension
+muée en faux domaine**, l'agent ne retrouvait plus le fichier désigné et
+brûlait ses tours à le chercher. `README.md`, `CLAUDE.md`, un plan : c'est
+constant dans un contexte d'agent.
+
+Ajouté à `config/allowlist.txt` : une regex couvrant les extensions dont
+l'usage comme nom d'hôte interne est invraisemblable. `.io`, `.ai`, `.dev`,
+`.app`, `.co` et `.sh` en sont volontairement ABSENTS — ce sont des domaines
+réellement utilisés. **Le détecteur doit être redémarré** après ce changement.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
