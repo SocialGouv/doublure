@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**669 tests verts** (651 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**733 tests verts** (715 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -337,6 +337,51 @@ Autres correctifs :
 laisser un `\n` en tête du bloc suivant — sans effet, `splitlines` ignore une
 ligne vide. Retenir le `\r` en attendant la suite ferait PERDRE le dernier bloc
 d'un flux se terminant par `\r\r` : le correctif était pire que le défaut.
+
+## Septième revue adversariale (2026-08-04, round 6)
+Encore des régressions de mes correctifs du round 5, dont une CRITIQUE.
+
+**Hook — l'expansion emportait le nom de la variable.** En réduisant
+`${VAR:-x}` à du vide, je supprimais le NOM : `echo ${AWS_SECRET_ACCESS_KEY:-x}`
+passait, alors que bash imprime la vraie valeur. Une expansion est désormais
+RÉDUITE à ce que bash en tire — `$VAR` pour les formes dérivées, le texte
+littéral pour `${VAR+texte}` (c'est ainsi que `${_+env}` reconstruit `env`).
+Ajouté au passage : l'expansion d'accolades (`{env,}`, `c{ur,ur}l`), qui
+reconstruit elle aussi un nom de commande.
+
+**Hook — le heredoc consommé par un pipeline.** `cat <<'FIN' | bash` exécute
+bien le corps : je ne regardais que la tête (`cat`). Ce qui SUIT le marqueur
+sur la même ligne compte aussi.
+
+**Hook — la famille `exec*`/`spawn*`.** Le `\b` de droite ratait `execvp`,
+`execlp`, `spawnl`, `pty.spawn`, `pcntl_exec`… La parenthèse est exigée pour
+ces formes, sinon le mot « execute » d'une phrase déclencherait l'analyse.
+
+**Hook — la grammaire des options d'enveloppe.** Un jeu global ne peut pas être
+juste : `nice -n 10` prend une valeur, `sudo -n` non. Sauter le token suivant
+faisait disparaître le programme réel (`sudo -n env`, `flock -w 5 /tmp/l env`).
+La table est maintenant PAR enveloppe.
+
+**Hook — les champs d'un outil MCP.** La liste blanche
+(`command`/`cmd`/`code`/`script`/`shell`/`args`) ratait `exec`, `program`,
+`bash_command`, `pipeline`… Toutes les valeurs sont inspectées, sauf `prompt`.
+
+**Walker — l'heuristique de nœud protocolaire était trop lâche.** Je déduisais
+« protocole » de la simple présence d'`input_schema` : or un serveur MCP renvoie
+ses définitions d'outils DANS un `tool_result`, où `name` et `id` sont des
+données. Le drapeau est désormais HÉRITÉ d'un conteneur de protocole, ce qui
+corrige aussi `mcp_servers[].tool_configuration.allowed_tools`, deux crans plus
+bas.
+
+**Faux positif trouvé par l'E2E, pas par une revue** : `D=$(ls …)` était REFUSÉ
+— une affectation n'exécute pas le résultat de la substitution. La session
+réelle a atteint sa limite de tours à force de réessayer, sans aucune fuite ni
+erreur d'API. C'est le troisième mode d'échec distinct que seul l'E2E révèle.
+
+**Fuite assumée ajoutée** : `mcp_servers[].tool_configuration.allowed_tools`
+reste verbatim. C'est un FILTRE évalué contre les noms exposés par le serveur
+MCP — le substituer casserait l'outil en silence. Même arbitrage que
+`tools[].name`.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

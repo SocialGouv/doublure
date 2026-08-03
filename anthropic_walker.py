@@ -346,12 +346,10 @@ PROTOCOL_CONTAINER_KEYS: frozenset[str] = frozenset(
     {"tools", "mcp_servers", "tool_choice"}
 )
 
-
-def _est_noeud_de_protocole(node: dict[str, Any]) -> bool:
-    btype = node.get("type")
-    if isinstance(btype, str) and btype in _TYPES_DE_PROTOCOLE:
-        return True
-    return "input_schema" in node or "tool_configuration" in node
+#: Listes de NOMS d'outils : elles doivent correspondre exactement à ce que le
+#: serveur MCP expose. Les substituer casse le filtre EN SILENCE — le modèle ne
+#: peut plus déclencher l'outil réel.
+TOOL_NAME_LISTS: frozenset[str] = frozenset({"allowed_tools", "disallowed_tools"})
 
 
 def _walk(
@@ -420,8 +418,13 @@ def _walk(
                     )
                     continue
 
-                contrat = key not in CONTRACT_KEYS or protocole \
-                    or _est_noeud_de_protocole(node)
+                # Un noeud est protocolaire s'il HERITE d'un conteneur de
+                # protocole, ou si son propre `type` en est un. Le deduire de
+                # la seule presence d'`input_schema` etait faux : un serveur
+                # MCP renvoie ses definitions d'outils DANS un `tool_result`,
+                # ou `name` et `id` sont des donnees.
+                contrat = key not in CONTRACT_KEYS or protocole or (
+                    isinstance(btype, str) and btype in _TYPES_DE_PROTOCOLE)
                 if key in SKIP_KEYS and contrat \
                         and not (key == "data" and texte_brut):
                     # Le saut ne vaut que pour un SCALAIRE protocolaire. Ces
@@ -432,6 +435,11 @@ def _walk(
                     if not isinstance(value, (dict, list)):
                         out[key] = value
                         continue
+
+                if protocole and key in TOOL_NAME_LISTS and isinstance(value, list) \
+                        and all(isinstance(item, str) for item in value):
+                    out[key] = value
+                    continue
 
             # Les noms de proprietes d'un schema sont un contrat avec le modele :
             # on preserve les cles et on traverse chaque definition. Teste AVANT
@@ -474,7 +482,11 @@ def _walk(
                 value, fn,
                 in_schema=entering_schema,
                 in_user_data=in_user_data or key in USER_DATA_KEYS,
-                protocole=key in PROTOCOL_CONTAINER_KEYS,
+                # HERITE : `mcp_servers[].tool_configuration.allowed_tools` est
+                # deux crans sous son conteneur. La propagation s'arrete aux
+                # frontieres de donnees — un `content` sous une racine de
+                # reponse ne devient PAS protocolaire.
+                protocole=protocole or key in PROTOCOL_CONTAINER_KEYS,
             )
         return out
 
@@ -780,7 +792,10 @@ class SSERewriter:
                     "delta": {"type": "text_delta", "text": resolved},
                 }
 
-        elif idx in self._json:
+        # `if` et non `elif` : un amont incoherent peut annoncer un bloc `text`
+        # puis envoyer des `input_json_delta` sur le meme index. Le JSON
+        # accumule etait alors perdu sans laisser de trace.
+        if idx in self._json:
             raw = "".join(self._json.pop(idx))
             payload = self._resolve_tool_args(raw)
             if payload:
@@ -791,6 +806,25 @@ class SSERewriter:
                 }
 
         yield event
+
+    def close(self) -> Iterator[dict[str, Any]]:
+        """Vide les accumulateurs restes ouverts en fin de flux.
+
+        Un `content_block_stop` dont l'`index` ne correspond a aucun bloc
+        laissait le tampon accroche : le texte deja accumule n'etait jamais
+        emis, et l'operateur perdait la fin du message SANS aucun signe.
+        """
+        for idx in list(self._text):
+            resolved, missing = self._text.pop(idx).flush()
+            self.unresolved.extend(missing)
+            if resolved:
+                yield {"type": "content_block_delta", "index": idx,
+                       "delta": {"type": "text_delta", "text": resolved}}
+        for idx in list(self._json):
+            payload = self._resolve_tool_args("".join(self._json.pop(idx)))
+            if payload:
+                yield {"type": "content_block_delta", "index": idx,
+                       "delta": {"type": "input_json_delta", "partial_json": payload}}
 
     def _resolve_tool_args(self, raw: str) -> str:
         """

@@ -162,7 +162,11 @@ def test_defaut4_surfaces_sortantes_non_enumerables():
         "mcp_servers": [{
             "type": "url", "name": "infra",
             "url": "https://mcp.SECRET-HOST/tools",
-            "tool_configuration": {"allowed_tools": ["query_on_SECRET-HOST"]},
+            # `allowed_tools` est un FILTRE évalué contre les noms réels du
+            # serveur MCP : le substituer casserait l'exposition de l'outil.
+            # Même fuite assumée que `tools[].name` — la valeur y est un nom de
+            # routage, pas une donnée (assertion dédiée plus bas).
+            "tool_configuration": {"allowed_tools": ["query_db"]},
         }],
         "container": {"image": "registry.SECRET-HOST/tools:1.0"},
     }
@@ -181,6 +185,9 @@ def test_defaut4_surfaces_sortantes_non_enumerables():
     assert out["context_management"] == body["context_management"]
     # le nom d'outil reste un contrat
     assert out["tool_choice"]["name"] == "query_db"
+    # `allowed_tools` aussi : c'est un filtre évalué contre les noms exposés
+    # par le serveur MCP, le substituer le casserait EN SILENCE.
+    assert out["mcp_servers"][0]["tool_configuration"]["allowed_tools"] == ["query_db"]
 
 
 def test_defaut5_reponse_restauree_hors_content():
@@ -720,3 +727,55 @@ def test_defaut14_le_tampon_sse_est_borne():
     from anonproxy.sse import MAX_TAMPON, FluxSSEInvalide, iter_blocks
     with pytest.raises(FluxSSEInvalide):
         iter_blocks("x" * (MAX_TAMPON + 1), "")
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 15 — `_est_noeud_de_protocole` déduisait le protocole de la simple
+# présence d'`input_schema`. Un serveur MCP renvoie ses définitions d'outils
+# DANS un `tool_result` : `name` et `id` y sont des données.
+# --------------------------------------------------------------------------- #
+
+
+def test_defaut15_une_definition_d_outil_en_donnee_est_substituee():
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": [
+            {"type": "tool_definition", "name": "SECRET-HOST", "id": "SECRET-HOST",
+             "description": "x", "input_schema": {"type": "object"}}]}]}]}
+    sortie = json.dumps(walk_request(body, marker_sub()))
+    assert "SECRET-HOST" not in sortie, sortie
+
+
+def test_defaut15_allowed_tools_est_herite_du_conteneur():
+    """Deux crans sous `mcp_servers` : le drapeau doit se propager."""
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {"mcp_servers": [{"type": "url", "name": "infra", "url": "https://x/",
+                             "tool_configuration": {"allowed_tools": ["query_db"]}}]}
+    out = walk_request(body, sabotage)["mcp_servers"][0]
+    assert out["tool_configuration"]["allowed_tools"] == ["query_db"]
+
+
+def test_defaut15_le_texte_reste_emis_apres_un_stop_d_index_inconnu():
+    """Le tampon restait accroché : l'opérateur perdait la fin du message."""
+    from anthropic_walker import SSERewriter
+    sub = Substituter(to_surrogate=lambda s: s, surrogates={"fake": "vrai"})
+    rw = SSERewriter(sub)
+    sortie = list(rw.feed({"type": "content_block_start", "index": 0,
+                           "content_block": {"type": "text", "text": ""}}))
+    sortie += list(rw.feed({"type": "content_block_delta", "index": 0,
+                            "delta": {"type": "text_delta", "text": "vu fake"}}))
+    sortie += list(rw.feed({"type": "content_block_stop", "index": 99}))
+    sortie += list(rw.close())
+    assert "vrai" in json.dumps(sortie)
+
+
+def test_defaut15_un_json_accumule_sur_un_bloc_texte_n_est_pas_perdu():
+    from anthropic_walker import SSERewriter
+    sub = Substituter(to_surrogate=lambda s: s, surrogates={"fake": "vrai"})
+    rw = SSERewriter(sub)
+    sortie = list(rw.feed({"type": "content_block_start", "index": 0,
+                           "content_block": {"type": "text", "text": ""}}))
+    sortie += list(rw.feed({"type": "content_block_delta", "index": 0,
+                            "delta": {"type": "input_json_delta",
+                                      "partial_json": '{"h": "fake"}'}}))
+    sortie += list(rw.feed({"type": "content_block_stop", "index": 0}))
+    assert "vrai" in json.dumps(sortie)

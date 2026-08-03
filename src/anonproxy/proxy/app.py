@@ -205,7 +205,13 @@ async def messages(request: Request):
 
         if upstream.headers.get("content-type", "").startswith("application/json"):
             sub_in = state.incoming()
-            restored, unresolved = walk_response(upstream.json(), sub_in)
+            try:
+                restored, unresolved = walk_response(upstream.json(), sub_in)
+            except (ValueError, json.JSONDecodeError) as exc:
+                # `walk_response` lève ValueError sur un corps qui n'est pas un
+                # objet, justement pour laisser le proxy décider. Sans ce
+                # rattrapage, le fail-closed devenait un 500 non structuré.
+                return _fail(502, "api_error", f"corps amont inexploitable : {exc}")
             _note_unresolved(state, unresolved)
             return JSONResponse(
                 status_code=upstream.status_code,
@@ -272,13 +278,18 @@ async def _stream(state: ProxyState, safe_body: dict[str, Any], headers: dict[st
                             continue
                         for out_event in rewriter.feed(event):
                             yield encode_sse(out_event)
+                # Un `content_block_stop` d'index inconnu laissait du texte
+                # accumulé sans jamais l'émettre.
+                for out_event in rewriter.close():
+                    yield encode_sse(out_event)
         except (httpx.HTTPError, FluxSSEInvalide) as exc:
             logger.error("flux amont interrompu : %s", exc)
             yield encode_sse({
                 "type": "error",
                 "error": {"type": "api_error", "message": f"flux interrompu : {exc}"},
             })
-        except (TypeError, AttributeError, ValueError, KeyError) as exc:
+        except (TypeError, AttributeError, ValueError, KeyError,
+                SurrogateCollisionError, VaultUnavailableError) as exc:
             # Un événement amont mal typé tuait la génératrice SANS rien
             # émettre : le client perdait le flux en silence. On remonte une
             # erreur SSE exploitable plutôt qu'une connexion coupée.

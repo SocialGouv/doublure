@@ -57,7 +57,11 @@ SENSITIVE_FILE_PATTERNS: tuple[str, ...] = (
     # `cat .env|xxd` et `cat .env;true` passaient.
     # `production.env`, `.env.local` et `.env-production` autant que `.env` :
     # le séparateur de variante est un point OU un tiret.
-    rf"[\w-]*\.env([.\-]{_GABARIT_ENV}[\w-]+)?($|[\s'\"|>;&)\],])",
+    # Les lookbehind écartent le CODE JavaScript (`process` + suffixe `env`,
+    # `import.meta` + suffixe) : ce n'est pas un fichier de secrets, et le
+    # bloquer refusait un simple `grep -r` dans des sources.
+    rf"[\w-]*(?<!process)(?<!\.meta)\.env([.\-]{_GABARIT_ENV}[\w-]+)?"
+    rf"($|[\s'\"|>;&)\],])",
     # `env.production` sans point initial (convention `env_file:` de Compose).
     # Le point APRÈS `env` est obligatoire, sinon `venv` et `python -m venv env`
     # correspondaient.
@@ -109,21 +113,37 @@ _SHELL_SOCKET_RE = re.compile(r"/dev/(tcp|udp)/", re.I)
 #: Syntaxes d'accès à l'environnement PROPRES à un langage. Volontairement
 #: précises : un `\bENV\b` générique bloquait `grep -r env src/`, `cat env.md`
 #: et `find . -name "*.env.example"` — l'agent ne pouvait plus travailler.
+#: Formes SIGILÉES : `%ENV`, `$ENV`, `@ENV`. Non ambiguës — elles désignent
+#: l'environnement partout où elles apparaissent.
 _INLINE_ENV_RE = re.compile(
-    r"(os\s*\.\s*(environ|getenv|putenv)|"
+    r"(?-i:[%@]_?ENV)\b|\$_?ENV\b|[%$@]_?ENV\s*[\[{]",
+    re.I,
+)
+
+#: Formes propres à un LANGAGE. Elles ne comptent que si un interpréteur reçoit
+#: son programme EN LIGNE : `grep -r process.env src/` cherche du texte dans des
+#: sources, il n'exécute rien.
+_CODE_ENV_RE = re.compile(
+    r"os\s*\.\s*(environ|getenv|putenv)|"
     # `process["env"]` vaut `process.env` ; les quotes sont déjà retirées.
     r"process\s*(\.\s*env\b|\[\s*env\s*\])|"
     # `from os import environ`, `getattr(os, "environ")` : l'attribut littéral
     # n'apparaît jamais, seul le nom importé ou déréférencé.
     r"from\s+os\s+import\s+[\w\s,]*\benviron\b|"
     r"getattr\s*\(\s*os\s*,\s*environ|"
-    r"[%$@]_?ENV\s*[\[{]|\$_?ENV\b|"
-    # `perl -e 'print keys %ENV'` et `awk 'BEGIN{for(k in ENVIRON)…}'` déversent
-    # tout sans indexer. Casse SIGNIFICATIVE ici : `environ` minuscule est un
-    # mot courant, `ENVIRON` majuscule est la table d'awk.
-    r"(?-i:[%@]_?ENV)\b|(?-i:\bENVIRON\b)|"
+    # Casse SIGNIFICATIVE : `environ` minuscule est un mot courant, `ENVIRON`
+    # majuscule est la table d'awk. Ruby n'a ni sigil ni `ENVIRON` : `ENV[…]`,
+    # `ENV.fetch(…)`, ou `p ENV` tout court.
+    r"(?-i:\bENVIRON\b)|(?-i:\bENV\b)(?=\s*[\[.)\]]|\s*$)|"
     r"\barray\s+get\s+env\b|"
-    r"Sys\.getenv|System\.getenv|\bgetenv\s*\()",
+    r"Sys\.getenv|System\.getenv|\bgetenv\s*\(",
+    re.I,
+)
+
+#: Interpréteur recevant son programme en ligne : ce qui suit est du CODE.
+_INTERPRETE_EN_LIGNE = re.compile(
+    r"\b(python3?|perl|ruby|node|deno|bun|php|lua|tclsh|Rscript|julia|"
+    r"awk|gawk|mawk|pwsh|powershell)\b[^|;&]*?\s-(e|c|r|E|P)\b|\bawk\b[^|;&]*BEGIN",
     re.I,
 )
 
@@ -135,12 +155,16 @@ _NESTED_RE = re.compile(
     r"\$\((?P<sub>[^()]*)\)"
     r"|`(?P<bt>[^`]*)`"
     r"|[<>]\((?P<proc>[^()]*)\)"
-    r"|\b(?:system|shell_exec|passthru|popen|Popen|execSync|spawnSync|exec|qx|"
-    r"os\.execute|IO\.popen|subprocess\.(?:run|call|check_output|check_call|Popen)|"
-    r"check_output|check_call|getoutput|getstatusoutput)"
+    # `exec\w*` et `spawn\w*` : le `\b` de droite ratait `execvp`, `execlp`,
+    # `spawnl`, `spawnSync`… La parenthèse est EXIGÉE ici (c'est un appel),
+    # sinon le mot « execute » d'une phrase déclencherait l'analyse.
+    r"|\b(?:system|shell_exec|passthru|popen|Popen|exec\w*|spawn\w*|fork|qx|"
+    r"proc_open|pcntl_exec|posix_spawn\w*|Open3\.\w+|pty\.spawn|"
+    r"os\.(?:execute|exec\w*|spawn\w*|popen)|IO\.popen|child_process\.\w+|"
+    r"subprocess\.\w+|check_output|check_call|getoutput|getstatusoutput)"
     # un niveau de parenthèses toléré : `run(("env",))` est un tuple, et
     # l'inversion `[]` → `()` suffisait à sortir de la classe de caractères.
-    r"\s*\(\s*[\[(]?(?P<appel>[^()\[\]]*)[\])]?\s*,?\s*\)",
+    r"\s*\(\s*[\[(]?(?P<appel>[^()]*?)[\])]?\s*,?\s*\)",
     re.I,
 )
 
@@ -333,6 +357,28 @@ def allow() -> dict:
     return {}
 
 
+#: Expansion de paramètre à opérateur : `${VAR:-def}`, `${VAR##x}`, `${#VAR}`…
+_EXPANSION_RE = re.compile(r"\$\{(?P<pre>#?)(?P<nom>[A-Za-z_]\w*)(?P<reste>[^}]*)\}")
+
+#: Expansion d'accolades sans variable : `{env,}`, `{p,}rintenv`, `c{ur,ur}l`.
+_ACCOLADES_RE = re.compile(r"\{(?P<alts>[^{}$\s]*,[^{}$\s]*)\}")
+
+
+def _reduire_expansion(m: re.Match[str]) -> str:
+    """Ce que bash tire d'une expansion, sans jamais perdre le nom de variable."""
+    nom, reste = m.group("nom"), m.group("reste")
+    if not reste and not m.group("pre"):
+        return m.group(0)  # `${VAR}` simple : inchangé
+    # `${VAR+texte}` et `${VAR:+texte}` valent le TEXTE littéral quand VAR est
+    # définie — et `_` ou `PATH` le sont toujours : c'est ainsi que `${_+env}`
+    # reconstruit `env`.
+    if reste.startswith(":+"):
+        return reste[2:]
+    if reste.startswith("+"):
+        return reste[1:]
+    return f"${nom}"  # toute autre forme dérive de la VALEUR de la variable
+
+
 def normalize(command: str) -> str:
     """Neutralise les échappements du shell avant toute analyse.
 
@@ -352,10 +398,17 @@ def normalize(command: str) -> str:
     # SÉPARATEUR : les remplacer par du vide souderait `env${IFS}printenv` en
     # un seul mot inexistant, et les deux programmes disparaîtraient.
     out = re.sub(r"\$\{IFS[^}]*\}", " ", command)
-    # Les autres expansions à opérateur s'évaluent à VIDE (`e${_+}nv` → `env`)
-    # et ne servent qu'à découper un nom de commande. `!` est exclu :
-    # `${!nom}` doit rester visible pour le contrôle des références indirectes.
-    out = re.sub(r"\$\{[^}!]*[-+:?#%/^,=@][^}]*\}", "", out)
+    # Les autres expansions à opérateur sont RÉDUITES à ce que bash en tire,
+    # jamais supprimées : les effacer emportait le NOM de la variable, et
+    # `echo ${AWS_SECRET_ACCESS_KEY:-x}` passait alors qu'il imprime la vraie
+    # valeur. `${!nom}` est exclu — il reste visible pour le contrôle des
+    # références indirectes.
+    out = _EXPANSION_RE.sub(_reduire_expansion, out)
+    # `{env,}`, `{p,}rintenv`, `c{ur,ur}l` : l'expansion d'accolades reconstruit
+    # un nom de commande. On garde l'alternative la plus longue, celle qui
+    # porte le mot ({,env} comme {env,}).
+    out = _ACCOLADES_RE.sub(
+        lambda m: max(m.group("alts").split(","), key=len), out)
     # Une référence collée AU MILIEU d'un mot ne sert qu'à le découper —
     # y compris sous forme indirecte (`e${!q}nv`).
     out = re.sub(r"(?<=\w)\$\{!?[A-Za-z_]\w*\}(?=\w)", "", out)
@@ -394,15 +447,42 @@ _WRAPPERS = frozenset({
     "zsh", "ksh", "dash", "watch", "script", "busybox", "toybox",
     "setsid", "chroot", "unshare", "nsenter", "flock", "parallel",
     "su", "runuser", "machinectl", "systemd-run", "proot", "fakeroot",
-    "strace", "ltrace",
+    "strace", "ltrace", "expect", "pwsh", "powershell",
     "do", "then", "else", "elif", "while", "until", "if", "for",
 })
 
 #: Options d'enveloppe dont la valeur occupe le token SUIVANT. Sans elles,
 #: `sudo -u root env` faisait passer `root` pour le programme et `env`
 #: n'était jamais examiné. `-c` en est exclu : sa valeur EST la commande.
-_OPT_AVEC_VALEUR = frozenset({"-u", "--user", "-g", "--group", "-n", "-I", "-t",
-                              "--timeout", "--unset"})
+#: PAR ENVELOPPE : un jeu global ne peut pas être juste. `nice -n 10` prend une
+#: valeur, `sudo -n` (non interactif) n'en prend pas — et sauter le token
+#: suivant faisait disparaître le programme réel.
+_OPT_AVEC_VALEUR: dict[str, frozenset[str]] = {
+    "sudo": frozenset({"-u", "--user", "-g", "--group", "-p", "--prompt",
+                       "-h", "--host", "-R", "--chroot", "-U", "--other-user",
+                       "-D", "--chdir", "-C", "--close-from", "-r", "--role",
+                       "-T", "--command-timeout"}),
+    "doas": frozenset({"-u", "-C"}),
+    "su": frozenset({"-s", "--shell", "-g", "--group"}),
+    "runuser": frozenset({"-u", "--user", "-g", "--group", "-s", "--shell"}),
+    "xargs": frozenset({"-a", "--arg-file", "-d", "--delimiter", "-E", "E",
+                        "-I", "--replace", "-L", "-n", "--max-args",
+                        "-P", "--max-procs", "-s", "--max-chars"}),
+    "nice": frozenset({"-n", "--adjustment"}),
+    "ionice": frozenset({"-c", "--class", "-n", "--classdata", "-p", "--pid"}),
+    "timeout": frozenset({"-k", "--kill-after", "-s", "--signal"}),
+    "flock": frozenset({"-w", "--timeout", "-E", "--conflict-exit-code"}),
+    "chroot": frozenset({"--userspec", "--groups"}),
+    "nsenter": frozenset({"-t", "--target", "-S", "--setuid", "-G", "--setgid"}),
+    "unshare": frozenset({"-S", "--map-user", "-G", "--map-group"}),
+    "stdbuf": frozenset({"-i", "-o", "-e"}),
+    "env": frozenset({"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}),
+    "systemd-run": frozenset({"-p", "--property", "-u", "--unit"}),
+    "strace": frozenset({"-o", "--output", "-E", "-P", "-s"}),
+    "ltrace": frozenset({"-o", "--output", "-e", "-l"}),
+    "watch": frozenset({"-n", "--interval"}),
+    "parallel": frozenset({"-j", "--jobs", "-S"}),
+}
 
 #: Enveloppes dont le premier argument est une CIBLE (répertoire, verrou),
 #: pas le programme.
@@ -432,13 +512,17 @@ def _program_positions(tokens: list[str]) -> list[int]:
         if tok in ("-exec", "-execdir", "-ok", "-okdir") and i + 1 < len(tokens):
             positions += [i + 1 + j for j in _program_positions(tokens[i + 1:])]
     i = 0
+    enveloppe = ""  # dernière enveloppe dépliée : ses options ont leur grammaire
     while i < len(tokens):
         tok = tokens[i]
         if tok.startswith("-"):
-            i += 2 if tok in _OPT_AVEC_VALEUR else 1
+            i += 2 if tok in _OPT_AVEC_VALEUR.get(enveloppe, frozenset()) else 1
             continue
         if "=" in tok or _DUREE_RE.fullmatch(tok):
-            i += 1
+            # `D=$(ls)` : le token suivant est la VALEUR de l'affectation, pas
+            # un programme. Sans ça, la substitution retirée laissait son
+            # marqueur en position de programme et l'affectation était refusée.
+            i += 2 if tok.endswith("=") else 1
             continue
         base = _basename(tok)
         if base == "command" and any(t in ("-v", "-V") for t in tokens[i + 1:]):
@@ -446,10 +530,14 @@ def _program_positions(tokens: list[str]) -> list[int]:
         positions.append(i)
         if base not in _WRAPPERS:
             break  # premier programme réel atteint : la suite, ce sont ses arguments
+        enveloppe = base
         i += 1
         if base in _WRAPPERS_AVEC_CIBLE:
+            # la CIBLE (verrou, répertoire) n'est pas le programme ; les
+            # options qui la précèdent peuvent elles-mêmes prendre une valeur
+            options = _OPT_AVEC_VALEUR.get(base, frozenset())
             while i < len(tokens) and tokens[i].startswith("-"):
-                i += 1
+                i += 2 if tokens[i] in options else 1
             i += 1
     # `su root -c env` : l'utilisateur occupe la position de programme et
     # arrêtait l'analyse ; la valeur de `-c` est pourtant une commande.
@@ -553,21 +641,24 @@ _OPT_LIT_UN_FICHIER_RE = re.compile(r"--(files0-from|reference)\b")
 
 #: Sous-commandes d'`openssl` purement locales : chiffrement, empreinte, tirage
 #: aléatoire. Rien n'y sort sur le réseau — contrairement à `s_client`.
-_OPENSSL_LOCAL = frozenset({
-    "passwd", "rand", "dgst", "enc", "x509", "req", "genrsa", "genpkey",
-    "pkey", "rsa", "ec", "version", "base64", "sha256", "md5", "cms", "pkcs12",
-})
+#: Inversé en DENYLIST : `openssl` a des dizaines de sous-commandes locales
+#: (`help`, `list`, `ciphers`, `asn1parse`, `verify`, `dhparam`…) et en
+#: énumérer la liste blanche revenait à refuser du travail légitime.
+_OPENSSL_RESEAU = frozenset({"s_client", "s_server", "s_time", "ocsp"})
+
+#: Sorties d'AIDE : elles n'ouvrent aucune connexion.
+_OPT_AIDE = frozenset({"--version", "-V", "--help", "-h", "--manual", "help"})
 
 
 def _est_usage_local(base: str, suite: list[str]) -> bool:
     """Invocation d'un binaire réseau qui n'ouvre aucune connexion."""
     hors_options = [t for t in suite if not t.startswith("-")]
-    # `--version` ne vaut que SEUL : `curl --version http://tiers/` désarmait
-    # le contrôle alors que le comportement dépend entièrement du binaire.
-    if not hors_options and any(t in ("--version", "-V") for t in suite):
+    # Une option d'aide ne vaut que SEULE : `curl --version http://tiers/`
+    # désarmait le contrôle alors que le comportement dépend du binaire.
+    if not hors_options and any(t in _OPT_AIDE for t in suite):
         return True
     if base == "openssl":
-        return bool(hors_options) and hors_options[0] in _OPENSSL_LOCAL
+        return bool(hors_options) and hors_options[0] not in _OPENSSL_RESEAU
     return False
 
 
@@ -599,7 +690,8 @@ _HEREDOC_CITE_RE = re.compile(
 _INTERPRETES = frozenset({
     "sh", "bash", "zsh", "ksh", "dash", "python", "python3", "perl", "ruby",
     "node", "deno", "bun", "php", "lua", "tclsh", "awk", "gawk", "mawk",
-    "Rscript", "julia", "psql", "mysql", "sqlite3",
+    "Rscript", "julia", "psql", "mysql", "sqlite3", "expect", "swift",
+    "pwsh", "powershell",
 })
 
 
@@ -612,7 +704,11 @@ def _neutralise_heredocs(command: str) -> str:
     """
     def _remplace(m: re.Match[str]) -> str:
         tete = re.split(r"[|;&\n]", command[:m.start()])[-1]
-        if {_basename(t) for t in tete.split()} & _INTERPRETES:
+        # Ce qui SUIT le marqueur sur la même ligne consomme le corps :
+        # `cat <<'FIN' | bash` exécute bel et bien ce que le heredoc contient,
+        # et ne regarder que la tête (`cat`) le rendait invisible.
+        suite = m.group("corps").split("\n", 1)[0]
+        if {_basename(t) for t in f"{tete} {suite}".split()} & _INTERPRETES:
             return m.group(0)  # le corps EST exécuté : on le garde
         return f"<<{m.group('mark')}\n{m.group('mark')}\n"
 
@@ -635,7 +731,9 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
         return "socket ouverte par le shell (/dev/tcp) : contourne le proxy (D9)"
     if _INLINE_NETWORK_RE.search(normalized):
         return "appel réseau embarqué dans un interpréteur : contourne le proxy (D9)"
-    if _INLINE_ENV_RE.search(normalized):
+    if _INLINE_ENV_RE.search(normalized) or (
+            _INTERPRETE_EN_LIGNE.search(normalized)
+            and _CODE_ENV_RE.search(normalized)):
         return "lecture de l'environnement depuis un interpréteur"
     if _variable_sensible(normalized):
         return "lecture d'une variable d'environnement porteuse de secret"
@@ -757,16 +855,15 @@ def evaluate(event: dict) -> tuple[dict, str | None]:
         # `mcp__x__shell {"cmd": "env"}` contournait toute la politique.
         text = _payload_text(payload)
         reason = check_vault_access(text) or check_sensitive_files(text)
-        # `prompt` en est ABSENT à dessein : c'est de la prose, et l'analyser
-        # comme une commande refusait tout texte contenant des backticks
-        # markdown — pris pour des substitutions. Le sous-agent qu'il pilote a
-        # son propre PreToolUse : ses commandes sont gardées à l'exécution.
-        # Le contenu du prompt reste soumis aux contrôles ci-dessus (coffre,
-        # fichiers sensibles), qui portent sur TOUTE la charge.
+        # Le nom du champ n'est pas prévisible (`exec`, `program`,
+        # `bash_command`, `pipeline`…) : une liste blanche en ratait la
+        # moitié. On inspecte TOUTES les valeurs, sauf `prompt` — c'est de la
+        # prose, et l'analyser comme une commande refusait tout texte contenant
+        # des backticks markdown. Le sous-agent qu'un prompt pilote a son
+        # propre PreToolUse : ses commandes sont gardées à l'exécution.
         if reason is None and isinstance(payload, dict):
-            for champ in ("command", "cmd", "code", "script", "shell", "args"):
-                valeur = payload.get(champ)
-                if valeur is None:
+            for champ, valeur in payload.items():
+                if champ == "prompt" or valeur is None:
                     continue
                 reason = check_bash(_payload_text(valeur))
                 if reason:
