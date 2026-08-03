@@ -588,7 +588,39 @@ def _metadata_seule(command: str) -> bool:
         _basename(commandes[0][i]) in _METADATA_PROGRAMS for i in positions)
 
 
+#: Corps d'un heredoc CITÉ (`<<'FIN'`) : bash n'y interprète ni substitution
+#: ni variable. C'est de la DONNÉE — sauf s'il alimente un interpréteur, qui
+#: l'exécute.
+_HEREDOC_CITE_RE = re.compile(
+    r"<<-?\s*(['\"])(?P<mark>[A-Za-z_]\w*)\1(?P<corps>.*?)^\s*(?P=mark)\s*$",
+    re.S | re.M,
+)
+
+_INTERPRETES = frozenset({
+    "sh", "bash", "zsh", "ksh", "dash", "python", "python3", "perl", "ruby",
+    "node", "deno", "bun", "php", "lua", "tclsh", "awk", "gawk", "mawk",
+    "Rscript", "julia", "psql", "mysql", "sqlite3",
+})
+
+
+def _neutralise_heredocs(command: str) -> str:
+    """Retire le corps des heredocs cités qui ne sont pas exécutés.
+
+    L'analyser comme du code refusait tout texte contenant des backticks
+    markdown — pris pour des substitutions — alors que `cat <<'FIN' > f` ne
+    fait qu'écrire un fichier.
+    """
+    def _remplace(m: re.Match[str]) -> str:
+        tete = re.split(r"[|;&\n]", command[:m.start()])[-1]
+        if {_basename(t) for t in tete.split()} & _INTERPRETES:
+            return m.group(0)  # le corps EST exécuté : on le garde
+        return f"<<{m.group('mark')}\n{m.group('mark')}\n"
+
+    return _HEREDOC_CITE_RE.sub(_remplace, command)
+
+
 def check_bash(command: str, _profondeur: int = 0) -> str | None:
+    command = _neutralise_heredocs(command)
     if (reason := check_vault_access(command)):
         return reason
     if not _metadata_seule(command) and (reason := check_sensitive_files(command)):
@@ -725,8 +757,14 @@ def evaluate(event: dict) -> tuple[dict, str | None]:
         # `mcp__x__shell {"cmd": "env"}` contournait toute la politique.
         text = _payload_text(payload)
         reason = check_vault_access(text) or check_sensitive_files(text)
+        # `prompt` en est ABSENT à dessein : c'est de la prose, et l'analyser
+        # comme une commande refusait tout texte contenant des backticks
+        # markdown — pris pour des substitutions. Le sous-agent qu'il pilote a
+        # son propre PreToolUse : ses commandes sont gardées à l'exécution.
+        # Le contenu du prompt reste soumis aux contrôles ci-dessus (coffre,
+        # fichiers sensibles), qui portent sur TOUTE la charge.
         if reason is None and isinstance(payload, dict):
-            for champ in ("command", "cmd", "code", "script", "shell", "args", "prompt"):
+            for champ in ("command", "cmd", "code", "script", "shell", "args"):
                 valeur = payload.get(champ)
                 if valeur is None:
                     continue

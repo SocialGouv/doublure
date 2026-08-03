@@ -526,3 +526,58 @@ def test_la_forme_courte_org_depot_ne_vaut_que_pour_un_depot():
 def test_nom_de_query_sans_valeur_ou_encode_est_substitue(tmp_path, url, reel):
     sortie = engine(tmp_path).substitute_value("URL", url)
     assert reel not in sortie, f"identifiant laissé dans un nom de query : {sortie!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Round 5 — `_strip_userinfo` ne traitait que les URL à schéma. La forme SSH
+# `user:jeton@hôte:chemin` porte les mêmes identifiants et les faisait entrer
+# dans la clé du coffre (D4).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("url, secret", [
+    ("oauth2:ghp_JetonSynthetique12345@github.com:mon-org/depot", "ghp_JetonSynthetique12345"),
+    ("admin:MotDePasseSynth2@github.com:projet/depot", "MotDePasseSynth2"),
+])
+def test_les_identifiants_ssh_n_entrent_pas_dans_le_coffre(url, secret):
+    from anonproxy.surrogates.canonical import _strip_userinfo
+    assert secret not in _strip_userinfo(url)
+    assert "github.com" in _strip_userinfo(url), "l'hôte doit survivre au nettoyage"
+
+
+def test_une_forme_ssh_sans_identifiants_reste_intacte():
+    from anonproxy.surrogates.canonical import _strip_userinfo
+    assert _strip_userinfo("github.com:org/depot") == "github.com:org/depot"
+
+
+@pytest.mark.parametrize("url, attendu", [
+    # La reconnaissance de l'hôte était sensible à la casse alors que
+    # `_extract_repo` ne l'est plus : l'URL retombait sur la forme courte
+    # `org/dépôt`, que le modèle lit comme un dépôt local (D1).
+    ("https://GitHub.com/Acme/PaymentsAPI", "https://github.com/"),
+    ("http://github.com/acme/repo", "http://github.com/"),
+    ("https://github.com/acme/repo", "https://github.com/"),
+    ("git@github.com:acme/repo.git", "git@github.com:"),
+])
+def test_la_forme_de_l_url_de_depot_est_preservee(tmp_path, url, attendu):
+    assert engine(tmp_path).substitute_value("URL", url).startswith(attendu)
+
+
+@pytest.mark.parametrize("span", [
+    {"type": "HOSTNAME", "start": 0, "end": 4, "score": None},
+    {"start": 0, "end": 4, "score": 0.9},                      # type absent
+    {"type": "HOSTNAME", "start": 0, "end": 4, "score": True},  # bool ≠ score
+    {"type": ["HOSTNAME"], "start": 0, "end": 4, "score": 0.9},
+])
+def test_un_span_mal_forme_leve_une_erreur_rattrapee(tmp_path, span):
+    """`TypeError`/`KeyError` ne sont PAS rattrapés par le proxy : 500 non
+    structuré et session interrompue, au lieu du fail-closed prévu."""
+    with pytest.raises(ValueError):
+        engine(tmp_path).transform("abcd", [span])
+
+
+@pytest.mark.parametrize("valeur", ["sha256:", "md5:", "sha1:"])
+def test_un_prefixe_de_hash_sans_corps_ne_bloque_pas_la_requete(tmp_path, valeur):
+    """Le substitut valait le réel, les 64 tentatives échouaient → 503."""
+    sortie = engine(tmp_path).substitute_value("HASH", valeur)
+    assert sortie.startswith(valeur) and len(sortie) > len(valeur)

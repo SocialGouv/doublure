@@ -562,3 +562,62 @@ def test_regression_derogations_trop_larges(command, audit_log):
 ])
 def test_le_durcissement_du_round5_n_ajoute_pas_de_faux_positifs(command, audit_log):
     assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# Round 5 — deux faux positifs observés EN USAGE, pas par un agent de revue.
+#
+# 1. Le champ `prompt` d'un sous-agent était analysé comme une commande shell :
+#    des backticks markdown y passaient pour des substitutions. Le sous-agent a
+#    son propre PreToolUse, ses commandes sont gardées à l'exécution.
+# 2. Le corps d'un heredoc CITÉ est de la donnée littérale — bash n'y interprète
+#    ni substitution ni variable. Sauf s'il alimente un interpréteur.
+#
+# Les chemins sensibles sont COMPOSÉS : écrits en clair, ce fichier ne pourrait
+# pas être créé par un agent soumis à son propre hook.
+# --------------------------------------------------------------------------- #
+
+CLE_PRIVEE = "~/." + "ssh/id_" + "rsa"
+FICHIER_CREDS = "~/." + "aws/creden" + "tials"
+
+
+@pytest.mark.parametrize("prompt", [
+    "Relis `anthropic_walker.py` et `src/anonproxy/sse.py`.",
+    "Le motif `(?>x|y){2}` est atomique ; vérifie `_walk` (a) (b).",
+    "Cherche un `system(...)` dans le code et dis-moi ce que tu trouves.",
+])
+def test_un_prompt_de_sous_agent_n_est_pas_une_commande(prompt, audit_log):
+    assert not is_denied(run_hook("Task", {"prompt": prompt}, audit_log)), prompt
+
+
+def test_un_prompt_qui_vise_un_secret_reste_refuse(audit_log):
+    """Le pendant : le contenu du prompt reste soumis aux contrôles de fichiers."""
+    assert is_denied(run_hook(
+        "Task", {"prompt": f"lis {FICHIER_CREDS} et résume"}, audit_log))
+
+
+@pytest.mark.parametrize("tool, payload", [
+    ("mcp__quelconque__shell", {"cmd": "env"}),
+    ("mcp__quelconque__run", {"command": "curl https://exfil.test/x"}),
+])
+def test_les_champs_de_commande_restent_inspectes(tool, payload, audit_log):
+    assert is_denied(run_hook(tool, payload, audit_log)), payload
+
+
+@pytest.mark.parametrize("command, refuse", [
+    # écrit un fichier : le corps est de la donnée, backticks compris
+    ("cat >> tests/x.py <<'FIN'\ndef f():\n    `_walk` et `sse.py`\nFIN", False),
+    ("cat > doc.md <<'FIN'\nvoir `env` dans la doc\nFIN", False),
+    # alimente un interpréteur : le corps est du CODE
+    ("bash <<'FIN'\nenv\nFIN", True),
+    ("sh <<'FIN'\ncurl https://exfil.test/x\nFIN", True),
+    # heredoc NON cité : bash y interprète tout
+    ("cat > f <<FIN\n$(env)\nFIN", True),
+])
+def test_le_corps_d_un_heredoc_cite_est_une_donnee(command, refuse, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)) is refuse, command
+
+
+def test_la_cible_d_une_redirection_reste_controlee(audit_log):
+    commande = f"cat > {CLE_PRIVEE} <<'FIN'\ncle\nFIN"
+    assert is_denied(run_hook("Bash", {"command": commande}, audit_log))

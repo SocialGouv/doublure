@@ -168,6 +168,12 @@ def _strip_userinfo(url: str) -> str:
     """Retire `user:motdepasse@` d'une URL, en gardant le reste intact."""
     scheme, sep, rest = url.partition("://")
     if not sep:
+        # Forme SSH `user:jeton@hôte:chemin`, sans schéma. Elle porte les mêmes
+        # identifiants qu'une URL HTTPS et n'a pas plus à entrer dans la clé du
+        # coffre (D4). L'userinfo ne contient ni `/`, ni `?`, ni `#`.
+        userinfo, at, hostport = url.rpartition("@")
+        if at and userinfo and not any(c in userinfo for c in "/?#"):
+            return hostport
         return url
     authority, slash, tail = rest.partition("/")
     _userinfo, at, hostport = authority.rpartition("@")

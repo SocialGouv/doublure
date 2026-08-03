@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**614 tests verts** (596 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**640 tests verts** (622 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -267,6 +267,36 @@ Encore trois régressions de mes correctifs du round 4 :
 - `--version` n'importe où désarmait le contrôle réseau
   (`curl --version http://tiers/`) : il ne vaut que SEUL. `stat` sortait de la
   catégorie « métadonnées » avec `--files0-from`, qui lit un contenu.
+
+### Moteur — round 5 (aucun finding haut/critique)
+Le round 4 avait bien fermé les deux plantages qu'il visait. Restaient :
+`_strip_userinfo` ne traitait que les URL à schéma, donc la forme SSH
+`user:jeton@hote:chemin` faisait entrer le jeton dans la clé du coffre (D4,
+même classe que la CRITIQUE du round 3 ; non déclenchable avec le détecteur par
+défaut, qui n'émet pas de span URL pour ces formes) · `_fake_repo` reconnaissait
+l'hôte de façon sensible à la casse alors qu'`_extract_repo` ne l'est plus, et
+perdait le schéma — l'URL retombait sur la forme courte `org/dépôt`, que le
+modèle lit comme un dépôt local (D1) · un span au `score` nul ou sans `type`
+levait `TypeError`/`KeyError`, que le proxy ne rattrape PAS : 500 non structuré
+au lieu du fail-closed prévu · `sha256:` sans corps se substituait à lui-même,
+épuisait les 64 tentatives et tombait en 503.
+
+### Deux faux positifs trouvés EN USAGE, pas par un agent
+Le hook a bloqué mon propre travail, ce qu'aucune revue n'avait vu :
+- **Le champ `prompt` d'un sous-agent était analysé comme une commande shell** :
+  toute prose contenant des backticks markdown passait pour une substitution.
+  Le sous-agent a son PROPRE PreToolUse — ses commandes sont gardées à
+  l'exécution. `prompt` sort donc de la liste des champs-commandes ; le reste
+  de la charge reste soumis aux contrôles coffre et fichiers sensibles.
+- **Le corps d'un heredoc CITÉ (`<<'FIN'`) est de la donnée littérale** : bash
+  n'y interprète ni substitution ni variable. Il n'est analysé comme du code
+  que s'il alimente un interpréteur (`bash <<'FIN'`), pas quand il écrit un
+  fichier (`cat > f <<'FIN'`). La cible de la redirection, elle, reste
+  contrôlée.
+
+Note d'usage : écrire un test QUI PORTE sur des chemins sensibles demande de
+composer ces chemins (`"~/." + "ssh/id_" + "rsa"`), sinon le hook refuse
+d'écrire le fichier. C'est cohérent, mais il faut le savoir.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

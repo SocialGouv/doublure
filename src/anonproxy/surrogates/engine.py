@@ -199,6 +199,17 @@ class SurrogateEngine:
                     f"span invalide {start}:{end} pour un texte de {len(text)} "
                     f"caractères (type={span.get('type')!r})"
                 )
+            # Le type et le score alimentent l'arbitrage : un `None` ou une clé
+            # absente y lève `TypeError`/`KeyError`, que le proxy ne rattrape
+            # pas — 500 non structuré et session interrompue au lieu du
+            # fail-closed prévu.
+            if not isinstance(span.get("type"), str) \
+                    or not isinstance(span.get("score", 0.0), (int, float)) \
+                    or isinstance(span.get("score", 0.0), bool):
+                raise ValueError(
+                    f"span mal formé : type={span.get('type')!r} "
+                    f"score={span.get('score')!r}"
+                )
 
         kept = resolve_overlaps(spans)
         out = text
@@ -409,13 +420,18 @@ class SurrogateEngine:
         org = self._fake_org(canon.attrs["org"])
         name = self._fake_repo_name(canon.attrs["name"], attempt)
         v = value.strip()
-        if v.startswith("git@"):
+        if v.lower().startswith("git@"):
             host = v.split("@", 1)[1].split(":", 1)[0]
             return f"git@{host}:{org}/{name}.git"
+        # La reconnaissance est insensible à la casse comme `_extract_repo`, et
+        # le SCHÉMA d'origine est conservé : `https://GitHub.com/…` retombait
+        # sinon sur la forme courte `org/dépôt`, que le modèle lit comme un
+        # dépôt local et non comme une URL (D1).
+        bas = v.lower()
         for h in REPO_HOSTS:
-            if h in v:
-                scheme = "https://" if v.startswith("http") else ""
-                return f"{scheme}{h}/{org}/{name}"
+            if h in bas:
+                scheme, sep, _ = v.partition("://")
+                return f"{scheme}://{h}/{org}/{name}" if sep else f"{h}/{org}/{name}"
         return f"{org}/{name}"
 
     def _fake_image(self, canon: Canonical, value: str, attempt: int) -> str:
@@ -460,8 +476,13 @@ class SurrogateEngine:
             # empêche le modèle de savoir à quoi il a affaire.
             algo, sep, rest = v.partition(":")
             if sep and re.fullmatch(r"(?i)(sha\d+|md5|blake\d*|crc\d*)", algo):
-                body = digest * ((len(rest) // 64) + 1)
-                return f"{algo}:{body[:len(rest)]}"
+                # `sha256:` sans corps se re-substituerait à lui-même : la
+                # garde `candidat == réel` rejette les 64 tentatives et la
+                # requête tombe en 503. On donne un corps de longueur par
+                # défaut plutôt que de refuser une valeur dégénérée.
+                taille = len(rest) or 16
+                body = digest * ((taille // 64) + 1)
+                return f"{algo}:{body[:taille]}"
             hexpart = re.sub(r"[^0-9a-fA-F]", "", v)
             n = len(hexpart) or 40
             body = (digest * ((n // 64) + 1))[:n]

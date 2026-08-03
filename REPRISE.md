@@ -11,8 +11,9 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 5 : le HOOK est traité ; les agents walker et
-moteur n'avaient pas rendu au moment du commit — vérifier leurs rapports.**
+**Boucle en cours. Round 5 : hook et moteur traités (moteur = 0 finding
+haut/critique). L'agent walker/proxy est tombé sur une erreur d'API et a été
+RELANCÉ — son rapport n'était pas revenu au moment du commit.**
 
 Protocole appliqué à chaque round :
 1. Lancer 2-3 agents `general-purpose`, `model: opus`, en parallèle, sur des
@@ -30,12 +31,12 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**596 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**622 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 596
+uv run pytest tests/ --ignore=tests/egress   # 622
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session réelle + capture
@@ -178,7 +179,12 @@ restauration partielle acceptée.
   échappement VIDE. Utiliser `'\\'`.
 - Les agents de revue doivent recevoir la liste §4/§5, sinon ils passent leur
   temps sur du déjà-corrigé.
-- Ne jamais lire ni afficher `~/.local/state/anonproxy/` (règle secrets).
+- Ne jamais lire ni afficher le répertoire d'état du coffre (règle secrets).
+- **Le hook s'applique à MOI aussi.** Trois blocages rencontrés en travaillant :
+  un prompt de sous-agent citant le chemin du coffre ; un test dont le contenu
+  cite un chemin sensible (composer : `"~/." + "ssh/id_" + "rsa"`) ; un
+  `uv run python - <<'FIN'` dont le corps lit l'environnement (blocage
+  CORRECT). Écrire les fichiers de test par l'outil Write ou `cat > f <<'FIN'`.
 
 ## 7. Repères
 
