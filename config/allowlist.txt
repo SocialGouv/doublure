@@ -93,5 +93,13 @@ re:https?://pypi\.org(/[\w./-]*)?
 # N'y figurent QUE des extensions dont l'usage comme nom d'hôte interne est
 # invraisemblable. `.io`, `.ai`, `.dev`, `.app`, `.co`, `.sh` en sont
 # volontairement ABSENTS : ce sont des domaines réellement utilisés.
+#
+# Le radical n'admet AUCUN point : un nom de fichier n'a qu'un seul label.
+# L'autoriser (`[\w.-]+`) rendait public tout ce qui se termine par une de ces
+# extensions — `srv-billing.acme.internal.conf`, `com.acme.Client.kt`,
+# `10.0.0.5.log` — c'est-à-dire des hôtes internes et des IP, sortis en clair
+# sans même une entrée de coffre pour le signaler. Beaucoup de ces extensions
+# SONT des TLD (`.py` Paraguay, `.rs` Serbie, `.ml` Mali, `.tf`, `.pl`) : c'est
+# la restriction du radical, et elle seule, qui les rend sûres ici.
 # --------------------------------------------------------------------------- #
-re:[\w.-]+\.(md|markdown|txt|log|json|ya?ml|toml|ini|cfg|conf|sql|csv|tsv|lock|pdf|png|jpe?g|gif|svg|ico|zip|tar|gz|py|rb|java|kt|swift|rs|go|php|pl|lua|tf|tfvars|sum|mod|cs|vb|scala|clj|ex|exs|erl|hs|ml|r|jl|ipynb)
+re:[\w-]+\.(md|markdown|txt|log|json|ya?ml|toml|ini|cfg|conf|sql|csv|tsv|lock|pdf|png|jpe?g|gif|svg|ico|zip|tar|gz|py|rb|java|kt|swift|rs|go|php|pl|lua|tf|tfvars|sum|mod|cs|vb|scala|clj|ex|exs|erl|hs|ml|r|jl|ipynb)

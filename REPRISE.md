@@ -11,10 +11,13 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 7 traité EN ENTIER (hook + walker). Round 8 à
-lancer : le round 7 a réécrit la réduction des expansions, l'expansion
-d'accolades au niveau du MOT, la propagation du drapeau `protocole` à l'entrée
-d'un schéma, et le vidage des accumulateurs SSE.**
+**Boucle en cours. Round 8 : le volet walker/moteur est traité (fuite de la
+règle d'allowlist, corrigée). L'agent HOOK du round 8 s'est arrêté sans rendre
+son rapport (watchdog) — À RELANCER.**
+
+Règle apprise au round 8 : toute règle qui rend des valeurs PUBLIQUES doit
+naître avec son test. C'est la seule catégorie dont l'échec est silencieux ;
+tout le reste (schéma invalide, exception, commande refusée) se voit.
 
 Leçon des rounds 6-7, à garder en tête : chaque fois que j'ai modélisé un
 mécanisme de bash par une approximation à UNE valeur (une alternative
@@ -38,12 +41,12 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**757 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**775 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 757
+uv run pytest tests/ --ignore=tests/egress   # 775
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session réelle + capture

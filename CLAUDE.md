@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**775 tests verts** (757 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**793 tests verts** (775 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -439,6 +439,26 @@ Ajouté à `config/allowlist.txt` : une regex couvrant les extensions dont
 l'usage comme nom d'hôte interne est invraisemblable. `.io`, `.ai`, `.dev`,
 `.app`, `.co` et `.sh` en sont volontairement ABSENTS — ce sont des domaines
 réellement utilisés. **Le détecteur doit être redémarré** après ce changement.
+
+## Neuvième revue adversariale (2026-08-04, round 8)
+**La règle d'allowlist que je venais d'ajouter était une fuite.** Son radical
+`[\w.-]+` admettait les POINTS : elle rendait donc public tout ce qui se
+termine par une de ces extensions, pas seulement un nom de fichier.
+`srv-billing-prod.acme.internal.conf`, `com.acme.billing.SecretClient.kt`,
+`api.acme.corp.json`, `10.0.0.5.log` sortaient EN CLAIR — et sans la moindre
+trace : pas d'entrée de coffre, pas de substitut non résolu, rien que le
+harnais d'egress ou le corpus puisse compter. Neuf cas sur neuf.
+
+Corrigé en interdisant le point dans le radical : un nom de fichier n'a qu'un
+seul label. Beaucoup de ces extensions SONT des TLD (`.py` Paraguay, `.rs`
+Serbie, `.ml` Mali, `.tf`, `.pl`) — c'est cette restriction, et elle seule, qui
+les rend sûres ici. Verrouillé par `test_un_identifiant_a_plusieurs_labels_
+n_est_pas_public`.
+
+**Leçon** : c'est la seule règle de toute la boucle qui rende des valeurs
+PUBLIQUES, donc la seule dont le mode d'échec soit une fuite SILENCIEUSE. Tout
+le reste échoue bruyamment (400, 500, 503, commande refusée). Une règle qui
+élargit le public mérite un test dédié avant d'être écrite.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

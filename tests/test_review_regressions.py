@@ -581,3 +581,40 @@ def test_un_prefixe_de_hash_sans_corps_ne_bloque_pas_la_requete(tmp_path, valeur
     """Le substitut valait le réel, les 64 tentatives échouaient → 503."""
     sortie = engine(tmp_path).substitute_value("HASH", valeur)
     assert sortie.startswith(valeur) and len(sortie) > len(valeur)
+
+
+# --------------------------------------------------------------------------- #
+# Round 8 — la règle d'extension de `config/allowlist.txt` est la SEULE de la
+# boucle qui rende des valeurs PUBLIQUES : son mode d'échec est une fuite
+# silencieuse, sans entrée de coffre ni substitut non résolu pour la signaler.
+# Écrite avec `[\w.-]+` comme radical, elle rendait public tout ce qui se
+# termine par une de ces extensions — hôtes internes et IP compris.
+# --------------------------------------------------------------------------- #
+
+from anonproxy.allowlist import Allowlist
+
+
+@pytest.mark.parametrize("valeur", [
+    # radical à PLUSIEURS labels : c'est un identifiant, pas un fichier
+    "db-prod-01.acme.md",
+    "srv-billing-prod.acme.internal.conf",
+    "api.acme.corp.json",
+    "com.acme.billing.SecretClient.kt",
+    "public-service.acme.ml",
+    "billing.acme.py",
+    "api.company.rs",
+    "10.0.0.5.log",
+    "192.168.5.9.log",
+])
+def test_un_identifiant_a_plusieurs_labels_n_est_pas_public(valeur):
+    assert not Allowlist.load()(valeur), (
+        f"{valeur!r} rendu public : il sortirait en clair, sans trace")
+
+
+@pytest.mark.parametrize("valeur", [
+    "infra.md", "README.md", "CLAUDE.md", "nginx.conf", "test_foo.py",
+    "settings.json", "docker-compose.yml", "Cargo.lock", "notes.txt",
+])
+def test_un_nom_de_fichier_simple_reste_public(valeur):
+    """Sinon l'agent ne retrouve plus le fichier que l'opérateur lui désigne."""
+    assert Allowlist.load()(valeur), f"{valeur!r} serait substitué"
