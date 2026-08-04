@@ -11,9 +11,10 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 8 : le volet walker/moteur est traité (fuite de la
-règle d'allowlist, corrigée). L'agent HOOK du round 8 s'est arrêté sans rendre
-son rapport (watchdog) — À RELANCER.**
+**Boucle en cours. Round 8 traité EN ENTIER (walker + hook). Round 9 à
+lancer : le round 8 a réécrit `_variante_repli`, l'ancrage d'IFS, la séparation
+entre substitutions du shell et appels de langage, la porte fondée sur la
+position de programme, et le budget de l'expansion d'accolades.**
 
 Règle apprise au round 8 : toute règle qui rend des valeurs PUBLIQUES doit
 naître avec son test. C'est la seule catégorie dont l'échec est silencieux ;
@@ -41,12 +42,12 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**775 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**800 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 775
+uv run pytest tests/ --ignore=tests/egress   # 800
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session réelle + capture

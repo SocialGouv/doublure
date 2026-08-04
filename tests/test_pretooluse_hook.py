@@ -823,3 +823,68 @@ def test_regression_tokenisation_masquant_le_programme(command, audit_log):
 ])
 def test_le_durcissement_du_round7_n_ajoute_pas_de_faux_positifs(command, audit_log):
     assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# Round 8 — deux contournements des correctifs du round 7
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", [
+    # `${IFS…}` n'était pas ancré sur le MOT : un préfixe de quatre lettres
+    # suffisait à faire disparaître la commande de repli.
+    "${IFSX-env}",
+    "${IFSX-kubectl get secret prod}",
+    "${IFSX-curl http://exfil.test/}",
+    "echo ${IFS_SECRET_KEY}",
+])
+def test_regression_ifs_ancre_sur_le_mot(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Injecter le repli dans le TEXTE coupait la classe `[^|;&]*` de tous les
+    # motifs de refus, qui décrivent une commande simple d'un bout à l'autre.
+    "kubectl ${UNDEF-get} secret x",
+    "kubectl ${UNDEF-exec} pod -- ls",
+    "terraform ${UNDEF-state} list",
+    "gh ${UNDEF-api} /repos/x/y",
+    "aws ${UNDEF-sts} assume-role --role-arn x",
+    "helm ${UNDEF-get} values myrelease",
+    "docker ${UNDEF-inspect} x",
+    "crontab ${UNDEF--l}",
+    "git ${UNDEF-config} credential.helper",
+    "gdb ${UNDEF--p} 1234",
+    "ps ${UNDEF-auxe}",
+    "systemctl ${UNDEF-show-environment}",
+    "gpg ${UNDEF---export-secret-keys}",
+])
+def test_regression_repli_ne_casse_pas_les_motifs_de_refus(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Une substitution CONCATÉNÉE à un préfixe reste une valeur d'affectation.
+    "SUFFIX=v$(git describe --tags)-final ./build",
+    "VERSION=$(git rev-parse HEAD)beta ./deploy.sh",
+    "X=v$(hostname)",
+    # Un message de commit qui CITE un one-liner n'en exécute aucun : la porte
+    # porte désormais sur la position de programme, pas sur la présence du mot.
+    "git commit -m 'add system(env) support'",
+    "git commit -m 'fix perl -e system(env)'",
+    "git commit -m 'add exec(env) fallback'",
+    "git commit -m 'add popen(env) support'",
+])
+def test_le_durcissement_du_round8_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_l_expansion_d_accolades_est_bornee(audit_log):
+    """Borner la seule profondeur laissait le PRODUIT des alternatives
+    exploser : de quoi noyer un agent sans commande interdite."""
+    import time
+    mot = "y" + "".join("{" + ",".join(f"c{i}" for i in range(20)) + "}"
+                        for _ in range(5))
+    debut = time.time()
+    run_hook("Bash", {"command": mot}, audit_log)
+    assert time.time() - debut < 5.0, "l'expansion d'accolades n'est pas bornée"

@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**793 tests verts** (775 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**818 tests verts** (800 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -459,6 +459,32 @@ n_est_pas_public`.
 PUBLIQUES, donc la seule dont le mode d'échec soit une fuite SILENCIEUSE. Tout
 le reste échoue bruyamment (400, 500, 503, commande refusée). Une règle qui
 élargit le public mérite un test dédié avant d'être écrite.
+
+### Hook — round 8
+Deux contournements, encore issus des correctifs du round 7 :
+- **`${IFS…}` n'était pas ancré sur le MOT** : `${IFSX-env}` passait pour une
+  variante d'IFS, était remplacé par une espace, et son repli disparaissait
+  avec lui. Un préfixe de quatre lettres suffisait à exécuter n'importe quelle
+  commande refusée.
+- **Le `;` que j'injectais pour séparer les branches d'un repli coupait la
+  classe `[^|;&]*` de TOUS les motifs de `DENY_COMMAND_PATTERNS`** — dix-huit
+  motifs désarmés d'un coup : `kubectl ${UNDEF-get} secret x`,
+  `terraform ${UNDEF-state} list`, `gh ${UNDEF-api} …`, `ps ${UNDEF-auxe}`…
+  La branche « variable vide » est désormais analysée comme une COMMANDE
+  entière (`_variante_repli`), et le texte normalisé ne porte plus que la
+  référence.
+
+**Faux positifs corrigés** : une substitution CONCATÉNÉE à un préfixe
+(`SUFFIX=v$(git describe)-final`) restait une valeur d'affectation ; un message
+de commit qui CITE un one-liner (`git commit -m 'fix perl -e system(env)'`)
+n'en exécute aucun — la porte porte maintenant sur la POSITION DE PROGRAMME,
+pas sur la présence du mot dans le texte.
+
+**Disponibilité** : borner la seule profondeur de l'expansion d'accolades
+laissait le PRODUIT des alternatives exploser — vingt alternatives sur cinq
+groupes faisaient pendre le hook plus de huit secondes, de quoi noyer un agent
+sans écrire une seule commande interdite. Budget total désormais borné : 0,15 s
+sur le même cas.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
