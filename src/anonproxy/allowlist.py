@@ -47,3 +47,15 @@ class Allowlist:
 
     def __call__(self, value: str) -> bool:
         return value in self.exact or any(p.fullmatch(value) for p in self.patterns)
+
+    def is_exact(self, value: str) -> bool:
+        """Prédicat pour une SOUS-PARTIE d'une valeur composite.
+
+        Une entrée exacte est une décision prise token par token
+        (« `python3.12-slim` est public ») : elle vaut partout. Une règle de
+        FORME (`re:`) suppose au contraire un contexte — celle qui reconnaît un
+        nom de fichier vaut pour de la prose (« ouvre `README.md` »), pas pour
+        un segment d'URL ni un tag d'image, où rien ne désambiguïse et où elle
+        laissait sortir `tenant-acme-nda.md` ou `client-nda-2025.zip` verbatim.
+        """
+        return value in self.exact

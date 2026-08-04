@@ -180,13 +180,20 @@ _APPEL_LANGAGE_RE = re.compile(
 #: (`curl http://local/ $(echo http://tiers/)`).
 _MARQUEUR_SUBSTITUTION = "substitution_non_evaluable"
 
+#: Référence simple à une variable. Sa valeur n'est pas connue avant
+#: l'exécution : en position de programme, `$SHELL -c env` lance un shell.
+#: La tokenisation retirait le sigil et laissait le mot `SHELL`, que rien
+#: ne reconnaît. Ce remplacement n'a lieu QUE pour l'analyse des positions
+#: de programme — le contrôle des variables sensibles voit le texte entier.
+_REF_SIMPLE_RE = re.compile(r"\$\{?[A-Za-z_]\w*\}?")
+
 #: Primitive d'exécution SANS parenthèses (`system "env"` en Perl/Ruby,
 #: `qx/env/`, `%x[env]`) : `_NESTED_RE` ne voit que les formes parenthésées.
 #: On n'inspecte QUE ce qui suit l'appel — inspecter tous les mots du
 #: programme en ligne refusait `print("the curl command is useful")`, donc
 #: toute prose citant un binaire réseau.
 _APPEL_EXEC_RE = re.compile(
-    r"\b(?:system|exec|qx|popen|spawnSync|execSync|shell_exec|passthru|"
+    r"\b(?:system|exec\w*|qx|popen|spawn\w*|shell_exec|passthru|"
     r"os\.execute|IO\.popen|subprocess\.\w+|check_output|check_call|"
     r"getoutput|getstatusoutput)\b(?P<args>[^;\n]*)"
     r"|%x[\[({<](?P<pcx>[^\])}>]*)",
@@ -202,11 +209,23 @@ def _interprete_execute(command: str) -> bool:
     `git commit -m 'fix perl -e system(env)'` : le message CITE un one-liner,
     il n'en exécute aucun. Seule la position de programme fait foi.
     """
-    return any(
-        _basename(tokens[idx]) in _INTERPRETES
-        for tokens in tokenize(command)
-        for idx in _program_positions(tokens)
-    )
+    for tokens in tokenize(command):
+        if not any(_basename(tokens[idx]) in _INTERPRETES
+                   for idx in _program_positions(tokens)):
+            continue
+        # `python3 --version` n'exécute aucun code : sans cette exigence, il
+        # ouvrait l'analyse et un message de commit voisin devenait suspect.
+        if any(t in ("-e", "-c", "-r", "-E", "-P") for t in tokens):
+            return True
+        if any(_basename(t) in ("awk", "gawk", "mawk") for t in tokens):
+            return True
+    return False
+
+
+def _par_segment(texte: str, transforme) -> str:
+    """Applique `transforme` à chaque commande simple, séparateurs préservés."""
+    morceaux = re.split(r"([|&\n]+)", texte)
+    return "".join(m if i % 2 else transforme(m) for i, m in enumerate(morceaux))
 
 
 def _regions_imbriquees(normalized: str) -> list[str]:
@@ -216,12 +235,16 @@ def _regions_imbriquees(normalized: str) -> list[str]:
     est une commande dont les mots sont séparés par des virgules, pas par des
     espaces.
     """
-    motifs = [_NESTED_RE]
-    if _interprete_execute(normalized):
-        motifs.append(_APPEL_LANGAGE_RE)
+    # Les primitives d'un langage ne comptent que dans la commande simple qui
+    # lance l'interpréteur : tester la commande ENTIÈRE refusait
+    # `git commit -m '…system(env)…' && python3 --version`.
+    couples = [(_NESTED_RE, normalized)]
+    for segment in re.split(r"[|&\n]+", normalized):
+        if _interprete_execute(segment):
+            couples.append((_APPEL_LANGAGE_RE, segment))
     regions = []
-    for motif in motifs:
-        for m in motif.finditer(normalized):
+    for motif, texte in couples:
+        for m in motif.finditer(texte):
             contenu = next((v for v in m.groupdict().values() if v is not None), "")
             if contenu.strip():
                 # Virgules et crochets délimitent une LISTE d'arguments dans du
@@ -385,7 +408,10 @@ def allow() -> dict:
 
 
 #: Expansion de paramètre à opérateur : `${VAR:-def}`, `${VAR##x}`, `${#VAR}`…
-_EXPANSION_RE = re.compile(r"\$\{(?P<pre>#?)(?P<nom>[A-Za-z_]\w*)(?P<reste>[^}]*)\}")
+#: Le nom peut être POSITIONNEL (`${1:-x}`) ou spécial (`${@:-x}`) :
+#: les exiger alphabétiques laissait passer `${1:-env}`, que bash exécute.
+_EXPANSION_RE = re.compile(
+    r"\$\{(?P<pre>#?)(?P<nom>[A-Za-z_]\w*|\d+|[@*])(?P<reste>[^}]*)\}")
 
 #: MOT contenant une expansion d'accolades : `{env,}`, `{p,}rintenv`,
 #: `c{ur,ur}l`, `{curl,autrechose}`. C'est le mot ENTIER qu'il faut expanser,
@@ -398,7 +424,7 @@ _ACCOLADES_RE = re.compile(r"\{(?P<alts>[^{}$\s]*,[^{}$\s]*)\}")
 #: laissait le produit des alternatives exploser : `20` alternatives sur `5`
 #: groupes faisaient pendre le hook plus de huit secondes — de quoi noyer un
 #: agent sans écrire la moindre commande interdite.
-_BUDGET_ACCOLADES = 512
+_BUDGET_ACCOLADES = 64
 
 
 def _expanser_mot(mot: str, profondeur: int = 0,
@@ -427,7 +453,7 @@ def _expanser_mot(mot: str, profondeur: int = 0,
 _OP_REPLI = (":-", ":=", ":?", "-", "=", "?")
 
 #: Expansion de repli, telle qu'elle s'écrit dans la commande BRUTE.
-_REPLI_RE = re.compile(r"\$\{#?[A-Za-z_]\w*:?[-=?]([^}]*)\}")
+_REPLI_RE = re.compile(r"\$\{#?(?:[A-Za-z_]\w*|\d+|[@*]):?[-=?]([^}]*)\}")
 
 
 def _variante_repli(command: str) -> str | None:
@@ -437,13 +463,30 @@ def _variante_repli(command: str) -> str | None:
     repli dans le texte normalisé briserait les motifs de refus, qui décrivent
     une commande simple d'un bout à l'autre.
     """
-    variante = _REPLI_RE.sub(lambda m: m.group(1), command)
+    variante = command
+    for _ in range(12):
+        # Un appel ne résout qu'UN niveau : `${A:-${B:-${C:-env}}}` en demande
+        # autant qu'il y a d'imbrications, et la limite de récursion de
+        # `check_bash` s'épuisait avant.
+        suivante = _REPLI_RE.sub(lambda m: m.group(1), variante)
+        if suivante == variante:
+            break
+        variante = suivante
     return variante if variante != command else None
 
 
 def _reduire_expansion(m: re.Match[str]) -> str:
     """Ce que bash tire d'une expansion, sans jamais perdre le nom de variable."""
     nom, reste = m.group("nom"), m.group("reste")
+    if nom == "IFS":
+        # IFS vaut un SÉPARATEUR — sauf avec `+` ou `:+`, qui rendent le texte
+        # de droite : `e${IFS:+nv}` reconstruit bel et bien `env`. Tout
+        # remplacer par une espace faisait disparaître ce texte.
+        if reste.startswith(":+"):
+            return reste[2:]
+        if reste.startswith("+"):
+            return reste[1:]
+        return " "
     if not reste and not m.group("pre"):
         return m.group(0)  # `${VAR}` simple : inchangé
     # `${VAR+texte}` et `${VAR:+texte}` valent le TEXTE littéral quand VAR est
@@ -479,10 +522,7 @@ def normalize(command: str) -> str:
     # `${IFS%%x}`, `${IFS,,}`, `${IFS^^}`) valent toutes IFS, c'est-à-dire un
     # SÉPARATEUR : les remplacer par du vide souderait `env${IFS}printenv` en
     # un seul mot inexistant, et les deux programmes disparaîtraient.
-    # ANCRÉ sur le mot `IFS` : sans le garde, `${IFSX-env}` était pris pour une
-    # variante d'IFS et remplacé par une espace, emportant son repli — un
-    # préfixe de quatre lettres suffisait à exécuter n'importe quoi.
-    out = re.sub(r"\$\{IFS(?![A-Za-z0-9_])[^}]*\}", " ", command)
+    out = command
     # Les autres expansions à opérateur sont RÉDUITES à ce que bash en tire,
     # jamais supprimées : les effacer emportait le NOM de la variable, et
     # `echo ${AWS_SECRET_ACCESS_KEY:-x}` passait alors qu'il imprime la vraie
@@ -492,7 +532,11 @@ def normalize(command: str) -> str:
     # `{env,}`, `{p,}rintenv`, `c{ur,ur}l` : l'expansion d'accolades reconstruit
     # un nom de commande. Bash produit PLUSIEURS mots, préfixe et suffixe
     # recollés à chaque alternative — on fait de même.
-    out = _MOT_ACCOLADE_RE.sub(lambda m: _expanser_mot(m.group(0)), out)
+    # Budget PARTAGÉ par toute la commande : un budget par mot laissait le
+    # volume total exploser, et c'est la TAILLE du texte produit qui coûte
+    # ensuite (dix secondes d'analyse sur un mot de quatre cents octets).
+    budget = [_BUDGET_ACCOLADES]
+    out = _MOT_ACCOLADE_RE.sub(lambda m: _expanser_mot(m.group(0), 0, budget), out)
     # Une référence collée AU MILIEU d'un mot ne sert qu'à le découper —
     # y compris sous forme indirecte (`e${!q}nv`).
     out = re.sub(r"(?<=\w)\$\{!?[A-Za-z_]\w*\}(?=\w)", "", out)
@@ -532,6 +576,7 @@ _WRAPPERS = frozenset({
     "setsid", "chroot", "unshare", "nsenter", "flock", "parallel",
     "su", "runuser", "machinectl", "systemd-run", "proot", "fakeroot",
     "strace", "ltrace", "expect", "pwsh", "powershell",
+    "fish", "csh", "tcsh", "mksh", "oksh", "posh", "yash",
     "do", "then", "else", "elif", "while", "until", "if", "for",
 })
 
@@ -569,6 +614,13 @@ _OPT_AVEC_VALEUR: dict[str, frozenset[str]] = {
     "watch": frozenset({"-n", "--interval"}),
     "parallel": frozenset({"-j", "--jobs", "-S"}),
 }
+
+#: Enveloppes pour lesquelles `-c` introduit une COMMANDE.
+_WRAPPERS_SHELL = frozenset({
+    "sh", "bash", "zsh", "ksh", "dash", "su", "runuser", "busybox",
+    "toybox", "fish", "csh", "tcsh", "mksh", "oksh", "posh", "yash",
+    "pwsh", "powershell", "machinectl", "systemd-run",
+})
 
 #: Enveloppes dont le premier argument est une CIBLE (répertoire, verrou),
 #: pas le programme.
@@ -632,7 +684,11 @@ def _program_positions(tokens: list[str]) -> list[int]:
             i += 1
     # `su root -c env` : l'utilisateur occupe la position de programme et
     # arrêtait l'analyse ; la valeur de `-c` est pourtant une commande.
-    if positions and _basename(tokens[positions[0]]) in _WRAPPERS and "-c" in tokens:
+    # Réservé aux enveloppes de type SHELL : pour `git`, `docker` ou `xargs`,
+    # `-c` veut dire autre chose, et un message de commit citant `sh -c curl`
+    # était refusé.
+    if positions and _basename(tokens[positions[0]]) in _WRAPPERS_SHELL \
+            and "-c" in tokens:
         cible = tokens.index("-c") + 1
         if cible < len(tokens) and cible not in positions:
             positions.append(cible)
@@ -782,7 +838,8 @@ _INTERPRETES = frozenset({
     "sh", "bash", "zsh", "ksh", "dash", "python", "python3", "perl", "ruby",
     "node", "deno", "bun", "php", "lua", "tclsh", "awk", "gawk", "mawk",
     "Rscript", "julia", "psql", "mysql", "sqlite3", "expect", "swift",
-    "pwsh", "powershell",
+    "pwsh", "powershell", "fish", "csh", "tcsh", "mksh", "oksh", "posh",
+    "yash", "elvish", "xonsh", "nu",
 })
 
 
@@ -856,8 +913,9 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
     # était refusé — la prose redevenait du code, précisément le défaut que
     # la séparation avait éliminé. Les formes PARENTHÉSÉES restent couvertes
     # partout par `_NESTED_RE`.
-    for appel in (_APPEL_EXEC_RE.finditer(normalized)
-                  if _interprete_execute(normalized) else ()):
+    for segment in re.split(r"[|&\n]+", normalized):
+      for appel in (_APPEL_EXEC_RE.finditer(segment)
+                    if _interprete_execute(segment) else ()):
         mots = _MOTS_DE_CODE_RE.findall(appel.group("args") or appel.group("pcx") or "")
         for idx, mot in enumerate(mots):
             base = _basename(mot)
@@ -870,8 +928,13 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
     # est RETIRÉE de la commande englobante après analyse : ses mots n'y sont
     # pas des arguments, et son résultat n'est pas connu d'avance.
     exterieur = _NESTED_RE.sub(f" {_MARQUEUR_SUBSTITUTION} ", normalized)
-    if _interprete_execute(normalized):
-        exterieur = _APPEL_LANGAGE_RE.sub(f" {_MARQUEUR_SUBSTITUTION} ", exterieur)
+    exterieur = _par_segment(
+        exterieur,
+        lambda seg: (_APPEL_LANGAGE_RE.sub(f" {_MARQUEUR_SUBSTITUTION} ", seg)
+                     if _interprete_execute(seg) else seg),
+    )
+    # Une variable en position de programme est opaque (`$SHELL -c env`).
+    exterieur = _REF_SIMPLE_RE.sub(f" {_MARQUEUR_SUBSTITUTION} ", exterieur)
 
     for tokens in tokenize(exterieur):
         opaque = _MARQUEUR_SUBSTITUTION in tokens

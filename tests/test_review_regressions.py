@@ -618,3 +618,53 @@ def test_un_identifiant_a_plusieurs_labels_n_est_pas_public(valeur):
 def test_un_nom_de_fichier_simple_reste_public(valeur):
     """Sinon l'agent ne retrouve plus le fichier que l'opérateur lui désigne."""
     assert Allowlist.load()(valeur), f"{valeur!r} serait substitué"
+
+
+# --------------------------------------------------------------------------- #
+# Round 9 — l'allowlist est partagée avec les SOUS-PARTIES d'une valeur
+# composite (tag d'image, segment d'URL). Une entrée EXACTE est une décision
+# prise token par token, elle vaut partout ; une règle de FORME suppose un
+# contexte que la sous-partie n'a pas — celle des noms de fichiers laissait
+# sortir `tenant-acme-nda.md` au milieu d'une URL par ailleurs pseudonymisée.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("url, sensible", [
+    ("https://internal.acme.example/tenant-acme-nda.md", "tenant-acme-nda.md"),
+    ("https://intranet.corp/download/customer-abc-contract.pdf",
+     "customer-abc-contract.pdf"),
+    ("https://vcs.internal/repo/client-nda-2025.zip", "client-nda-2025.zip"),
+])
+def test_un_segment_d_url_n_est_pas_couvert_par_une_regle_de_forme(tmp_path, url, sensible):
+    from anonproxy.allowlist import Allowlist
+    from anonproxy.surrogates.engine import SurrogateEngine
+    eng = SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER),
+                          master_key=MASTER, scope_key="project:r9",
+                          is_public=Allowlist.load().is_exact)
+    assert sensible not in eng.substitute_value("URL", url)
+
+
+@pytest.mark.parametrize("image, sensible", [
+    ("registry.internal.acme/payments:tenant-nda-v1.tar", "tenant-nda-v1.tar"),
+    ("registry.internal.acme/payments:branch-feat-payment-fix.log",
+     "branch-feat-payment-fix.log"),
+    ("registry.internal.acme/payments:client-report-2025.md", "client-report-2025.md"),
+])
+def test_un_tag_d_image_n_est_pas_couvert_par_une_regle_de_forme(tmp_path, image, sensible):
+    from anonproxy.allowlist import Allowlist
+    from anonproxy.surrogates.engine import SurrogateEngine
+    eng = SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER),
+                          master_key=MASTER, scope_key="project:r9",
+                          is_public=Allowlist.load().is_exact)
+    assert sensible not in eng.substitute_value("CONTAINER_IMAGE", image)
+
+
+def test_une_entree_exacte_vaut_toujours_pour_une_sous_partie(tmp_path):
+    """Le pendant : c'est l'intention documentée du partage de l'allowlist."""
+    from anonproxy.surrogates.engine import SurrogateEngine
+    eng = SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER),
+                          master_key=MASTER, scope_key="project:r9",
+                          is_public=lambda v: v in {"python3.12-slim", "healthz"})
+    assert eng.substitute_value(
+        "CONTAINER_IMAGE", "registry.acme.io/app:python3.12-slim").endswith(
+            ":python3.12-slim")

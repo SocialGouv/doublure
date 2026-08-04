@@ -66,7 +66,9 @@ class ProxyState:
             vault=self.vault,
             master_key=master,
             scope_key=settings.scope_key,
-            is_public=Allowlist.load(settings.allowlist_file),
+            # `.is_exact` et non l'allowlist entière : une règle de FORME
+            # n'a pas de sens sur une sous-partie (cf. allowlist.py).
+            is_public=Allowlist.load(settings.allowlist_file).is_exact,
         )
         self.detector = DetectClient(
             settings.detect_url, regex_threshold=settings.regex_threshold

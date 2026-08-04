@@ -11,10 +11,15 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 8 traité EN ENTIER (walker + hook). Round 9 à
-lancer : le round 8 a réécrit `_variante_repli`, l'ancrage d'IFS, la séparation
-entre substitutions du shell et appels de langage, la porte fondée sur la
-position de programme, et le budget de l'expansion d'accolades.**
+**Boucle en cours. Round 9 traité EN ENTIER. Round 10 à lancer : le round 9
+a réécrit la réduction d'IFS, le nom des expansions, la variante de repli à
+point fixe, la porte par commande SIMPLE, le marqueur des références de
+variables, et `Allowlist.is_exact`.**
+
+Règle apprise au round 9 : une règle de FORME (`re:`) et une entrée EXACTE
+n'ont pas le même statut. L'exacte est une décision token par token, elle vaut
+partout ; la forme suppose un contexte, et la réutiliser hors de ce contexte
+fuit en silence.
 
 Règle apprise au round 8 : toute règle qui rend des valeurs PUBLIQUES doit
 naître avec son test. C'est la seule catégorie dont l'échec est silencieux ;
@@ -42,12 +47,12 @@ des points assumés (§5).
 
 ## 2. Où en est le code
 
-**800 tests + 18 egress**, tous verts. Les six phases ont leur critère de
+**830 tests + 18 egress**, tous verts. Les six phases ont leur critère de
 sortie prouvé (détail et preuves : `CLAUDE.md`).
 
 Revalidation complète après tout changement :
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 800
+uv run pytest tests/ --ignore=tests/egress   # 830
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session réelle + capture

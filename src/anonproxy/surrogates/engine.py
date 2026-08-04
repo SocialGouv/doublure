@@ -460,6 +460,9 @@ class SurrogateEngine:
         # Un tag n'est PAS toujours une version : on y trouve des SHA de
         # commit, des noms de branche (`feat/PROJ-1234-…`), des logins, des
         # noms de clients. Seules les formes manifestement publiques passent.
+        # `is_public` est ici le prédicat des entrées EXACTES : une règle de
+        # forme (`re:`) suppose un contexte que le tag n'a pas, et celle qui
+        # reconnaît un nom de fichier laissait passer `tenant-nda-v1.tar`.
         if _PLAIN_TAG_RE.fullmatch(tag) or self.is_public(tag):
             return f"{out}:{tag}"
         return f"{out}:{self._combo('image-tag', tag, attempt, SERVICE_WORDS)}"
@@ -541,6 +544,9 @@ class SurrogateEngine:
                 # Le chemin porte régulièrement des identifiants internes
                 # (`/payments/api`, `/tenants/acme`) : le conserver tel quel
                 # laissait fuir la moitié de l'URL.
+                # `is_public` = entrées EXACTES seulement (cf. allowlist.py) :
+                # une règle de forme laissait sortir `tenant-acme-nda.md` au
+                # milieu d'une URL par ailleurs pseudonymisée.
                 path = m.group("path")
                 segments = [s for s in path.split("/") if s]
                 fake_path = "".join(
