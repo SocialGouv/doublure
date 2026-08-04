@@ -1,8 +1,8 @@
-# Reprise de session — état au 2026-08-02
+# Reprise de session — état au 2026-08-04
 
 > Ce fichier complète `CLAUDE.md` (qui porte l'état des phases et les décisions
-> verrouillées). Ici : **le travail EN COURS**, ce qui reste à faire, et les
-> pièges qui ont coûté du temps.
+> verrouillées). Ici : **le travail EN COURS**, ce qui reste à faire, les
+> pièges déjà payés, et ce que neuf rounds de revue ont appris.
 > Ordre de lecture à la reprise : `CLAUDE.md` → ce fichier → `git log`.
 
 ## 1. Consigne en cours (non terminée)
@@ -11,159 +11,141 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Boucle en cours. Round 9 traité EN ENTIER. Round 10 à lancer : le round 9
-a réécrit la réduction d'IFS, le nom des expansions, la variante de repli à
-point fixe, la porte par commande SIMPLE, le marqueur des références de
-variables, et `Allowlist.is_exact`.**
+**Rounds 3 à 9 traités. Round 10 à lancer.** jo a validé la poursuite deux fois
+(`::g`). Critère d'arrêt : plus aucun finding critique/haut hors §5.
+**Il n'est pas atteint : les neuf rounds ont TOUS produit des findings hauts ou
+critiques**, et la grande majorité étaient des régressions du round précédent.
 
-Règle apprise au round 9 : une règle de FORME (`re:`) et une entrée EXACTE
-n'ont pas le même statut. L'exacte est une décision token par token, elle vaut
-partout ; la forme suppose un contexte, et la réutiliser hors de ce contexte
-fuit en silence.
-
-Règle apprise au round 8 : toute règle qui rend des valeurs PUBLIQUES doit
-naître avec son test. C'est la seule catégorie dont l'échec est silencieux ;
-tout le reste (schéma invalide, exception, commande refusée) se voit.
-
-Leçon des rounds 6-7, à garder en tête : chaque fois que j'ai modélisé un
-mécanisme de bash par une approximation à UNE valeur (une alternative
-d'accolade, une branche d'expansion, un token sauté), le round suivant a
-trouvé le cas où bash en produit plusieurs. Émettre TOUTES les possibilités
-coûte un faux positif potentiel ; en émettre une seule coûte un contournement.
-
-Protocole appliqué à chaque round :
-1. Lancer 2-3 agents `general-purpose`, `model: opus`, en parallèle, sur des
-   angles distincts (fuites / crypto-invariants / hook + tests complaisants).
-2. Leur DONNER la liste de ce qui est déjà corrigé et de ce qui est assumé
-   (sinon ils re-signalent la même chose) — voir §4 et §5.
-3. Exiger : preuve exécutée, gravité, correctif minimal, et « dis-le
+### Protocole appliqué à chaque round
+1. Deux agents `general-purpose`, `model: opus`, en parallèle : un sur le hook,
+   un sur walker + moteur + proxy.
+2. Leur DONNER §4 (déjà corrigé) et §5 (assumé), sinon ils repassent leur temps
+   sur du déjà-traité.
+3. Exiger : preuve EXÉCUTÉE, gravité, correctif minimal, et « dis-le
    explicitement si tu ne trouves rien de haut/critique ».
-4. Corriger, ajouter une non-régression par finding, revalider E2E, committer.
-5. Recommencer sur le code corrigé — **c'est là que se cachent les régressions
-   de mes propres correctifs** : les rounds 1 et 2 en ont produit chacun deux.
+4. Vérifier chaque finding MOI-MÊME avant de corriger — plusieurs se sont
+   révélés faux ou non reproductibles (cf. §8).
+5. Corriger, une non-régression par finding, revalider E2E, committer.
 
-Critère d'arrêt : plus aucun finding critique/haut qui ne soit dans la liste
-des points assumés (§5).
+### Contraintes de rédaction des prompts d'agent (apprises à la dure)
+- Ne pas écrire le chemin du coffre en toutes lettres : **mon propre hook
+  refuse alors le lancement de l'agent**. Dire « le répertoire d'état de
+  l'utilisateur ».
+- Éviter les backticks autour de code contenant une substitution : même effet.
+- Demander à l'agent d'écrire ses scripts avec l'outil Write, **pas** par
+  heredoc (le hook analyse le corps d'un heredoc alimentant un interpréteur).
+- Demander un rapport TÔT et partiel : deux agents se sont arrêtés sans rien
+  rendre après une trop longue exploration silencieuse (watchdog).
 
 ## 2. Où en est le code
 
-**830 tests + 18 egress**, tous verts. Les six phases ont leur critère de
-sortie prouvé (détail et preuves : `CLAUDE.md`).
+**848 tests verts** (830 unitaires + 18 egress). Les six phases ont leur
+critère de sortie prouvé (détail : `CLAUDE.md`).
 
-Revalidation complète après tout changement :
 ```bash
 uv run pytest tests/ --ignore=tests/egress   # 830
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
-bash tests/phase3_e2e.sh                     # session réelle + capture
+bash tests/phase3_e2e.sh                     # session RÉELLE + capture
 bash tests/phase4_e2e.sh                     # commande interdite bloquée
 uv run python tests/detect_latency.py        # P95 < 150 ms
 ```
 Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
 
-## 3. À FAIRE au prochain round
+**Toujours rejouer `phase3_e2e.sh` après une modification du walker, du moteur
+ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
 
-1. **Lancer le round 5** sur ce que le round 4 vient de réécrire :
-   `USER_DATA_KEYS` (périmètre de SKIP_KEYS), `SCHEMA_REF_KEYS`,
-   `_extract_repo` (deux plantages corrigés), la normalisation `hôte/`,
-   `_fake_query` (valeur vide + percent-encoding), le séparateur SSE atomique,
-   et côté hook le marqueur de substitution opaque, le balayage `-exec`, le
-   scan mot à mot des interpréteurs en ligne, `_est_usage_local`.
-   Deux rounds de suite ont produit des régressions de mes propres correctifs :
-   il n'y a pas de raison que celui-ci fasse exception.
-2. Points **non corrigés**, à re-arbitrer ou à traiter :
-   - **M3 — fragmentation de substituts** : le détecteur renvoie parfois un
-     span URL tronqué (`https://acme.int`) qui chevauche un span HOSTNAME ;
-     l'arbitrage garde le plus long et le reste devient une entité distincte.
-     Résultat : une même machine réelle peut recevoir DEUX noms fictifs.
-     Ce n'est pas une fuite mais une régression du déterminisme (§9 du plan :
-     l'analyse de topologie devient fausse). Piste : fusionner les spans
-     URL/HOSTNAME chevauchants avant substitution.
-   - **B2 — `container` / `stop_sequences`** : traversés par le walker, mais
-     le détecteur ne classe pas des valeurs comme `INTERNAL_STOP_TOKEN_acme`.
-     À documenter comme risque, ou custom pattern.
-   - **T2 — test d'entropie du coffre** : ne détecte pas seul un XOR dérivé du
-     nonce ; ce sont les tests voisins (mauvaise clé, bit-flip) qui rattrapent.
-     Acceptable mais à renforcer si l'occasion se présente.
-   - **T3 — `test_la_liste_suit_le_detecteur`** est *skipped* sans le service :
-     retirer un type de `CLASS_OF` ET de `TYPES_EMIS` passerait inaperçu.
-     Piste : figer aussi le CARDINAL attendu.
-   - **T4 — `sensitive_from_fixture`** ne reconnaît que quelques TLD ; un hôte
-     en `.dev`/`.app` dans une future fixture ne serait pas recherché.
-   - **Zone nue** (round 3) : `HOSTNAME "acme.internal"` n'atterrit pas dans la
-     zone fictive de `db-01.acme.internal`. Corriger par `_zone_for` en ferait
-     un attribut PARTAGÉ, donc non restaurable — arbitré en faveur de la
-     restauration. Ne pas « re-corriger » sans revoir ce compromis.
-   - **Hook, contournements assumés faute de mieux** (le rapport les liste,
-     ils relèvent structurellement de D9) : écrire-puis-exécuter
-     (`printf … > /tmp/x && bash /tmp/x`), scripts par chemin
-     (`tclsh /tmp/x.tcl`), gestionnaires de paquets (`pip`/`npm`/`cargo`),
-     `git clone` vers un remote arbitraire, `docker pull/push`, `helm pull`.
-     **Ne pas empiler des motifs pour ceux-là** : le hook est un rideau, pas
-     un mur, et c'est écrit dans son en-tête.
-   - **Nom de query court** : `?db-01=`, `?jdoe=`, `?tenant_acme=` ne sont pas
-     substitués — sans point, arobase ni deux-points, ils sont indiscernables
-     d'un nom d'API. Vrai correctif : soumettre chaque nom au détecteur.
-   - **`mcp_servers[].name`** reste verbatim : c'est la clé de routage des noms
-     d'outils (`mcp__<name>__<outil>`). Vérifié, PAS un finding.
-   - **Jeton de contrôle nu** : une valeur sous une clé de `REQUEST_CONTROL_KEYS`
-     qui a la forme d'un jeton de protocole (`db01`, sans point ni espace) n'est
-     pas traversée. Le motif attrape les formes sensibles réelles (FQDN, e-mail,
-     URL, IP, chemin) ; `betas` a en plus sa règle horodatée. Limite connue.
-3. Le reste du backlog produit : `corpus/real/` non annoté (matière de jo),
+## 3. À FAIRE au round 10
+
+1. **Relire ce que le round 9 vient de réécrire** — c'est là que les
+   régressions se logent, neuf fois sur neuf :
+   - hook : la réduction d'IFS (la forme `plus` rend le TEXTE, pas un
+     séparateur), le nom des expansions (positionnel et spécial),
+     `_variante_repli` à point fixe, la porte `_interprete_execute` par
+     commande SIMPLE avec exigence du drapeau en ligne, `_REF_SIMPLE_RE`
+     (variable en position de programme), le budget d'accolades partagé,
+     `_WRAPPERS_SHELL` ;
+   - moteur : `Allowlist.is_exact` et ses deux appelants (tag d'image, segment
+     d'URL).
+2. Points **non corrigés**, à re-arbitrer :
+   - **M3 — fragmentation de spans** : un span URL tronqué qui chevauche un
+     span HOSTNAME donne DEUX noms fictifs à une machine. Pas une fuite ; une
+     régression du déterminisme (§9 du plan). Piste : fusionner les spans
+     chevauchants avant substitution.
+   - **`container` / `stop_sequences`** : traversés, mais le détecteur ne
+     classe pas une valeur comme `INTERNAL_STOP_TOKEN_acme`. Documenter ou
+     ajouter un custom pattern.
+   - **Test d'entropie du coffre** : ne détecte pas seul un XOR dérivé du
+     nonce ; ce sont les tests voisins qui rattrapent.
+   - **`test_la_liste_suit_le_detecteur`** *skipped* sans le service : figer
+     aussi le CARDINAL attendu.
+   - **`sensitive_from_fixture`** ne reconnaît que quelques TLD.
+   - **Résidu connu** : un message de commit citant une primitive, suivi d'un
+     point-virgule puis d'un interpréteur en ligne, reste un faux positif. Le
+     point-virgule sépare des INSTRUCTIONS dans un programme en ligne : le
+     traiter comme une frontière de commande casserait les one-liners.
+3. Backlog hors boucle : `corpus/real/` non annoté (matière de jo),
    KMS/rotation/journal d'accès immuable (Phase 6, hors MVP).
 
-## 4. Déjà corrigé — NE PAS re-signaler aux agents
+## 4. Déjà corrigé — DONNER cette liste aux agents
 
-Fuites du proxy : passthrough sur chemins non modélisés · `walk_request`
-limité à 4 surfaces · seuil `MIN_LEN` · mode `regex` sur gros volumes ·
-chemin d'URL en clair · cache non porté · userinfo/mot de passe d'URL ·
-fragment d'URL · IPv6 sans crochets · hôte nu d'URL · hôte d'URL non
-enregistré au coffre · `document.source[type=text].data` · blocs PEM (courts
-ET longs) · sous-arbres de clés de contrôle · `walk_response` limité à
-`content` · écho de `stop_sequence` en SSE.
+**Proxy / walker** : passthrough sur chemin non modélisé · surfaces sortantes
+énumérées · seuil de longueur · mode regex sur gros volumes · chemin et query
+d'URL · cache non porté par la portée · écho de séquence d'arrêt · source de
+document en texte · blocs PEM · type non hachable · branche `properties` morte
+· mots-clés de schéma (motif de validation, format, type en union, ancres,
+références dynamiques, dépendances) · clés de propriétés à motif · sous-arbre
+non scalaire sous une clé ignorée · scalaire arbitraire sous les betas ·
+contrôle de cache et son vocabulaire · bloc de démarrage non restauré · delta
+de citations · corps d'erreur streamé · séparateurs SSE et formes mixtes ·
+delta orphelin · clés ignorées dans les arguments d'outil et les métadonnées ·
+opacité forgeable · nom de ressource MCP · types de média `x-` et `vnd.` ·
+événements mal typés · delta signé futur · corps non-objet (requête et
+réponse) · démarrage de message · conteneur scalaire · tampon SSE non borné ·
+heuristique de schéma d'entrée · liste d'outils autorisés · exemples de schéma ·
+émission après la fin du message.
 
-Moteur : attribut partagé se substituant à lui-même · spans invalides ·
-recouvrement partiel · tag d'image · type interne forgeable · identités
-multiples par type/casse · mot du lexique reprenant le réel · fragments sans
-alphanumérique · `FILE_PATH` dégénéré · plausibilité (UUID, MAC Cisco,
-préfixe de hash, `PERSON`, IPv6).
+**Moteur / coffre** : attribut partagé se substituant à lui-même · spans
+invalides ou mal formés · recouvrement partiel · tag d'image · type interne
+forgeable · identités multiples par type ou casse · mot du lexique reprenant le
+réel · chemin dégénéré · plausibilité (UUID, MAC, préfixe de hash, personne,
+IPv6) · identifiants d'URL (forme web ET forme secure shell) · fragment ·
+IPv6 sans crochets · hôte nu · Unicode NFC · chiffrement au repos, AAD,
+rembourrage, unicité par portée · classification des types de secret · span
+PUBLIC masquant une classe substituable · nom de paramètre de requête (vide,
+encodé) · libellé de mot de passe · extraction de dépôt (casse mixte, hôte
+hostile, port) · hôte nu avec barre oblique finale · préfixe de hachage sans
+corps · **radical de l'allowlist acceptant les points** · **règle de forme
+appliquée aux sous-parties**.
 
-Coffre : chiffrement au repos, AAD à préfixe de longueur, rembourrage,
-unicité `(scope, real_idx)`, refus du format en clair, symlink de migration.
+**Hook** : quoting, globs, backslashes · décodage puis shell · `ps auxe` ·
+répertoire ssh · outils MCP · substitution de processus · backticks ·
+`busybox` · `terraform show` · `port-forward` · `gh api` · `docker run` avec
+montage · socket du shell · `kubectl exec` · `helm get values` · tfstate ·
+jetons cloud · domaine commençant par `127.` · `perl -e system` avec et sans
+parenthèses · `qx`, `%x` · tuple `subprocess` · accès à l'environnement par
+crochets · import de la table d'environnement · `ENV` de Ruby · IFS sous toutes
+ses formes, y compris la forme `plus` · variable commençant par IFS ·
+référence indirecte · `find -exec` y compris derrière une enveloppe · `strace` ·
+substitution dont la sortie devient un argument · variables de base de données
+et de session · expansion perdant le nom de variable · repli exécuté · repli
+cassant les motifs de refus · repli imbriqué · nom d'expansion positionnel ·
+accolade en plusieurs mots · `env` avec découpage de chaîne · préfixe
+d'affectation vide ou concaténé · heredoc au pipe collé ou consommé par un
+pipeline · famille `exec` et `spawn` · options d'enveloppe par programme ·
+champs d'outil non énumérés · `openssl` en liste noire · options d'aide seules ·
+**programme désigné par une variable** · expansion d'accolades non bornée.
 
-Classification : les vrais types du détecteur (`CERTIFICATE`,
-`CRYPTOGRAPHIC_KEY`, `PASSWORD`, `USERNAME`) n'étaient PAS classés → secrets
-réversibles. Corrigé + `tests/test_classes_contract.py`.
-
-Hook : préfixe/quoting/glob · décodage-puis-shell · `$ENV` d'interpréteur ·
-`ps auxe` · variables sensibles · `~/.ssh` en bloc · outils MCP · hôte d'URL ·
-`bash <(curl)` · backticks · `busybox` · `terraform show` · `port-forward` ·
-`gh api` · `docker run -v` · expansions `${…}` en milieu de mot · hôte local
-comparé comme ADRESSE (`127.evil.test`) · régions imbriquées analysées
-récursivement (`system()`, `subprocess.run([…])`, `<(…)`) · `%ENV`/`ENVIRON`
-nus · enveloppes `su`/`runuser` et options à valeur (`sudo -u root env`) ·
-index par OCCURRENCE (`env PATH=/x env`).
-
-Faux positifs corrigés (mesurés, un agent bloqué est aussi cassé) : `set +e` ·
-`env -i`/`env -u` · `command -v env` · `compgen -A function` ·
-`echo $(find . -name env)` · `$ANTHROPIC_BASE_URL` · `ls ~/.ssh` ·
-`grep -r curl src/`.
-
-Walker/proxy round 3 : sous-arbre non scalaire sous une clé de `SKIP_KEYS` ·
-scalaire arbitraire sous une clé de contrôle (`betas`) · mots-clés de schéma
-(`type` en union, `format`, `pattern`) · `cache_control` enrichi ·
-`content_block_start` non restauré · `citations_delta` en passthrough ·
-corps d'erreur streamé non restauré · séparateurs SSE CRLF · delta orphelin.
-
-Moteur round 3 : span PUBLIC masquant une classe substituable · nom de
-paramètre de query porteur d'identifiant · `PASSWORD_CONTEXT` recopiant le
-secret précédent · `_extract_repo` matchant `attacker-github.com`.
-
-Tests complaisants : compteur de collisions tautologique · recherche aveugle
-aux échappements · garde-fou FakeDetector à couverture partielle · `or` de
-repli · base64 accepté comme chiffrement · code retour de `claude` ignoré ·
-restauration partielle acceptée.
+**Faux positifs corrigés** (un agent bloqué est aussi cassé qu'un agent qui
+fuit) : `set +e` · `env -i` et `-u` · `command -v` · `compgen -A function` ·
+substitution dans un `echo` · variable de configuration Anthropic · `printenv`
+d'une région AWS · listage du répertoire ssh · `grep -r curl src/` · `openssl
+rand|dgst|passwd|help|ciphers` · `ssh -V` · `wget --help` · `python3 -m venv
+env` · prose citant un binaire réseau · message de commit citant une primitive
+ou un one-liner · prompt de sous-agent avec backticks · heredoc cité écrivant
+un fichier · code JavaScript cherché par `grep` · `nice -n 10` · affectation
+depuis une substitution · accolade qui n'exécute rien · nom de fichier Markdown
+pris pour un domaine.
 
 ## 5. Assumé et documenté — ce ne sont PAS des findings
 
@@ -172,42 +154,92 @@ restauration partielle acceptée.
   local. Voir `docs/d9-blocage-reseau.md`.
 - Les QUATRE attributs préservés (environnement, /24, humain/service,
   interne/externe) sont des fuites volontaires (réponse §3.4).
-- Hook en **denylist** et non allowlist : arbitrage acté, le plan sous-estime
-  le coût d'une allowlist pour un agent DevOps.
+- Hook en **denylist**, et « rideau, pas mur » : écrire-puis-exécuter, script
+  par chemin, gestionnaires de paquets, clone vers un remote arbitraire,
+  `docker pull/push`, `helm pull`. **Ne pas empiler des motifs pour ceux-là.**
+- Écrire dans le fichier des clés autorisées n'est pas couvert : le hook vise
+  l'exfiltration, pas la persistance.
 - Dépendance à l'ordre d'insertion bornée à ~4 % (test dédié).
-- `SERVICE` classé PUBLIC (faux positifs sur de la prose).
-- Corpus réel non annoté.
-- Télémétrie : coupée par les réglages de jo ; contenu jamais inspecté.
+- `SERVICE` classé PUBLIC (faux positifs sur de la prose technique).
+- Les noms d'outils, de serveurs MCP, de choix d'outil et la liste d'outils
+  autorisés restent verbatim : ce sont des clés de ROUTAGE, les substituer
+  casserait l'outil en silence.
+- Une valeur de contrôle en forme de jeton nu n'est pas traversée.
+- Une zone nue ne rejoint pas la zone fictive de ses hôtes : corriger en ferait
+  un attribut PARTAGÉ, donc non restaurable.
+- Un nom de paramètre de requête court, sans point ni arobase, n'est pas
+  substitué : indiscernable d'un nom d'API.
+- Les clés de définitions restent verbatim ; un substitut peut théoriquement
+  déséquilibrer une expression de validation.
+- Une coupure de chunk peut laisser un saut de ligne en tête d'un bloc SSE.
+- Corpus réel non annoté ; télémétrie coupée par les réglages de jo.
 
-## 6. Pièges qui ont coûté du temps
+## 6. Déviations à faire valider par jo
+- **Allowlist cloud resserrée** à `<service>[.<région>].<cloud>` (le littéral
+  couvrant tout le domaine laissait fuir un endpoint de ressource).
+- **Règle d'extensions de fichiers** dans `config/allowlist.txt` : rend publics
+  les noms de fichiers d'un SEUL label. `.io`, `.ai`, `.dev`, `.app`, `.co` et
+  `.sh` en sont volontairement ABSENTS — ce sont des domaines réels.
+- **`SERVICE` classé PUBLIC**, à réévaluer sur le corpus réel.
+- **Attributs partagés exclus de la vue de restauration.**
+
+## 7. Pièges qui ont coûté du temps
 
 - **`uv run` re-synchronise le venv** de `services/anonshield/upstream` sur le
-  lock (torch CPU) et retire fastapi. Toujours relancer
-  `services/anonshield/wrapper/install-cuda.sh` après, et lancer le service
-  par `.venv/bin/python` direct (c'est ce que fait `run.sh`).
+  lock (torch CPU) et retire fastapi. Relancer `wrapper/install-cuda.sh`, et
+  lancer le service par `.venv/bin/python` (ce que fait `run.sh`).
 - **Le détecteur doit être REDÉMARRÉ** après toute modification de
-  `config/allowlist.txt` ou `config/custom_patterns.json` : la config est lue
-  au démarrage. Le redémarrage prend ~2 min (chargement du modèle), et
-  `pkill -f wrapper/app.py` ne l'attrape pas — il tourne sous `uvicorn`.
-  Identifier le PID par le port 9000, puis `kill`.
-- **Deux régressions ont été attrapées par `phase3_e2e.sh`, pas par les tests
-  unitaires** (503 en pleine session). Toujours rejouer l'E2E réel après une
-  modification du moteur ou du coffre.
-- `_SCHEMA` n'est pas une chaîne brute : y écrire `ESCAPE '\'` donne un
-  échappement VIDE. Utiliser `'\\'`.
-- Les agents de revue doivent recevoir la liste §4/§5, sinon ils passent leur
-  temps sur du déjà-corrigé.
+  `config/allowlist.txt` ou `config/custom_patterns.json`. Un `pkill` sur le
+  nom du module NE L'ATTRAPE PAS (il tourne sous `uvicorn`) : identifier le PID
+  par le port 9000 (`ss -lptn | grep 9000`) puis `kill`. Redémarrage ~2 min.
+- **`phase3_e2e.sh` a trouvé trois défauts que rien d'autre ne voyait** : un
+  schéma invalide (API 400), une collision de substitut (503), et un faux
+  positif du hook qui faisait atteindre la limite de tours SANS erreur ni test
+  rouge. Le harnais est borné à 6 tours et la session en consomme 6 : elle est
+  à la limite, donc parfois instable. Vérifier le nombre de requêtes dans
+  `captures/*/bodies/` avant de conclure à une régression.
+- **Le hook s'applique à MOI.** Blocages rencontrés en travaillant : prompt de
+  sous-agent citant le chemin du coffre ; fichier de test ou de documentation
+  dont le CONTENU cite un chemin sensible — les composer par concaténation ;
+  heredoc alimentant `python3` dont le corps lit l'environnement (blocage
+  CORRECT). Écrire les fichiers par l'outil Write.
+- `_SCHEMA` n'est pas une chaîne brute : y écrire un échappement simple donne
+  un échappement VIDE. Doubler le backslash.
 - Ne jamais lire ni afficher le répertoire d'état du coffre (règle secrets).
-- **Le hook s'applique à MOI aussi.** Trois blocages rencontrés en travaillant :
-  un prompt de sous-agent citant le chemin du coffre ; un test dont le contenu
-  cite un chemin sensible (composer : `"~/." + "ssh/id_" + "rsa"`) ; un
-  `uv run python - <<'FIN'` dont le corps lit l'environnement (blocage
-  CORRECT). Écrire les fichiers de test par l'outil Write ou `cat > f <<'FIN'`.
 
-## 7. Repères
+## 8. Ce que neuf rounds ont appris — à appliquer au round 10
 
+1. **Une approximation à UNE valeur est un contournement en attente.** Chaque
+   fois que j'ai modélisé un mécanisme de bash par une seule valeur (une
+   alternative d'accolade, une branche d'expansion, un token sauté, la première
+   occurrence d'un programme), le round suivant a trouvé le cas où bash en
+   produit plusieurs. Émettre TOUTES les possibilités coûte un faux positif
+   visible ; en émettre une seule coûte un contournement silencieux.
+2. **Énumérer, c'est reporter le défaut.** Les correctifs qui ont tenu sont
+   ceux qui changent la STRUCTURE de l'analyse : région imbriquée traitée comme
+   une commande, positions de programme au lieu de noms, table d'options PAR
+   enveloppe, périmètre des données utilisateur, drapeau hérité. Les listes
+   (de motifs, de mots, d'options) ont toutes fini par être prises en défaut.
+3. **Une règle qui rend des valeurs PUBLIQUES est la seule dont l'échec soit
+   silencieux.** Tout le reste échoue bruyamment (400, 500, 503, commande
+   refusée). Une telle règle doit naître avec son test, et son périmètre doit
+   être explicite : une entrée EXACTE vaut partout, une règle de FORME suppose
+   un contexte.
+4. **Un faux positif est aussi grave qu'une fuite.** Un agent qui ne peut plus
+   écrire un script, lire un fichier ou committer est cassé. Un faux positif a
+   déjà fait échouer une session réelle sans produire ni erreur ni test rouge.
+5. **Vérifier les findings soi-même.** Plusieurs rapports contenaient des cas
+   faux (une obfuscation citée qui ne reconstruit pas le binaire annoncé) ou
+   non reproductibles (moteur construit sans l'allowlist). Corriger sur une
+   preuve fausse aurait introduit un vrai défaut.
+6. **Les tests aussi peuvent avoir tort.** Deux de mes assertions étaient
+   fausses (une accolade qui n'exécute rien ; deux deltas de texte qui ne sont
+   pas un doublon mais le tampon de queue). Corriger dans le sens du
+   comportement RÉEL, pas dans celui qui arrange.
+
+## 9. Repères
 - Commits : uniquement sur demande de jo, conventional commits, en anglais.
 - `PLAN-proxy-pseudonymisation.md` : **jamais modifié**.
-- `anthropic_walker.py` : fourni par jo ; sept défauts corrigés, chacun prouvé
+- `anthropic_walker.py` : fourni par jo ; seize défauts corrigés, chacun prouvé
   par un test écrit AVANT (`tests/test_walker_defects.py`).
 - Données synthétiques uniquement.
