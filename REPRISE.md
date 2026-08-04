@@ -39,8 +39,14 @@ payé : c'est elle qui a sorti les quatre familles.
 - Éviter les backticks autour de code contenant une substitution : même effet.
 - Demander à l'agent d'écrire ses scripts avec l'outil Write, **pas** par
   heredoc (le hook analyse le corps d'un heredoc alimentant un interpréteur).
-- Demander un rapport TÔT et partiel : deux agents se sont arrêtés sans rien
-  rendre après une trop longue exploration silencieuse (watchdog).
+- **Imposer un rendu par LOTS.** Demander « un rapport partiel tôt » ne suffit
+  pas : au round 13, les DEUX agents sont morts d'un « stream idle timeout »
+  sans rien rendre du tout. La consigne qui marche est explicite — un script
+  par lot, une synthèse écrite après CHAQUE lot, six lots maximum, puis rendu
+  final même incomplet. Découper le prompt en lots numérotés donne à l'agent
+  la structure qui l'empêche d'explorer en silence.
+- Un agent mort ne rend RIEN d'exploitable : relancer, ne pas essayer de
+  récupérer sa trace (le fichier de transcription déborde le contexte).
 
 ## 2. Où en est le code
 
