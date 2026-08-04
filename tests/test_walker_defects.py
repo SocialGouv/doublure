@@ -1008,3 +1008,85 @@ def test_defaut20_un_ping_reste_intact():
 
     sub = Substituter(to_surrogate=lambda s: s, surrogates={})
     assert list(SSERewriter(sub).feed({"type": "ping"})) == [{"type": "ping"}]
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 21 — toute clé de protocole était recopiée SANS CONDITION
+#
+# `name` et `id` avaient été cadrés au round 4 ; les autres non. Un tiers —
+# serveur MCP, tool_result manipulé — plaçait `{"type": "text", "role": "<hôte
+# réel>"}` dans son sous-arbre et la valeur sortait verbatim. Et le caractère
+# « protocolaire » d'un nœud se DÉDUISAIT de son propre `type` : écrire
+# `{"type": "tool_use", "name": …}` suffisait à obtenir la protection.
+#
+# Chaque clé est désormais gardée soit par sa POSITION, soit par la FORME de sa
+# valeur : un nom d'hôte n'a jamais l'air d'un rôle ni d'un type de bloc.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("cle", [
+    "signature", "tool_use_id", "stop_reason", "role", "model", "media_type",
+])
+def test_defaut21_une_cle_de_protocole_posee_ailleurs_est_traversee(cle):
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "ok", cle: "SECRET-HOST"}]}]}
+    assert "SECRET-HOST" not in json.dumps(walk_request(body, marker_sub())), cle
+
+
+@pytest.mark.parametrize("btype", [
+    "tool_use", "server_tool_use", "mcp_tool_use", "message",
+])
+def test_defaut21_le_type_du_noeud_ne_confere_plus_le_statut_de_protocole(btype):
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "tu", "content": [
+            {"type": btype, "name": "SECRET-HOST", "id": "id-SECRET-HOST"}]}]}]}
+    assert "SECRET-HOST" not in json.dumps(walk_request(body, marker_sub())), btype
+
+
+def test_defaut21_les_contrats_legitimes_restent_verbatim():
+    """Contrôle : substituer ces valeurs-là casserait le routage de l'outil."""
+    body = {"messages": [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "toolu_01", "name": "query_db",
+             "input": {"host": "SECRET-HOST"}}]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_01",
+             "content": [{"type": "text", "text": "vu SECRET-HOST"}]}]},
+    ]}
+    sortie = walk_request(body, marker_sub())
+    outil = sortie["messages"][0]["content"][0]
+    assert outil["name"] == "query_db" and outil["id"] == "toolu_01"
+    assert sortie["messages"][1]["content"][0]["tool_use_id"] == "toolu_01"
+    # …et les données, elles, sont bien substituées
+    assert outil["input"]["host"] != "SECRET-HOST"
+    assert "SECRET-HOST" not in json.dumps(sortie["messages"][1])
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 22 — `type: "base64"` disait comment la charge est ENCODÉE, pas ce
+# qu'elle contient. Un document texte encodé (JSON, YAML, CSV — le geste
+# ordinaire « colle-moi ce fichier ») partait ENTIER vers l'API.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("media", ["text/plain", "text/csv", "application/json",
+                                   "application/yaml", "text/markdown"])
+def test_defaut22_un_document_texte_encode_est_pseudonymise(media):
+    import base64 as b64
+    charge = b64.b64encode(b'{"host": "SECRET-HOST"}').decode()
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "document", "source": {"type": "base64", "media_type": media,
+                                        "data": charge}}]}]}
+    rendu = walk_request(body, marker_sub())["messages"][0]["content"][0]["source"]
+    assert "SECRET-HOST" not in b64.b64decode(rendu["data"]).decode(), media
+
+
+@pytest.mark.parametrize("media", ["image/png", "application/pdf"])
+def test_defaut22_une_charge_binaire_reste_intacte(media):
+    import base64 as b64
+    charge = b64.b64encode(bytes(range(256))).decode()
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "document", "source": {"type": "base64", "media_type": media,
+                                        "data": charge}}]}]}
+    rendu = walk_request(body, marker_sub())["messages"][0]["content"][0]["source"]
+    assert rendu["data"] == charge, media

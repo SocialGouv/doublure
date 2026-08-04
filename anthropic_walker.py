@@ -38,6 +38,7 @@ L'implementation regex ci-dessous est correcte mais O(n * nb_substituts).
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from dataclasses import dataclass, field
@@ -62,26 +63,44 @@ OPAQUE_BLOCK_TYPES: frozenset[str] = frozenset(
     {"thinking", "redacted_thinking"}
 )
 
-#: Cles dont la VALEUR ne doit jamais etre substituee.
-#: - identifiants de protocole (id, tool_use_id, signature) : casseraient l'API
-#: - `name` : nom d'outil, contrat avec le modele, pas une donnee
-#: - `data` / `media_type` : payloads base64 d'images et documents
-#: - `type` : discriminant de bloc
+#: Cles dont la VALEUR ne doit jamais etre substituee. AUCUNE n'est recopiee
+#: sans condition : chacune est gardee soit par sa POSITION (CONTRACT_KEYS),
+#: soit par la FORME de sa valeur (SCALAR_SKIP_FORMS), soit par sa structure
+#: (STRUCTURED_SKIP_KEYS), soit par le type de sa charge (`data`).
+#: Recopiees sans condition, elles etaient FORGEABLES : un serveur MCP posait
+#: `{"type": "text", "role": "<hote reel>"}` n'importe ou et la valeur sortait
+#: verbatim, sans entree de coffre ni substitut non resolu pour le signaler.
+#: `type`, `role`, `model`, `stop_reason` et `media_type` n'y figurent plus :
+#: ils sont gardes par la FORME de leur valeur (SCALAR_SKIP_FORMS), testee
+#: AVANT. `signature` non plus : sa seule position legitime est un bloc SIGNE,
+#: rendu verbatim bien avant la boucle sur les cles — partout ailleurs, c'est
+#: une valeur qu'un tiers ecrit.
 SKIP_KEYS: frozenset[str] = frozenset(
     {
-        "type",
         "id",
         "tool_use_id",
-        "signature",
         "name",
-        "media_type",
         "data",
         "cache_control",
-        "model",
-        "stop_reason",
-        "role",
     }
 )
+
+#: Cles de protocole dont la valeur appartient a un vocabulaire FERME ou a une
+#: forme stricte. Elles ne restent verbatim que si leur valeur a cette forme —
+#: un nom d'hote n'en a jamais l'air. La garde par forme vaut mieux que la
+#: garde par position pour ces cles-la : `media_type` vit deux crans sous un
+#: bloc, `type` partout, et les cadrer par position aurait casse l'API.
+SCALAR_SKIP_FORMS: dict[str, re.Pattern[str]] = {
+    # les types de bloc sont toujours en minuscules, sans tiret
+    "type": re.compile(r"[a-z][a-z0-9_]*"),
+    "role": re.compile(r"user|assistant|system"),
+    "stop_reason": re.compile(
+        r"end_turn|max_tokens|stop_sequence|tool_use|pause_turn|refusal|"
+        r"model_context_window_exceeded"),
+    "model": re.compile(r"(claude|gpt|gemini|llama|mistral|command|titan)"
+                        r"[a-z0-9.\-]*", re.I),
+    "media_type": re.compile(r"[\w.+-]+/[\w.+-]+"),
+}
 
 #: Cles de bloc dont la valeur est une STRUCTURE de protocole, pas du texte.
 #: Meme regle que REQUEST_CONTROL_KEYS : la forme connue est recopiee, une cle
@@ -104,6 +123,21 @@ def _forme_connue(value: Any, formes: dict[str, re.Pattern[str]]) -> bool:
         cle in formes and isinstance(val, str) and formes[cle].fullmatch(val)
         for cle, val in value.items()
     )
+
+
+def _base64_texte(charge: str, fn: Callable[[str], str]) -> str:
+    """Pseudonymise une charge base64 qui se decode en texte.
+
+    Une charge qui ne se decode pas en UTF-8 est BINAIRE malgre son
+    `media_type` : on la rend telle quelle, comme toute charge binaire — le
+    detecteur ne saurait rien y lire, et la modifier la corromprait.
+    """
+    try:
+        clair = base64.b64decode("".join(charge.split()),
+                                 validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return charge
+    return base64.b64encode(fn(clair).encode("utf-8")).decode("ascii")
 
 
 def _traverse_hors_forme(value: Any, fn: Callable[[str], str],
@@ -351,12 +385,19 @@ USER_DATA_KEYS: frozenset[str] = frozenset({"input", "metadata"})
 #: — dans la sortie d'un outil MCP, qui renvoie couramment
 #: `{"type": …, "name": …, "uri": …}` — ce sont des donnees : les recopier
 #: faisait fuir le nom reel ET empechait sa restauration au retour.
-CONTRACT_KEYS: frozenset[str] = frozenset({"name", "id"})
+CONTRACT_KEYS: frozenset[str] = frozenset({"name", "id", "tool_use_id"})
 
-#: Types de blocs ou `name`/`id` appartiennent a l'API.
-_TYPES_DE_PROTOCOLE: frozenset[str] = frozenset(
-    {"tool_use", "server_tool_use", "mcp_tool_use", "message"}
-)
+#: Ou chaque cle de contrat est legitime, EN PLUS d'un conteneur de protocole.
+#: Le type du bloc ne suffit pas — c'etait le defaut precedent — mais combine a
+#: la POSITION (un bloc directement sous le `content` d'un message) il n'est
+#: plus forgeable : un tiers ecrit dans un `tool_result`, deux crans plus bas.
+#: `signature` n'y figure pas : sa seule position legitime est un bloc SIGNE,
+#: rendu verbatim bien avant la boucle sur les cles.
+CONTRACT_BLOCK_TYPES: dict[str, frozenset[str]] = {
+    "name": frozenset({"tool_use", "server_tool_use", "mcp_tool_use"}),
+    "id": frozenset({"tool_use", "server_tool_use", "mcp_tool_use", "message"}),
+    "tool_use_id": frozenset({"tool_result", "mcp_tool_result"}),
+}
 
 #: Conteneurs dont les ENTREES sont des noeuds de protocole : le nom d'un outil
 #: et celui d'un serveur MCP se retrouvent dans les noms d'outils exposes au
@@ -381,6 +422,7 @@ def _walk(
     signe_ici: bool = False,
     signe_partout: bool = False,
     dans_messages: bool = False,
+    bloc_message: bool = False,
 ) -> Any:
     """
     Traverse recursivement une structure JSON et applique `fn` a chaque chaine
@@ -399,7 +441,8 @@ def _walk(
         return [
             _walk(item, fn, in_schema=in_schema, in_user_data=in_user_data,
                   protocole=protocole, signe_ici=signe_ici,
-                  signe_partout=signe_partout, dans_messages=dans_messages)
+                  signe_partout=signe_partout, dans_messages=dans_messages,
+                  bloc_message=bloc_message)
             for item in node
         ]
 
@@ -429,7 +472,11 @@ def _walk(
         # casse, RFC 2045).
         media = node.get("media_type")
         media = media.lower() if isinstance(media, str) else ""
-        binaire = btype == "base64" or media.startswith(BINARY_MEDIA_PREFIXES)
+        # `type == "base64"` dit comment la charge est ENCODEE, pas ce qu'elle
+        # contient. Le prendre pour une preuve de binarite faisait recopier
+        # verbatim tout document texte encode — un JSON de configuration colle
+        # dans un prompt partait entier. Seul le media_type fait foi.
+        binaire = media.startswith(BINARY_MEDIA_PREFIXES)
         texte_brut = "data" in node and not binaire
 
         out: dict[str, Any] = {}
@@ -446,14 +493,42 @@ def _walk(
                     )
                     continue
 
+                # Une cle de vocabulaire FERME ne reste verbatim que si sa
+                # valeur appartient a ce vocabulaire. Sans cette garde, elle
+                # etait recopiee quoi qu'elle porte, donc forgeable.
+                # Dans un SCHEMA, ces cles sont structurelles et traitees
+                # plus bas : `type` y vaut couramment `["string", "null"]`,
+                # que cette garde aurait substitue — schema invalide, 400.
+                forme = None if in_schema else SCALAR_SKIP_FORMS.get(key)
+                if forme is not None:
+                    if isinstance(value, str) and forme.fullmatch(value):
+                        out[key] = value
+                        continue
+                    out[key] = _walk(value, fn, in_user_data=True)
+                    continue
+
+                # Une charge base64 dont le media est du TEXTE (JSON, YAML,
+                # CSV...) est decodee, pseudonymisee, puis re-encodee. La
+                # laisser verbatim parce qu'elle est encodee envoyait le
+                # fichier ENTIER en clair — l'amont, lui, le decode ; et la
+                # traverser telle quelle n'aurait rien donne, le detecteur ne
+                # lisant pas du base64.
+                if key == "data" and isinstance(value, str) \
+                        and btype == "base64" and not binaire:
+                    out[key] = _base64_texte(value, fn)
+                    continue
+
                 # Un noeud est protocolaire s'il HERITE d'un conteneur de
-                # protocole, ou si son propre `type` en est un. Le deduire de
-                # la seule presence d'`input_schema` etait faux : un serveur
-                # MCP renvoie ses definitions d'outils DANS un `tool_result`,
-                # ou `name` et `id` sont des donnees.
-                contrat = key not in CONTRACT_KEYS or protocole or (
-                    isinstance(btype, str) and btype in _TYPES_DE_PROTOCOLE)
-                if key in SKIP_KEYS and contrat \
+                # protocole, ou s'il occupe une POSITION de protocole : un bloc
+                # directement sous le `content` d'un message, ou un message
+                # lui-meme. Le deduire du `type` du noeud etait forgeable —
+                # meme classe que l'opacite : un tiers ecrit
+                # `{"type": "tool_use", "name": "<hote reel>"}` dans son
+                # sous-arbre et les deux valeurs sortent verbatim.
+                contrat = protocole or dans_messages or (
+                    bloc_message and isinstance(btype, str)
+                    and btype in CONTRACT_BLOCK_TYPES.get(key, frozenset()))
+                if key in SKIP_KEYS and (key not in CONTRACT_KEYS or contrat) \
                         and not (key == "data" and texte_brut):
                     # Le saut ne vaut que pour un SCALAIRE protocolaire. Ces
                     # cles portent parfois une structure — `cache_control`
@@ -529,6 +604,10 @@ def _walk(
                 # imbrique porte de nouveau des donnees.
                 signe_ici=(dans_messages and key == "content"
                            and node.get("role") == "assistant"),
+                # Un BLOC de message occupe une position de protocole : c'est
+                # la que `tool_use.name` et `tool_result.tool_use_id` sont des
+                # cles de routage. Ailleurs, ce sont des donnees.
+                bloc_message=(dans_messages and key == "content"),
                 signe_partout=signe_partout,
             )
         return out
@@ -632,7 +711,7 @@ def walk_response(
         # traverser un bloc signe invaliderait sa signature (D3), panne dure.
         out[key] = _walk(value, _resolve, in_user_data=key in USER_DATA_KEYS,
                          protocole=key in PROTOCOL_CONTAINER_KEYS,
-                         signe_partout=True)
+                         signe_partout=True, bloc_message=key == "content")
 
     if strict and unresolved:
         raise UnresolvedSurrogate(f"substituts inconnus : {sorted(set(unresolved))}")
@@ -804,8 +883,8 @@ class SSERewriter:
         # remplis. Les emettre verbatim montrait le SUBSTITUT a l'operateur, la
         # ou walk_response restaure le meme bloc.
         if block:
-            event = {**event, "content_block": _walk(block, self._resolve,
-                                                    signe_partout=True)}
+            event = {**event, "content_block": _walk(
+                block, self._resolve, signe_partout=True, bloc_message=True)}
         yield event
 
     def _on_delta(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:

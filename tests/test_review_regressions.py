@@ -742,7 +742,6 @@ def test_une_regle_de_forme_ne_rend_pas_public_un_chemin_multi_labels(valeur):
 @pytest.mark.parametrize("valeur", [
     "https://json-schema.org/draft/2020-12/schema",
     "https://docs.anthropic.com/en/api/messages",
-    "https://docs.anthropic.com/guide/index.html",
     "https://github.com/anthropics/claude-code",
     "k8s.io/api/core/v1",
     "golang.org/x/net/http2",
@@ -755,6 +754,19 @@ def test_le_resserrement_ne_casse_pas_les_valeurs_publiques_legitimes(valeur):
     """Substituer une URL de standard ou une image publique casse le protocole
     ou prive le modèle d'une référence qu'il sait lire."""
     assert Allowlist.load()(valeur), f"{valeur!r} serait substitué à tort"
+
+
+@pytest.mark.parametrize("valeur", [
+    # Prix du resserrement : un segment de chemin ne porte plus AUCUN point,
+    # donc un nom de fichier dans une URL de documentation est substitué.
+    # `acme.internal` a exactement la forme d'`index.html` — la borne « un
+    # seul point » ne les distinguait pas. Une URL de doc abîmée est visible
+    # et cosmétique ; un hôte interne qui sort ne l'est pas.
+    "https://docs.anthropic.com/guide/index.html",
+    "https://spdx.org/licenses/MIT.html",
+])
+def test_prix_du_resserrement_un_nom_de_fichier_dans_une_url(valeur):
+    assert not Allowlist.load()(valeur)
 
 
 @pytest.mark.parametrize("valeur", [

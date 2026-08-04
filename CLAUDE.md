@@ -677,6 +677,72 @@ d'environnement (System.getenv()) passait sur une machine où il est installé.
 (`trap 'rm -f /tmp/lock' EXIT`, `case $1 in build)…`, `mapfile -t`,
 `python3 -X dev script.py`, `alias ll='ls -la'`).
 
+## Treizième revue adversariale (2026-08-04, round 12)
+
+### Walker — toute clé de protocole était recopiée SANS CONDITION
+`name` et `id` avaient été cadrés au round 4 ; les huit autres, jamais. Un
+tiers — serveur MCP, sortie d'outil manipulée — plaçait
+`{"type": "text", "role": "<hôte réel>"}` dans son sous-arbre et la valeur
+sortait verbatim. Pire : le caractère « protocolaire » d'un nœud se DÉDUISAIT
+de son propre `type`, si bien qu'écrire `{"type": "tool_use", "name": …}`
+suffisait à obtenir la protection — la même forgerie que l'opacité, aux mêmes
+endroits, non corrigée en même temps.
+
+Règle unifiée : **une clé de protocole est gardée soit par sa POSITION, soit
+par la FORME de sa valeur, jamais recopiée sans condition.**
+`type`, `role`, `stop_reason`, `model`, `media_type` ont un vocabulaire fermé
+(`SCALAR_SKIP_FORMS`) — un nom d'hôte n'a jamais l'air d'un rôle. `name`, `id`,
+`tool_use_id` exigent une position : un bloc DIRECTEMENT sous le `content` d'un
+message, et le type attendu pour cette clé. `signature` sort de la liste : sa
+seule position légitime est un bloc signé, rendu verbatim bien avant la boucle.
+
+### Walker — un document texte encodé partait ENTIER
+`type: "base64"` dit comment la charge est ENCODÉE, pas ce qu'elle contient.
+Le prendre pour une preuve de binarité faisait recopier verbatim tout document
+texte : coller un JSON ou un YAML dans un prompt — le geste le plus ordinaire —
+envoyait le fichier complet. Seul le `media_type` fait foi désormais, et une
+charge texte est DÉCODÉE, pseudonymisée, ré-encodée. Ce qui ne se décode pas en
+UTF-8 est binaire malgré son en-tête et reste intact.
+
+### Allowlist — un hôte à deux labels tient dans un segment « un point »
+Le round 11 avait borné les chemins à « un mot ou un nom de fichier ». Or
+`acme.internal` a exactement la forme d'`index.html`. Un segment de chemin ne
+porte plus AUCUN point. Prix assumé : un nom de fichier dans une URL de
+documentation est substitué — abîmer une URL est visible et cosmétique, laisser
+sortir un hôte interne ne l'est pas.
+
+### Hook — sept mécanismes, dont deux régressions de mes correctifs du round 11
+- **Une sous-commande portée par un ARGUMENT** (`trap -- 'env' EXIT`,
+  `mapfile -C 'sh -c env'`) : mes isolations du round 11 ne retenaient que le
+  PREMIER token. Elle est désormais analysée récursivement, et les DEUX
+  lectures sont émises — un mot, ou tout le reste : le quoting étant retiré, on
+  ne sait pas où elle s'arrête. Les spécifications de signal, vocabulaire
+  fermé, sont retirées de la queue d'un `trap`.
+- **Une expansion peut valoir le VIDE** : `${IFS//?/}` remplace tout par rien,
+  `${V:0:0}` est une tranche nulle. Les caractères autour se recollent et
+  reconstruisent le nom. Je réduisais IFS à une ESPACE, ce qui ne couvre que la
+  forme valant un séparateur. Plutôt qu'énumérer les formes provablement vides,
+  la lecture « tout est vide » est émise et analysée comme une commande.
+- **Le nom d'une variable arrive indirectement** : `x=$y`, `x=$(…)`,
+  `read x <<<`, `printf -v x`, `declare -n r` puis `r=…`. L'index n'admettait
+  qu'un littéral en membre droit. La chaîne est suivie, bornée ; une source
+  opaque vaut refus (fail-closed).
+- **Enveloppes de bac à sable** (`bwrap`, `gdb`, `setpriv`, `firejail`,
+  `valgrind`) : leurs options prennent un nombre VARIABLE de valeurs —
+  `bwrap --dev-bind SRC DST` — donc aucune grammaire d'options ne tient. Tous
+  les mots suivants deviennent des positions de programme possibles.
+  Sur-approximation assumée : ces enveloppes sont rares.
+- **`env # commentaire`** : bash coupe la ligne au dièse, mais le hook lisait
+  le commentaire comme le programme exécuté par `env`, donc comme un préfixe
+  légitime.
+- **Options courtes combinées** (`declare -px`), `typeset` alias de `declare`,
+  `exec -a NOM cmd` (l'argv[0] occupait la position de programme),
+  `script -c CMD`, et `PROMPT_COMMAND` / `command_not_found_handle`, qui
+  portent une commande et non une donnée.
+
+**Zéro faux positif mesuré** sur douze idiomes courants ; disponibilité
+inchangée malgré la double lecture (500 Ko de texte en 0,80 s).
+
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
 (le 4ᵉ vient de la revue adversariale) :
