@@ -145,13 +145,6 @@ _CODE_ENV_RE = re.compile(
     re.I,
 )
 
-#: Interpréteur recevant son programme en ligne : ce qui suit est du CODE.
-_INTERPRETE_EN_LIGNE = re.compile(
-    r"\b(python3?|perl|ruby|node|deno|bun|php|lua|tclsh|Rscript|julia|"
-    r"awk|gawk|mawk|pwsh|powershell)\b[^|;&]*?\s-(e|c|r|E|P)\b|\bawk\b[^|;&]*BEGIN",
-    re.I,
-)
-
 #: Régions dont le CONTENU est lui-même une commande : substitutions du shell
 #: et primitives d'exécution des interpréteurs. Elles sont analysées
 #: récursivement puis retirées de la commande englobante — sans quoi leurs mots
@@ -337,11 +330,21 @@ def _variable_sensible(normalized: str) -> str | None:
     # `${!x}` ne cite que `x` : le nom réellement lu est la VALEUR de `x`.
     # Un alias `declare -n r=CIBLE` désigne sa cible de la même façon, et
     # celle-ci peut être écrite en clair ou passer par une variable.
-    for cible in _REF_INDIRECTE_RE.findall(normalized) + [
-            c.lstrip("${") for c in _NAMEREF_RE.findall(normalized)]:
+    cibles = _REF_INDIRECTE_RE.findall(normalized) + [
+        c.lstrip("${") for c in _NAMEREF_RE.findall(normalized)]
+    if not cibles:
+        return None
+    # Index des affectations construit en UNE passe. Chercher chaque cible dans
+    # toute la commande coûtait O(cibles x longueur) : cinq mille alias
+    # faisaient pendre le hook plusieurs secondes, et vingt mille une minute —
+    # avant CHAQUE appel d'outil, avec les seules primitives de bash.
+    affectations: dict[str, list[str]] = {}
+    for nom, valeur in re.findall(r"\b([A-Za-z_]\w*)=([A-Za-z_]\w*)", normalized):
+        affectations.setdefault(nom, []).append(valeur)
+    for cible in cibles:
         if _nom_sensible(cible):
             return cible
-        for valeur in re.findall(rf"\b{re.escape(cible)}=([A-Za-z_]\w*)", normalized):
+        for valeur in affectations.get(cible, ()):
             if _nom_sensible(valeur):
                 return valeur
     return None
@@ -612,7 +615,7 @@ def _retire_definitions(texte: str) -> str:
     position d'un mot long, ce qui coûtait quinze secondes sur vingt mille
     caractères.
     """
-    texte = re.sub(r"\bfunction\s+[\w-]+", " ", texte)
+    texte = re.sub(r"\bfunction\s+\S+", " ", texte)
     if "(" not in texte:
         return texte
     sortie, fin = [], 0
@@ -620,8 +623,11 @@ def _retire_definitions(texte: str) -> str:
         debut = m.start()
         while debut > fin and texte[debut - 1] in " \t":
             debut -= 1
-        while debut > fin and (texte[debut - 1].isalnum()
-                               or texte[debut - 1] in "_-"):
+        # Bash accepte presque tout dans un nom de fonction : `my.fn`, `a+b`,
+        # `a@b`, `a/b`, `1fn`. Se limiter aux caractères de mot laissait le
+        # reste du nom en position de programme, où rien ne le reconnaît, et
+        # l'analyse s'arrêtait avant le corps.
+        while debut > fin and texte[debut - 1] not in " \t\n|;&<>(){}\"'":
             debut -= 1
         sortie.append(texte[fin:debut])
         fin = m.end()
@@ -637,6 +643,30 @@ def tokenize(command: str) -> list[list[str]]:
     une substitution `$(...)`.
     """
     cleaned = _retire_definitions(normalize(command))
+    # `case X in MOTIF) CMD;; esac` : la commande suit la parenthèse fermante,
+    # et l'analyse s'arrêtait sur `case`. On ne reconnaît `case` qu'en POSITION
+    # DE COMMANDE — sinon un message de commit contenant « case … in … » verrait
+    # ses parenthèses coupées, et la prose redeviendrait du code.
+    if re.search(r"(?:^|[|;&\n])\s*case\s+\S+\s+in\b", cleaned):
+        cleaned = re.sub(r"(?:^|[|;&\n])\s*case\s+\S+\s+in\b", " ; ", cleaned)
+        cleaned = cleaned.replace(")", " ; ")
+    # `trap CMD SIGNAL` : le nom du signal SUIT la commande, si bien que
+    # `trap env EXIT` se lisait « env exécute EXIT », donc un préfixe
+    # d'exécution légitime. La commande est isolée en commande propre.
+    cleaned = re.sub(r"\btrap\s+(?!-)(\S+)\s+", r"trap ; \1 ; ", cleaned)
+    # `coproc NOM cmd` : le nom est FACULTATIF, donc `cmd` occupe tantôt la
+    # première position, tantôt la seconde. On isole la suite en commande
+    # propre : les deux lectures sont couvertes.
+    cleaned = re.sub(r"\bcoproc\s+([A-Za-z_]\w*)\s+(?=\S)", r"coproc \1 ; ", cleaned)
+    # `mapfile -C RAPPEL -c N` exécute RAPPEL toutes les N lignes lues.
+    if re.search(r"\b(mapfile|readarray)\b", cleaned):
+        cleaned = re.sub(r"(?<=\s)-C\s+(\S+)", r"; \1 ;", cleaned)
+    # `alias e=env` puis `e` sur une AUTRE ligne : bash développe l'alias (les
+    # alias ne valent pas dans la ligne où ils sont définis, mais valent dans
+    # les suivantes). La valeur est analysée comme une commande à part entière.
+    valeurs = [m.group(1) for m in
+               re.finditer(r"\balias\s+[A-Za-z_]\w*=(\S+)", cleaned)]
+    cleaned += "".join(f" ; {v}" for v in valeurs)
     # La valeur de `env -S` est une COMMANDE, jamais un token — c'est pourquoi
     # `-S` n'est pas une « option à valeur ». Sa forme longue COLLÉE
     # (`--split-string=printenv CLE`) commençait par `-` : elle passait pour
@@ -671,6 +701,9 @@ _WRAPPERS = frozenset({
     "setsid", "chroot", "unshare", "nsenter", "flock", "parallel",
     "su", "runuser", "machinectl", "systemd-run", "proot", "fakeroot",
     "strace", "ltrace", "expect", "pwsh", "powershell",
+    # `trap 'CMD' SIGNAL` fait exécuter CMD au signal ; `coproc CMD` la lance
+    # en tâche de fond. Dans les deux cas l'argument est un PROGRAMME.
+    "trap", "coproc",
     "fish", "csh", "tcsh", "mksh", "oksh", "posh", "yash",
     "do", "then", "else", "elif", "while", "until", "if", "for",
 })
@@ -938,9 +971,13 @@ _HEREDOC_CITE_RE = re.compile(
 )
 
 _INTERPRETES = frozenset({
-    "sh", "bash", "zsh", "ksh", "dash", "python", "python3", "perl", "ruby",
+    "sh", "bash", "zsh", "ksh", "dash", "python", "python2", "python3",
+    "pypy", "pypy3", "ipython", "ipython3", "bpython",
+    "perl", "perl6", "raku", "ruby", "irb",
     "node", "deno", "bun", "php", "lua", "tclsh", "awk", "gawk", "mawk",
     "Rscript", "julia", "psql", "mysql", "sqlite3", "expect", "swift",
+    "groovy", "kotlin", "kotlinc", "scala", "elixir", "iex", "erl",
+    "crystal", "guile", "scheme", "racket", "clojure", "bb",
     "pwsh", "powershell", "fish", "csh", "tcsh", "mksh", "oksh", "posh",
     "yash", "elvish", "xonsh", "nu",
 })
@@ -952,8 +989,11 @@ _INTERPRETES = frozenset({
 #: de ligne ne sépare rien — `os.system(…)` doit rester dans le même segment
 #: que l'interpréteur pour être vu.
 _LANGAGES = frozenset({
-    "python", "python3", "perl", "ruby", "node", "deno", "bun", "php", "lua",
-    "tclsh", "awk", "gawk", "mawk", "Rscript", "julia", "expect", "swift",
+    "python", "python2", "python3", "pypy", "pypy3", "ipython", "ipython3",
+    "bpython", "perl", "perl6", "raku", "ruby", "irb", "node", "deno", "bun",
+    "php", "lua", "tclsh", "awk", "gawk", "mawk", "Rscript", "julia", "expect",
+    "swift", "groovy", "kotlin", "kotlinc", "scala", "elixir", "iex", "erl",
+    "crystal", "guile", "scheme", "racket", "clojure", "bb",
 })
 _ALT_LANGAGES = "|".join(sorted(_LANGAGES, key=len, reverse=True))
 
@@ -963,12 +1003,14 @@ _ALT_LANGAGES = "|".join(sorted(_LANGAGES, key=len, reverse=True))
 #: L'option est bornée à ce qui ne prend pas de valeur : `python3 script.py
 #: <<EOF` alimente le script en DONNÉES, il ne reçoit pas de programme. Le
 #: tiret NU en fait partie — `python3 - <<EOF` demande explicitement à lire
-#: le programme sur l'entrée standard.
+#: le programme sur l'entrée standard. Les options à VALEUR (`-X dev`,
+#: `-W default`, `-I lib`) sont reconnues : les ignorer coupait la chaîne,
+#: et l'interpréteur n'était plus vu comme recevant un programme.
 _PROGRAMME_HERESTRING_RE = re.compile(
-    rf"\b(?P<interp>{_ALT_LANGAGES})\b(?P<opts>(?:\s+-\w*)*)\s*"
+    rf"\b(?P<interp>{_ALT_LANGAGES})\b(?P<opts>(?:\s+(?:-[XWIMmrEK]\s+\S+|-[\w-]*))*)\s*"
     r"<<<\s*(?P<corps>'[^']*'|\"[^\"]*\"|\S+)")
 _PROGRAMME_HEREDOC_RE = re.compile(
-    rf"\b(?P<interp>{_ALT_LANGAGES})\b(?P<opts>(?:\s+-\w*)*)\s*"
+    rf"\b(?P<interp>{_ALT_LANGAGES})\b(?P<opts>(?:\s+(?:-[XWIMmrEK]\s+\S+|-[\w-]*))*)\s*"
     r"<<-?\s*(?P<q>['\"]?)(?P<mark>[A-Za-z_]\w*)(?P=q)[^\n]*\n"
     r"(?P<corps>.*?)^\s*(?P=mark)\s*$",
     re.S | re.M)

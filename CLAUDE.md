@@ -637,6 +637,46 @@ restaurés (l'opérateur voit le nom fictif, un outil s'y exécuterait).
 public — indiscernable d'un vrai module ou d'un vrai paquet. Les paquets Java
 n'acceptent pas le tiret, ce qui exclut la plupart des noms d'hôtes internes.
 
+### Hook — round 11 : quatre mécanismes de bash jamais modélisés
+La consigne que je m'étais donnée au round 10 — « chercher ce qui n'a JAMAIS
+été modélisé, pas seulement les régressions » — a payé : quatre familles
+n'étaient couvertes par AUCUNE règle.
+- **`trap CMD SIGNAL`** exécute CMD au signal (`EXIT`, `ERR`, `DEBUG`,
+  `RETURN`, numérique). Le nom du signal SUIT la commande, si bien que
+  `trap env EXIT` se lisait « env exécute EXIT », donc un préfixe légitime.
+  La commande est isolée — même remède que `bash -c env _` au round 10.
+- **`case MOTIF) CMD;;`** : la commande suit la parenthèse fermante, et
+  l'analyse s'arrêtait sur `case`. Reconnu SEULEMENT en position de commande,
+  sinon un message de commit contenant « case … in … » verrait ses parenthèses
+  coupées et la prose redeviendrait du code.
+- **`coproc [NOM] cmd`** : le nom étant facultatif, la commande occupe tantôt
+  la première position, tantôt la seconde — les deux lectures sont émises.
+- **`mapfile -C RAPPEL -c N`** exécute RAPPEL toutes les N lignes lues.
+- **Alias développé sur une ligne SUIVANTE** : `alias e=env` puis `e`. Le
+  round précédent avait conclu à tort que les alias ne s'exécutent pas — c'est
+  vrai dans la ligne qui les DÉFINIT, faux dans les suivantes.
+
+**Trois régressions de mes correctifs du round 10** :
+- **Déni de service dans le contrôle des variables** : je cherchais CHAQUE
+  cible dans toute la commande, soit O(cibles × longueur). Cinq mille
+  `declare -n` — que des primitives bash — faisaient pendre le hook 3,25 s,
+  vingt mille une minute, avant CHAQUE appel d'outil. Index construit en une
+  passe : **0,21 s**.
+- **Noms de fonction** : je ne remontais que sur des caractères de mot, alors
+  que bash accepte `my.fn`, `a+b`, `a@b`, `a/b`, `1fn`.
+- **Grammaire d'options des interpréteurs** : une option à VALEUR
+  (`python3 -X faulthandler <<< …`) coupait la chaîne, et l'interpréteur
+  n'était plus vu comme recevant un programme.
+
+**Liste morte supprimée** : `_INTERPRETE_EN_LIGNE` dupliquait `_INTERPRETES`
+sans être lue nulle part. Seize interpréteurs ajoutés (`python2`, `pypy`,
+`ipython`, `groovy`, `elixir`, `racket`…) — un `groovy -e` lisant la table
+d'environnement (System.getenv()) passait sur une machine où il est installé.
+
+**Zéro faux positif mesuré** sur les mêmes mécanismes en usage normal
+(`trap 'rm -f /tmp/lock' EXIT`, `case $1 in build)…`, `mapfile -t`,
+`python3 -X dev script.py`, `alias ll='ls -la'`).
+
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
 (le 4ᵉ vient de la revue adversariale) :

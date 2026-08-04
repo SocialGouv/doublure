@@ -11,15 +11,15 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Rounds 3 à 10 traités. Round 11 à lancer.** jo a validé la poursuite deux
+**Rounds 3 à 11 traités. Round 12 à lancer.** jo a validé la poursuite deux
 fois (`::g`). Critère d'arrêt : plus aucun finding critique/haut hors §5.
 **Il n'est pas atteint : les dix rounds ont TOUS produit des findings hauts ou
 critiques.** Jusqu'au round 9 c'étaient surtout des régressions du round
-précédent ; le round 10 a rompu ce motif — les correctifs du round 9 ont tous
-tenu, et ce sont des mécanismes JAMAIS modélisés (programme livré hors ligne,
-accolades, alias de variable, affectations qui exécutent) qui sont sortis.
-Deux des trois motifs à l'origine du déni de service étaient là depuis le
-tout début, jamais mesurés.
+précédent ; le round 10 a rompu ce motif, et le round 11 a produit LES DEUX à
+la fois — quatre mécanismes de bash jamais modélisés (`trap`, `case`, `coproc`,
+`mapfile -C`) ET trois régressions de mes correctifs du round 10, dont un déni
+de service. La consigne « chercher aussi ce qui n'a jamais été modélisé » a
+payé : c'est elle qui a sorti les quatre familles.
 
 ### Protocole appliqué à chaque round
 1. Deux agents `general-purpose`, `model: opus`, en parallèle : un sur le hook,
