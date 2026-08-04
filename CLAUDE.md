@@ -743,6 +743,44 @@ sortir un hôte interne ne l'est pas.
 **Zéro faux positif mesuré** sur douze idiomes courants ; disponibilité
 inchangée malgré la double lecture (500 Ko de texte en 0,80 s).
 
+## Quatorzième revue adversariale (2026-08-04, round 13 — hook)
+
+**Les deux agents sont d'abord morts d'un « stream idle timeout » sans rien
+rendre.** Demander « un rapport partiel tôt » ne suffit pas : la consigne qui
+marche est un rendu par LOTS NUMÉROTÉS, une synthèse écrite après chacun, six
+au maximum. Noté dans `REPRISE.md` — c'est la deuxième fois que ce mode
+d'échec coûte un round.
+
+**L'inversion de la charge de la preuve sur l'indirection.** Quatre des sept
+findings partageaient une racine : `${!x}` lit la variable NOMMÉE par la valeur
+de `x`, et cette valeur peut venir d'une boucle `for`, d'un `select`, d'un
+paramètre positionnel, d'un `set --`, d'un argument de fonction, d'un `read`
+attaché au bloc englobant. J'énumérais ces mécanismes depuis trois rounds et il
+en sortait de nouveaux à chaque fois. Désormais **on refuse à moins de
+DÉMONTRER que le nom lu est anodin** : la liste des indirections inoffensives
+est courte et bornable (`${!arr[@]}`, qui rend des indices), celle des
+dangereuses ne l'est pas. Cela ferme d'un coup `for`, `select`, `${!1}`,
+`${!*}`, `set --`, les arguments de fonction, `while read … done <<<`, et la
+chaîne de trente sauts qui dépassait ma borne d'itérations.
+
+Autres correctifs :
+- **`source <(echo env)` et `. <(…)`** exécutent le CONTENU de leur argument.
+  `source` et `.` n'étaient ni enveloppes ni interpréteurs : leur argument
+  n'était jamais traité comme du code. Ajoutés aux enveloppes — le marqueur
+  d'une substitution s'y retrouve en position de programme et la commande est
+  refusée, tandis qu'un chemin littéral reste sourçable.
+- **Un paramètre POSITIONNEL ou SPÉCIAL peut désigner le programme** :
+  `f() { $1; }; f env`. Mon correctif du round 9 couvrait `$LETTRE`, pas `$1`,
+  `$@`, `$*`.
+- **`fc -l`** lit le même historique que `history`, déjà refusé.
+
+**Faux positif introduit puis corrigé, deux fois de suite sur moi-même** : une
+REGEX citant la syntaxe d'indirection était prise pour une indirection, ce qui
+rendait ce hook impossible à écrire. L'expansion doit être BIEN FORMÉE —
+accolade fermante proche, aucun métacaractère entre les deux. Et
+`${!arr[@]}` échappait à mon exclusion parce que la normalisation des classes
+de glob le réduit à `${!arr@}`.
+
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
 (le 4ᵉ vient de la revue adversariale) :

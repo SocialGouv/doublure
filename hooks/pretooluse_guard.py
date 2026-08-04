@@ -209,7 +209,8 @@ _MARQUEUR_SUBSTITUTION = "substitution_non_evaluable"
 #: La tokenisation retirait le sigil et laissait le mot `SHELL`, que rien
 #: ne reconnaît. Ce remplacement n'a lieu QUE pour l'analyse des positions
 #: de programme — le contrôle des variables sensibles voit le texte entier.
-_REF_SIMPLE_RE = re.compile(r"\$\{?[A-Za-z_]\w*\}?")
+_REF_SIMPLE_RE = re.compile(
+    r"\$\{?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])\}?")
 
 #: Primitive d'exécution SANS parenthèses (`system "env"` en Perl/Ruby,
 #: `qx/env/`, `%x[env]`) : `_NESTED_RE` ne voit que les formes parenthésées.
@@ -324,7 +325,18 @@ _NOM_VARIABLE_RE = re.compile(r"\$\{?!?\s*([A-Za-z_][A-Za-z0-9_]*)")
 
 #: Référence INDIRECTE : `x=AWS_SECRET_ACCESS_KEY; echo ${!x}`. Le nom qui
 #: compte n'est pas dans l'expansion mais dans l'affectation qui précède.
-_REF_INDIRECTE_RE = re.compile(r"\$\{!\s*([A-Za-z_]\w*)")
+#: L'expansion doit être BIEN FORMÉE : accolade fermante proche, et aucun
+#: métacaractère de regex entre les deux. Se contenter du préfixe rendait
+#: suspecte toute regex CITANT cette syntaxe — la prose redevenait du code,
+#: le défaut que les rounds 5 et 8 avaient éliminé ailleurs.
+_REF_INDIRECTE_RE = re.compile(
+    r"\$\{!\s*([A-Za-z_]\w*|\d+|[@*])[^}\\\[(?]{0,32}\}")
+
+#: `${!arr[@]}` et `${!arr[*]}` rendent les INDICES d'un tableau : aucune
+#: valeur de variable n'en sort. C'est la seule forme d'indirection inoffensive.
+#: La normalisation des classes de glob réduit `[@]` à `@` : les deux
+#: formes doivent être reconnues.
+_INDICES_TABLEAU_RE = re.compile(r"\$\{!\s*[A-Za-z_]\w*(?:\[[@*]\]|[@*])\}")
 
 #: Référence par ALIAS : `declare -n r=AWS_SECRET_ACCESS_KEY; echo $r`. Même
 #: mécanisme que la référence indirecte, autre syntaxe — et `$r` ne porte
@@ -369,12 +381,15 @@ def _variable_sensible(normalized: str) -> str | None:
         if _nom_sensible(nom):
             return nom
     # `${!x}` ne cite que `x` : le nom réellement lu est la VALEUR de `x`.
-    # Un alias `declare -n r=CIBLE` désigne sa cible de la même façon, et
-    # celle-ci peut être écrite en clair ou passer par une variable.
-    cibles = _REF_INDIRECTE_RE.findall(normalized) + [
-        (valeur or nom).lstrip("${")
-        for nom, valeur in _NAMEREF_RE.findall(normalized)]
-    if not cibles:
+    # Un alias `declare -n r=CIBLE` désigne sa cible de la même façon, mais
+    # celle-ci est écrite EN CLAIR — les deux cas ne se traitent donc pas
+    # pareil : pour l'alias on lit la cible, pour l'indirection il faut la
+    # PROUVER.
+    indirections = _REF_INDIRECTE_RE.findall(
+        _INDICES_TABLEAU_RE.sub("", normalized))
+    alias = [(valeur or nom).lstrip("${")
+             for nom, valeur in _NAMEREF_RE.findall(normalized)]
+    if not indirections and not alias:
         return None
     # Index des affectations construit en UNE passe. Chercher chaque cible dans
     # toute la commande coûtait O(cibles x longueur) : cinq mille alias
@@ -384,28 +399,42 @@ def _variable_sensible(normalized: str) -> str | None:
     for motif in (_AFFECTATION_RE, _PRINTF_V_RE, _READ_RE):
         for nom, valeur in motif.findall(normalized):
             affectations.setdefault(nom, []).extend(valeur.split() or [""])
-    # Le nom réellement lu peut se construire en plusieurs sauts
-    # (`y=CIBLE; x=$y; echo ${!x}`). On suit la chaîne, bornée.
-    vus: set[str] = set()
-    a_suivre = list(cibles)
-    for _ in range(len(a_suivre) + 24):
-        if not a_suivre:
-            break
-        cible = a_suivre.pop()
-        if cible in vus:
-            continue
-        vus.add(cible)
-        if _nom_sensible(cible):
+    def _prouve_inoffensif(depart: str, exige_une_affectation: bool) -> bool:
+        """Suit la chaîne d'affectations et prouve que le nom lu est anodin."""
+        vus: set[str] = set()
+        a_suivre = [depart]
+        while a_suivre and len(vus) < 512:
+            cible = a_suivre.pop()
+            if cible in vus:
+                continue
+            vus.add(cible)
+            if _nom_sensible(cible):
+                return False
+            valeurs = affectations.get(cible)
+            if not valeurs:
+                # Aucune affectation visible : on ne peut RIEN prouver.
+                return not exige_une_affectation
+            for valeur in valeurs:
+                if _VALEUR_OPAQUE_RE.search(valeur) or _nom_sensible(valeur):
+                    return False
+                if (suivant := valeur.lstrip("$").strip("{}")) != valeur:
+                    a_suivre.append(suivant)
+        return not a_suivre
+
+    # INDIRECTION : bash lit la variable NOMMÉE par la valeur de `x`. Cette
+    # valeur peut venir d'une boucle `for`, d'un `select`, d'un paramètre
+    # positionnel, d'un `set --`, d'un argument de fonction, d'un `read` dans
+    # un bloc… Énumérer ces mécanismes est sans fin : chaque round en a trouvé
+    # de nouveaux. La charge de la preuve est donc INVERSÉE — on refuse à
+    # moins de démontrer que le nom lu est anodin. La liste des indirections
+    # inoffensives est courte et bornable ; celle des dangereuses ne l'est pas.
+    for cible in indirections:
+        if not _prouve_inoffensif(cible, exige_une_affectation=True):
             return cible
-        for valeur in affectations.get(cible, ()):
-            if _VALEUR_OPAQUE_RE.search(valeur):
-                # Le nom est produit à l'exécution : il peut être n'importe
-                # lequel. Fail-closed, comme pour un argument opaque.
-                return cible
-            if _nom_sensible(valeur):
-                return valeur
-            if (suivant := valeur.lstrip("$").strip("{}")) and suivant != valeur:
-                a_suivre.append(suivant)
+    # ALIAS : la cible est écrite en clair, on peut la lire directement.
+    for cible in alias:
+        if not _prouve_inoffensif(cible, exige_une_affectation=False):
+            return cible
     return None
 
 #: (appliqué sur la commande NORMALISÉE : les quotes ont déjà été retirées)
@@ -457,6 +486,8 @@ DENY_COMMAND_PATTERNS: tuple[tuple[str, str], ...] = (
      "montage d'un répertoire de secrets dans un conteneur"),
     (r"(^|[|;&\s])(\.|source)\s+(/tmp/|/dev/|/var/tmp/)",
      "exécution d'un script depuis un répertoire temporaire : contenu non analysable"),
+    (r"\bfc\b(\s+-[lnrs]\S*)+(\s|$)",
+     "`fc -l` liste l'historique de shell, comme `history`"),
     (r"\bhistory\b(\s|$)|\$HISTFILE\b", "l'historique de shell contient des secrets saisis"),
     (r"\.(bash|zsh|sh)_history\b", "l'historique de shell contient des secrets saisis"),
     # Une affectation ne fait normalement rien exécuter. Ces noms-là font
@@ -780,6 +811,12 @@ _WRAPPERS = frozenset({
     # `trap 'CMD' SIGNAL` fait exécuter CMD au signal ; `coproc CMD` la lance
     # en tâche de fond. Dans les deux cas l'argument est un PROGRAMME.
     "trap", "coproc",
+    # `source f` et `. f` exécutent le CONTENU de `f`. Alimenté par une
+    # substitution de processus (`source <(echo env)`), ce contenu n'existe
+    # qu'à l'exécution : le marqueur se retrouve en position de programme et
+    # la commande est refusée. Un chemin littéral, lui, reste autorisé —
+    # écrire-puis-exécuter est un non-but assumé.
+    "source", ".",
     "fish", "csh", "tcsh", "mksh", "oksh", "posh", "yash",
     "do", "then", "else", "elif", "while", "until", "if", "for",
 })
