@@ -19,10 +19,22 @@ re:golang\.org/x/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*
 re:sigs\.k8s\.io/[A-Za-z0-9_-]+(/[A-Za-z0-9_-]+)*
 
 # --- Packages Java/Kotlin publics (com.<org-interne>.* reste sensible) ------
+# Chaque règle épingle un préfixe TIERS : le paquet propre à l'opérateur
+# (`com.acme.billing.Client`) n'y correspond pas et reste substitué.
+# RÉSIDU : écrire un identifiant interne SOUS un préfixe tiers
+# (`org.apache.kafka.acme.internal.Foo`) le rend public. Un paquet est
+# pointé par nature — la borne « pas de point », qui ferme les chemins,
+# ne s'applique pas ici. Trancher demanderait de savoir que `acme` est à
+# nous et `streams` non : c'est une question d'INVENTAIRE, pas de forme.
+# Compté dans `public_by_shape`.
 re:org\.apache\.(kafka|hadoop|spark|cassandra|flink|zookeeper|maven|logging|commons|http|tomcat|lucene|camel|beam)[A-Za-z0-9._]*
 re:com\.google\.(common|gson|protobuf|inject|guava|api|cloud|auth|errorprone)[A-Za-z0-9._]*
 re:io\.netty\.(buffer|channel|handler|util|bootstrap|resolver|codec)[A-Za-z0-9._]*
-re:javax\.[A-Za-z0-9._]+
+# `javax.` était la SEULE de ces règles à n'épingler aucun second niveau :
+# `javax.<n'importe quoi>` passait, alors que l'espace de noms est RÉSERVÉ.
+# Tout ce qui s'y trouve hors des paquets normalisés est, par définition,
+# spécifique au dépôt.
+re:javax\.(accessibility|activation|activity|annotation|batch|cache|crypto|decorator|ejb|el|enterprise|faces|imageio|inject|interceptor|jms|json|jws|lang|mail|management|measure|money|naming|net|persistence|print|resource|rmi|script|security|servlet|smartcardio|sound|sql|swing|tools|transaction|validation|websocket|ws|xml)[A-Za-z0-9._]*
 
 # --- Images publiques --------------------------------------------------------
 # Le nom de dépôt ne porte PAS de point : dans une référence d'image, le point

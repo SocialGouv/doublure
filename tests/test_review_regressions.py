@@ -782,3 +782,53 @@ def test_residu_un_segment_d_un_seul_label_sous_un_prefixe_public(valeur):
     outre pas le tiret, ce qui exclut la plupart des noms d'hôtes internes.
     """
     assert Allowlist.load()(valeur)
+
+
+# --------------------------------------------------------------------------- #
+# Round 12 — les règles de paquets épinglent un préfixe TIERS
+#
+# Arbitrage de jo : garder la pertinence sur les vraies bibliothèques, couper
+# dès que la valeur est spécifique au dépôt. `javax.` était la seule règle à
+# n'épingler aucun second niveau, alors que l'espace de noms est RÉSERVÉ : tout
+# ce qui s'y trouve hors des paquets normalisés est, par définition, à nous.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("valeur", [
+    "org.apache.kafka.streams.KafkaStreams",
+    "org.apache.commons.lang3.StringUtils",
+    "com.google.common.collect.ImmutableList",
+    "io.netty.channel.ChannelHandler",
+    "javax.servlet.http.HttpServletRequest",
+    "javax.persistence.EntityManager",
+    "javax.crypto.Cipher",
+])
+def test_une_api_publique_reste_lisible_par_le_modele(valeur):
+    assert Allowlist.load()(valeur), f"{valeur!r} substitué : le modèle perd la référence"
+
+
+@pytest.mark.parametrize("valeur", [
+    # le paquet propre à l'opérateur ne correspond à aucun préfixe tiers
+    "com.acme.billing.PaymentsClient",
+    "com.acmecorp.payments.Client",
+    # espace de noms RÉSERVÉ : ce qui n'y est pas normalisé est à nous
+    "javax.acme.internal.SecretService",
+    "javax.acmecorp.PaymentsClient",
+])
+def test_un_paquet_specifique_au_depot_n_est_pas_public(valeur):
+    assert not Allowlist.load()(valeur), (
+        f"{valeur!r} rendu public : il sortirait en clair")
+
+
+@pytest.mark.parametrize("valeur", [
+    "org.apache.kafka.acme.internal.Foo",
+    "com.google.cloud.acme.internal.Client",
+])
+def test_residu_un_identifiant_interne_sous_un_prefixe_tiers(valeur):
+    """Résidu ASSUMÉ, compté par `public_by_shape`.
+
+    Un paquet est pointé par nature : la borne « pas de point » qui ferme les
+    chemins ne s'applique pas ici. Trancher demanderait de savoir que `acme`
+    est à nous et `streams` non — une question d'INVENTAIRE, pas de forme.
+    """
+    assert Allowlist.load()(valeur)
