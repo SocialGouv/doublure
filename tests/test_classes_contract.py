@@ -96,3 +96,32 @@ def test_la_liste_suit_le_detecteur():
         "un type est apparu sans avoir été classé. Relever la liste avec "
         "`get_supported_entities('filtered')` et compléter CLASS_OF."
     )
+
+
+def test_le_detecteur_compte_ce_qu_une_regle_de_forme_rend_public():
+    """Le résidu des règles `re:` ne doit pas être SILENCIEUX.
+
+    Une entrée EXACTE est une décision prise token par token ; une règle de
+    FORME est une heuristique, et `README.md` lui est indiscernable d'un
+    domaine `acme.md`. C'est la seule catégorie dont l'échec ne laisse aucune
+    trace — ni entrée de coffre, ni substitut non résolu. Elle est donc
+    comptée, dédoublonnée par valeur.
+    """
+    import httpx
+
+    try:
+        r = httpx.post("http://127.0.0.1:9000/detect", timeout=20.0,
+                       json={"text": "Relis CLAUDE.md puis ouvre infra.md",
+                             "strategy": "filtered"})
+        r.raise_for_status()
+    except (httpx.HTTPError, OSError):
+        pytest.skip("détecteur non démarré")
+
+    corps = r.json()
+    publics = {p["value"] for p in corps["public_by_shape"]}
+    assert publics == {"CLAUDE.md", "infra.md"}, corps["public_by_shape"]
+    # Dédoublonné : le même token reçoit plusieurs spans (HOSTNAME, URL…), et
+    # les compter donnerait un chiffre sans rapport avec le nombre
+    # d'identifiants réellement rendus publics.
+    assert len(corps["public_by_shape"]) == 2, corps["public_by_shape"]
+    assert all(p["types"] for p in corps["public_by_shape"])

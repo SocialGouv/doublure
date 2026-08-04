@@ -681,10 +681,22 @@ def test_une_entree_exacte_vaut_toujours_pour_une_sous_partie(tmp_path):
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("valeur", ["acme.pl", "partenaire.md", "billing.py"])
+@pytest.mark.parametrize("valeur", ["partenaire.md", "billing.py", "core.rs"])
 def test_residu_un_domaine_externe_d_un_seul_label_reste_public(valeur):
     """Le prix payé pour que `main.py` et `README.md` restent lisibles."""
     assert Allowlist.load()(valeur)
+
+
+@pytest.mark.parametrize("valeur", ["acme.pl", "partenaire.ml", "srv.pl"])
+def test_les_ccTLD_a_vrai_volume_ont_ete_retires_de_la_regle(valeur):
+    """`.pl` (Pologne) et `.ml` (Mali) désignent aussi du Perl et de l'OCaml.
+
+    Arbitrage de jo : ce sont les deux ccTLD de la liste à porter un vrai
+    volume de domaines, et leur valeur comme extension de fichier est faible
+    ici. L'arbitrage se rejuge extension par extension, pas en bloc.
+    """
+    assert not Allowlist.load()(valeur), (
+        f"{valeur!r} rendu public : il sortirait en clair, sans trace")
 
 
 @pytest.mark.parametrize("valeur", [

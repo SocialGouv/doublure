@@ -100,10 +100,17 @@ re:https?://pypi\.org(/[\w./-]*)?
 # `10.0.0.5.log` — c'est-à-dire des hôtes internes et des IP, sortis en clair
 # sans même une entrée de coffre pour le signaler.
 #
+# `.pl` (Pologne) et `.ml` (Mali) en sont ABSENTS pour la même raison, alors
+# qu'ils désignent aussi du Perl et de l'OCaml : ce sont les deux ccTLD de la
+# liste qui ont un vrai volume de domaines, et leur valeur comme extension de
+# fichier est faible ici. L'arbitrage se rejuge extension par extension, pas
+# en bloc.
+#
 # RÉSIDU ASSUMÉ, mesuré. La restriction du radical BORNE la fuite, elle ne la
-# supprime pas : plusieurs de ces extensions sont des ccTLD (`.md` Moldavie,
-# `.pl` Pologne, `.py` Paraguay, `.rs` Serbie, `.ml` Mali, `.tf`), et un
-# domaine EXTERNE à un seul label — `acme.pl` — sort donc en clair.
+# supprime pas : plusieurs de ces extensions restent des ccTLD (`.md`
+# Moldavie, `.py` Paraguay, `.rs` Serbie, `.tf`), et un domaine EXTERNE à un
+# seul label — `acme.md` — sort donc en clair. Le détecteur COMPTE désormais
+# ces autorisations (`public_by_shape`) : le résidu n'est plus silencieux.
 # Le détecteur ne permet pas de trancher : il rend les MÊMES types
 # (HOSTNAME + URL) pour `acme.fr` dans « le serveur acme.fr » et pour
 # `infra.fr` dans « le fichier infra.fr ». Et retirer ces extensions ferait
@@ -112,4 +119,4 @@ re:https?://pypi\.org(/[\w./-]*)?
 # lui désigne. Arbitrage : nom de fichier lisible > domaine externe d'un seul
 # label. Les hôtes INTERNES, eux, sont multi-labels et restent couverts.
 # --------------------------------------------------------------------------- #
-re:[\w-]+\.(md|markdown|txt|log|json|ya?ml|toml|ini|cfg|conf|sql|csv|tsv|lock|pdf|png|jpe?g|gif|svg|ico|zip|tar|gz|py|rb|java|kt|swift|rs|go|php|pl|lua|tf|tfvars|sum|mod|cs|vb|scala|clj|ex|exs|erl|hs|ml|r|jl|ipynb)
+re:[\w-]+\.(md|markdown|txt|log|json|ya?ml|toml|ini|cfg|conf|sql|csv|tsv|lock|pdf|png|jpe?g|gif|svg|ico|zip|tar|gz|py|rb|java|kt|swift|rs|go|php|lua|tf|tfvars|sum|mod|cs|vb|scala|clj|ex|exs|erl|hs|r|jl|ipynb)

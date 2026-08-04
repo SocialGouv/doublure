@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**914 tests verts** (896 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**918 tests verts** (900 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -588,8 +588,17 @@ en clair. Le type du span ne permet pas de trancher — mesuré : `acme.fr` dans
 « le serveur acme.fr » et `infra.fr` dans « le fichier infra.fr » donnent les
 MÊMES types (HOSTNAME + URL). Retirer ces extensions ferait muer `main.py`,
 `lib.rs` et `main.tf` en faux domaines, ce qui a déjà interrompu une session
-réelle. Arbitrage inchangé, désormais verrouillé par deux tests : le résidu
-d'un côté, la couverture des hôtes multi-labels de l'autre.
+réelle.
+
+**Arbitrage de jo (2026-08-04)** : la liste se rejuge extension par extension,
+pas en bloc. `.pl` (Pologne) et `.ml` (Mali) SORTENT — ce sont les deux ccTLD
+de la liste à porter un vrai volume de domaines, et leur valeur d'extension est
+faible ici (zéro fichier Perl ou OCaml dans le dépôt). `.md`, `.py`, `.rs`,
+`.tf` restent : ce sont 54 fichiers du dépôt, cités à chaque tour.
+Et le résidu cesse d'être SILENCIEUX : `/detect` renvoie `public_by_shape`,
+la liste dédoublonnée des tokens rendus publics par une règle de FORME, avec
+leurs types de span et la règle en cause. Une entrée EXACTE n'y figure pas —
+c'est une décision prise token par token, pas une heuristique.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

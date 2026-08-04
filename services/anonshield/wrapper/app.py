@@ -277,10 +277,22 @@ def _trim_span(text: str, ent: dict) -> dict:
     return {**ent, "start": start, "end": end, "value": text[start:end]}
 
 
-def _allowed(value: str, allow_exact: list[str], allow_patterns: list[re.Pattern[str]]) -> bool:
+def _allowed(value: str, allow_exact: list[str],
+             allow_patterns: list[re.Pattern[str]]) -> str | None:
+    """La RAISON pour laquelle une valeur est publique, ou None.
+
+    Distinguer l'entrée exacte de la règle de FORME n'est pas cosmétique :
+    l'exacte est une décision prise token par token, la forme est une
+    heuristique, et c'est la seule des deux dont l'échec soit SILENCIEUX (la
+    valeur sort en clair, sans entrée de coffre ni substitut non résolu).
+    Elle est donc comptée.
+    """
     if value in allow_exact:
-        return True
-    return any(p.fullmatch(value) for p in allow_patterns)
+        return "exact"
+    for p in allow_patterns:
+        if p.fullmatch(value):
+            return p.pattern
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -348,16 +360,31 @@ def detect(inp: DetectIn):
 
     ents = [_trim_span(inp.text, e) for e in ents]
     allow_exact, allow_patterns = _ENGINE["allow_exact"], _ENGINE["allow_patterns"]
-    ents = [
-        e for e in ents
-        if not (
-            _allowed(e["value"], allow_exact, allow_patterns)
-            or _allowed(_expand_token(inp.text, e["start"], e["end"]), allow_exact, allow_patterns)
-        )
-    ]
-    ents.sort(key=lambda e: (e["start"], -e["score"]))
+    gardees: list[dict] = []
+    # Dédoublonné par VALEUR : un même token reçoit plusieurs spans (SERVICE,
+    # HOSTNAME, URL), et compter les spans donnerait un chiffre sans rapport
+    # avec le nombre d'identifiants réellement rendus publics.
+    par_forme: dict[str, dict] = {}
+    for e in ents:
+        raison = (_allowed(e["value"], allow_exact, allow_patterns)
+                  or _allowed(_expand_token(inp.text, e["start"], e["end"]),
+                              allow_exact, allow_patterns))
+        if raison is None:
+            gardees.append(e)
+        elif raison != "exact":
+            # Une règle de FORME suppose un contexte que le token n'a pas :
+            # `README.md` et `acme.md` lui sont indiscernables. Le résidu est
+            # assumé, mais il ne doit pas être invisible.
+            vu = par_forme.setdefault(
+                e["value"], {"value": e["value"], "types": [], "rule": raison})
+            if e["type"] not in vu["types"]:
+                vu["types"].append(e["type"])
+                vu["types"].sort()
+            logger.info("public par règle de forme : %r (%s)", e["value"], raison)
+    gardees.sort(key=lambda e: (e["start"], -e["score"]))
     return {
-        "entities": ents,
+        "entities": gardees,
+        "public_by_shape": list(par_forme.values()),
         "strategy": inp.strategy,
         "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1),
     }

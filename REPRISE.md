@@ -44,11 +44,11 @@ tout début, jamais mesurés.
 
 ## 2. Où en est le code
 
-**914 tests verts** (896 unitaires + 18 egress). Les six phases ont leur
+**918 tests verts** (900 unitaires + 18 egress). Les six phases ont leur
 critère de sortie prouvé (détail : `CLAUDE.md`).
 
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 896
+uv run pytest tests/ --ignore=tests/egress   # 900
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session RÉELLE + capture
@@ -191,10 +191,14 @@ pris pour un domaine.
 - Un nom de paramètre de requête court, sans point ni arobase, n'est pas
   substitué : indiscernable d'un nom d'API.
 - **Un domaine externe d'un SEUL label sur un ccTLD qui est aussi une extension
-  de fichier** (`acme.pl`, `partenaire.md`) reste public. Le type du span ne
+  de fichier** (`partenaire.md`, `billing.py`) reste public. Le type du span ne
   distingue pas un fichier d'un hôte — mesuré. Prix payé pour que `main.py`,
   `lib.rs` et `README.md` restent lisibles par l'agent. Les hôtes internes,
-  multi-labels, restent couverts. Deux tests figent les deux côtés.
+  multi-labels, restent couverts. Arbitrage de jo du 2026-08-04 : `.pl` et
+  `.ml` RETIRÉS (vrai volume de domaines, valeur d'extension nulle ici) ;
+  la liste se rejuge extension par extension, pas en bloc. Le résidu n'est
+  plus silencieux : `/detect` renvoie `public_by_shape`. Trois tests figent
+  les trois côtés (résidu, ccTLD retirés, hôtes multi-labels).
 - Les clés de définitions restent verbatim ; un substitut peut théoriquement
   déséquilibrer une expression de validation.
 - Une coupure de chunk peut laisser un saut de ligne en tête d'un bloc SSE.
