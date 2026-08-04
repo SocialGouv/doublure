@@ -304,10 +304,13 @@ def test_le_bloc_de_demarrage_est_restaure():
         },
     }))
     bloc = out[0]["content_block"]
-    assert bloc["server_name"] == "payments-api"
     assert bloc["input"]["host"] == "db-master-01-prod.acme.internal"
     # les identifiants de protocole restent intacts
     assert bloc["id"] == "mcp_1" and bloc["type"] == "mcp_tool_use"
+    # `server_name` désigne l'entrée `mcp_servers[].name`, qui reste VERBATIM
+    # (clé de routage, fuite assumée). Le substituer à l'aller cassait la
+    # correspondance ; il n'y a donc rien à restaurer au retour.
+    assert bloc["server_name"] == "billing-api"
 
 
 def test_un_delta_non_enumere_est_restaure():

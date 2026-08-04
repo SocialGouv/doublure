@@ -1090,3 +1090,125 @@ def test_defaut22_une_charge_binaire_reste_intacte(media):
                                         "data": charge}}]}]}
     rendu = walk_request(body, marker_sub())["messages"][0]["content"][0]["source"]
     assert rendu["data"] == charge, media
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 23 — le round précédent ne couvrait que l'UTF-8, et ne regardait la
+# charge que sous `type: "base64"`.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("encodage", ["latin-1", "cp1252", "utf-16", "utf-16-le"])
+def test_defaut23_une_charge_texte_non_utf8_est_pseudonymisee(encodage):
+    """Un CSV Windows en UTF-16, un log latin-1 : la charge sortait ENTIÈRE."""
+    import base64 as b64
+    brut = f"connexion vers SECRET-HOST depuis Genève".encode(encodage)
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "document", "source": {
+            "type": "base64", "media_type": "text/plain",
+            "data": b64.b64encode(brut).decode()}}]}]}
+    rendu = walk_request(body, marker_sub())["messages"][0]["content"][0]["source"]
+    assert b"SECRET-HOST" not in b64.b64decode(rendu["data"]), encodage
+    assert "SECRET-HOST".encode(encodage) not in b64.b64decode(rendu["data"])
+
+
+@pytest.mark.parametrize("btype", ["resource", "text", "custom_payload"])
+def test_defaut23_une_charge_encodee_sous_un_autre_type_est_vue(btype):
+    """Un serveur MCP place `data` sous n'importe quel type de bloc."""
+    import base64 as b64
+    charge = b64.b64encode(b"connexion vers SECRET-HOST").decode()
+    body = {"messages": [{"role": "user", "content": [
+        {"type": btype, "data": charge}]}]}
+    rendu = walk_request(body, marker_sub())["messages"][0]["content"][0]["data"]
+    assert b"SECRET-HOST" not in b64.b64decode(rendu), btype
+
+
+def test_defaut23_une_charge_reellement_binaire_reste_intacte():
+    import base64 as b64
+    charge = b64.b64encode(bytes(range(256))).decode()
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "document", "source": {
+            "type": "base64", "media_type": "image/png", "data": charge}}]}]}
+    rendu = walk_request(body, marker_sub())["messages"][0]["content"][0]["source"]
+    assert rendu["data"] == charge
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 24 — routage : un bloc de résultat d'outil SERVEUR porte lui aussi un
+# `tool_use_id`, et un bloc MCP porte le nom de son serveur.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("btype", [
+    "web_search_tool_result", "code_execution_tool_result",
+])
+def test_defaut24_le_tool_use_id_d_un_resultat_serveur_ne_diverge_pas(btype):
+    body = {"messages": [{"role": "assistant", "content": [
+        {"type": "server_tool_use", "id": "srvtoolu_SECRET-HOST",
+         "name": "web_search"},
+        {"type": btype, "tool_use_id": "srvtoolu_SECRET-HOST", "content": []},
+    ]}]}
+    blocs = walk_request(body, marker_sub())["messages"][0]["content"]
+    assert blocs[0]["id"] == blocs[1]["tool_use_id"], btype
+
+
+def test_defaut24_le_nom_de_serveur_mcp_suit_son_entree():
+    """`mcp_servers[].name` reste verbatim : `server_name` doit le suivre."""
+    body = {
+        "mcp_servers": [{"type": "url", "name": "mcp-SECRET-HOST",
+                         "url": "https://interne/mcp"}],
+        "messages": [{"role": "assistant", "content": [
+            {"type": "mcp_tool_use", "id": "t1", "name": "q",
+             "server_name": "mcp-SECRET-HOST"}]}],
+    }
+    sortie = walk_request(body, marker_sub())
+    assert (sortie["mcp_servers"][0]["name"]
+            == sortie["messages"][0]["content"][0]["server_name"])
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 25 — les vocabulaires fermés étaient trop larges, et un `id` de
+# message n'est pas un contrat.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("cle, valeur", [
+    # `command` et `titan` sont des mots anglais : la forme les acceptait comme
+    # préfixes de modèle, et l'insensibilité à la casse élargissait encore.
+    ("model", "commander-billing-prod-01"),
+    ("model", "TITAN-CORP-VAULT"),
+    # un segment purement numérique signe une convention de nom d'hôte
+    ("type", "srv_billing_01"),
+    # le type de premier niveau d'un media est un registre FERMÉ
+    ("media_type", "srv-billing-prod-01/acme-internal"),
+])
+def test_defaut25_un_vocabulaire_ferme_ne_laisse_pas_passer_un_hote(cle, valeur):
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "ok", cle: valeur}]}]}
+    rendu = walk_request(body, sabotage)["messages"][0]["content"][0]
+    assert rendu[cle] != valeur, f"{cle}={valeur} rendu verbatim"
+
+
+@pytest.mark.parametrize("cle, valeur", [
+    ("role", "developer"),
+    ("stop_reason", "content_filter"),
+    ("stop_reason", "length"),
+    # les paramètres RFC 6838 sont valides et doivent passer
+    ("media_type", "text/plain; charset=utf-8"),
+    ("type", "web_search_tool_result"),
+    ("type", "base64"),
+    ("model", "claude-opus-4-20250514"),
+])
+def test_defaut25_une_valeur_reelle_de_l_api_reste_verbatim(cle, valeur):
+    """Une forme trop stricte substitue une valeur légitime : 400, panne dure."""
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "ok", cle: valeur}]}]}
+    rendu = walk_request(body, sabotage)["messages"][0]["content"][0]
+    assert rendu[cle] == valeur, f"{cle}={valeur} substitué"
+
+
+def test_defaut25_un_id_de_message_n_est_pas_un_contrat():
+    body = {"messages": [{"role": "user", "id": "SECRET-HOST", "content": "x"}]}
+    assert "SECRET-HOST" not in json.dumps(walk_request(body, marker_sub()))

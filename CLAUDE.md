@@ -781,6 +781,45 @@ accolade fermante proche, aucun métacaractère entre les deux. Et
 `${!arr[@]}` échappait à mon exclusion parce que la normalisation des classes
 de glob le réduit à `${!arr@}`.
 
+### Walker — round 13 : mon correctif du base64 ne couvrait qu'un cas sur deux
+- **Seul l'UTF-8 était pseudonymisé.** Un CSV Windows en UTF-16, un log
+  latin-1, un export CJK repartaient VERBATIM : `_base64_texte` rendait la
+  charge inchangée dès que le décodage UTF-8 échouait. Le décodage essaie
+  maintenant plusieurs jeux, dans un ordre décidé par la marque d'ordre des
+  octets et la densité de zéros — décoder de l'ASCII en UTF-16 donne des
+  idéogrammes, et l'inverse casse le texte. Un zéro dans le résultat signe un
+  mauvais décodage : le vrai texte n'en a pas.
+- **La charge n'était regardée que sous `type: "base64"`.** Un serveur MCP la
+  place sous `resource`, `text` ou ce qu'il veut, et elle sortait entière. Le
+  base64 est du base64 quel que soit le type du bloc.
+
+**Routage — deux divergences qui font refuser la requête** : un
+`web_search_tool_result` et un `code_execution_tool_result` portent eux aussi
+un `tool_use_id`, absent de ma table ; il était donc substitué alors que le
+`server_tool_use.id` correspondant restait verbatim. Et `mcp_tool_use.server_name`
+désigne l'entrée `mcp_servers[].name`, qui reste verbatim (clé de routage) :
+le substituer cassait la correspondance en silence. Un test existant affirmait
+l'inverse — il encodait le comportement incohérent, il est corrigé.
+
+**Vocabulaires fermés trop larges** : `command` et `titan` sont des mots
+anglais, si bien que `commander-billing-prod-01` et `TITAN-CORP-VAULT`
+passaient pour des noms de modèle (et l'insensibilité à la casse élargissait
+encore) — seul `claude` circule sur ce canal. Un `type` à segment purement
+numérique (`srv_billing_01`) est une convention de nom d'hôte, pas un type de
+bloc. Et le type de premier niveau d'un média est un registre FERMÉ : sans
+lui, `srv-billing-prod-01/acme-internal` en avait la forme.
+Élargi dans l'autre sens au passage, pour ne pas casser des valeurs réelles :
+`role=developer|tool`, `stop_reason=content_filter|length`, et les paramètres
+RFC 6838 (`text/plain; charset=utf-8`), que ma forme refusait.
+
+**`id` de message** : `dans_messages` suffisait à le rendre verbatim, donc un
+`{"role": "user", "id": "<hôte réel>"}` forgé sortait. Un message ne porte ni
+`name` ni `id` dans une requête.
+
+**Résidu assumé** : un `type` en minuscules dont aucun segment n'est numérique
+(`db_master_prod`) reste indiscernable d'un type de bloc. Même limite que
+partout ailleurs — c'est une question d'inventaire, pas de forme.
+
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
 (le 4ᵉ vient de la revue adversariale) :

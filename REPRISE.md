@@ -11,7 +11,7 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Rounds 3 à 12 traités. Round 13 à lancer.** jo a validé la poursuite deux
+**Rounds 3 à 13 traités. Round 14 à lancer.** jo a validé la poursuite deux
 fois (`::g`). Critère d'arrêt : plus aucun finding critique/haut hors §5.
 **Il n'est pas atteint : les dix rounds ont TOUS produit des findings hauts ou
 critiques.** Jusqu'au round 9 c'étaient surtout des régressions du round

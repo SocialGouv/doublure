@@ -80,6 +80,7 @@ SKIP_KEYS: frozenset[str] = frozenset(
         "id",
         "tool_use_id",
         "name",
+        "server_name",
         "data",
         "cache_control",
     }
@@ -91,15 +92,24 @@ SKIP_KEYS: frozenset[str] = frozenset(
 #: garde par position pour ces cles-la : `media_type` vit deux crans sous un
 #: bloc, `type` partout, et les cadrer par position aurait casse l'API.
 SCALAR_SKIP_FORMS: dict[str, re.Pattern[str]] = {
-    # les types de bloc sont toujours en minuscules, sans tiret
-    "type": re.compile(r"[a-z][a-z0-9_]*"),
-    "role": re.compile(r"user|assistant|system"),
+    # Un type de bloc est en minuscules, en segments qui commencent par une
+    # LETTRE et de longueur bornee. `[a-z][a-z0-9_]*` acceptait
+    # `srv_billing_01`, c'est-a-dire un nom d'hote a la convention courante.
+    "type": re.compile(r"(?=.{1,40}$)[a-z][a-z0-9]*(?:_[a-z][a-z0-9]*)*"),
+    "role": re.compile(r"user|assistant|system|developer|tool"),
     "stop_reason": re.compile(
         r"end_turn|max_tokens|stop_sequence|tool_use|pause_turn|refusal|"
-        r"model_context_window_exceeded"),
-    "model": re.compile(r"(claude|gpt|gemini|llama|mistral|command|titan)"
-                        r"[a-z0-9.\-]*", re.I),
-    "media_type": re.compile(r"[\w.+-]+/[\w.+-]+"),
+        r"model_context_window_exceeded|content_filter|length"),
+    # Seul `claude` circule sur ce canal. `command` et `titan` sont des mots
+    # anglais : `commander-billing-prod-01` et `TITAN-CORP-VAULT` passaient,
+    # et l'insensibilite a la casse elargissait encore.
+    "model": re.compile(r"claude[a-z0-9.\-]*"),
+    # Le type de premier niveau est un registre FERME (RFC 6838). Sans lui,
+    # `srv-billing-prod-01/acme-internal` avait la forme d'un type de media.
+    # Les parametres (`; charset=utf-8`) sont valides et doivent passer.
+    "media_type": re.compile(
+        r"(text|image|audio|video|application|font|model|message|multipart|"
+        r"example)/[\w.+-]+(\s*;\s*[\w.+-]+=[\w.+-]+)*"),
 }
 
 #: Cles de bloc dont la valeur est une STRUCTURE de protocole, pas du texte.
@@ -125,19 +135,51 @@ def _forme_connue(value: Any, formes: dict[str, re.Pattern[str]]) -> bool:
     )
 
 
-def _base64_texte(charge: str, fn: Callable[[str], str]) -> str:
+def _decode_texte(brut: bytes) -> tuple[str, str] | None:
+    """Decode une charge en texte, ou None si elle est binaire.
+
+    Exiger l'UTF-8 laissait sortir VERBATIM tout document dans un autre jeu :
+    un CSV Windows en UTF-16, un log latin-1, un export CJK. L'ordre des essais
+    depend de la marque d'ordre des octets et de la densite de zeros — decoder
+    de l'ASCII en UTF-16 donne des ideogrammes, et l'inverse casse le texte.
+    Un zero dans le resultat signe un mauvais decodage : le vrai texte n'en a
+    pas.
+    """
+    if brut[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        essais = ("utf-16", "utf-8")
+    elif brut.count(0) * 4 > len(brut):
+        essais = ("utf-16-le", "utf-16-be", "utf-8")
+    else:
+        essais = ("utf-8", "cp1252")
+    for encodage in essais:
+        try:
+            clair = brut.decode(encodage)
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if "\x00" not in clair:
+            return clair, encodage
+    return None
+
+
+def _base64_texte(charge: str, fn: Callable[[str], str]) -> str | None:
     """Pseudonymise une charge base64 qui se decode en texte.
 
-    Une charge qui ne se decode pas en UTF-8 est BINAIRE malgre son
-    `media_type` : on la rend telle quelle, comme toute charge binaire — le
+    Rend None si la charge n'est pas du base64, ou si elle est BINAIRE : le
     detecteur ne saurait rien y lire, et la modifier la corromprait.
     """
     try:
-        clair = base64.b64decode("".join(charge.split()),
-                                 validate=True).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
-        return charge
-    return base64.b64encode(fn(clair).encode("utf-8")).decode("ascii")
+        brut = base64.b64decode("".join(charge.split()), validate=True)
+    except (ValueError, TypeError):
+        return None
+    if (decode := _decode_texte(brut)) is None:
+        return None
+    clair, encodage = decode
+    try:
+        return base64.b64encode(fn(clair).encode(encodage)).decode("ascii")
+    except UnicodeEncodeError:
+        # Un substitut inexprimable dans le jeu d'origine : on n'ecrit pas une
+        # charge corrompue, on laisse le detecteur travailler sur le texte.
+        return base64.b64encode(fn(clair).encode("utf-8")).decode("ascii")
 
 
 def _traverse_hors_forme(value: Any, fn: Callable[[str], str],
@@ -385,7 +427,8 @@ USER_DATA_KEYS: frozenset[str] = frozenset({"input", "metadata"})
 #: — dans la sortie d'un outil MCP, qui renvoie couramment
 #: `{"type": …, "name": …, "uri": …}` — ce sont des donnees : les recopier
 #: faisait fuir le nom reel ET empechait sa restauration au retour.
-CONTRACT_KEYS: frozenset[str] = frozenset({"name", "id", "tool_use_id"})
+CONTRACT_KEYS: frozenset[str] = frozenset(
+    {"name", "id", "tool_use_id", "server_name"})
 
 #: Ou chaque cle de contrat est legitime, EN PLUS d'un conteneur de protocole.
 #: Le type du bloc ne suffit pas — c'etait le defaut precedent — mais combine a
@@ -393,10 +436,22 @@ CONTRACT_KEYS: frozenset[str] = frozenset({"name", "id", "tool_use_id"})
 #: plus forgeable : un tiers ecrit dans un `tool_result`, deux crans plus bas.
 #: `signature` n'y figure pas : sa seule position legitime est un bloc SIGNE,
 #: rendu verbatim bien avant la boucle sur les cles.
+#: Les blocs de resultat d'outil SERVEUR portent eux aussi un `tool_use_id` :
+#: le substituer alors que le `server_tool_use.id` correspondant reste verbatim
+#: faisait diverger les deux, et l'API refusait un identifiant inconnu.
+_TOOL_RESULTS: frozenset[str] = frozenset({
+    "tool_result", "mcp_tool_result", "web_search_tool_result",
+    "code_execution_tool_result", "bash_code_execution_tool_result",
+    "text_editor_code_execution_tool_result",
+})
+
 CONTRACT_BLOCK_TYPES: dict[str, frozenset[str]] = {
     "name": frozenset({"tool_use", "server_tool_use", "mcp_tool_use"}),
     "id": frozenset({"tool_use", "server_tool_use", "mcp_tool_use", "message"}),
-    "tool_use_id": frozenset({"tool_result", "mcp_tool_result"}),
+    "tool_use_id": _TOOL_RESULTS,
+    # `mcp_servers[].name` reste verbatim (cle de routage) : substituer le
+    # `server_name` qui lui repond cassait la correspondance.
+    "server_name": frozenset({"mcp_tool_use", "mcp_tool_result"}),
 }
 
 #: Conteneurs dont les ENTREES sont des noeuds de protocole : le nom d'un outil
@@ -513,10 +568,13 @@ def _walk(
                 # fichier ENTIER en clair — l'amont, lui, le decode ; et la
                 # traverser telle quelle n'aurait rien donne, le detecteur ne
                 # lisant pas du base64.
-                if key == "data" and isinstance(value, str) \
-                        and btype == "base64" and not binaire:
-                    out[key] = _base64_texte(value, fn)
-                    continue
+                # Le test ne porte PAS sur `type == "base64"` : un serveur MCP
+                # place une charge encodee sous n'importe quel type de bloc
+                # (`resource`, `custom`), et elle sortait alors entiere.
+                if key == "data" and isinstance(value, str) and not binaire:
+                    if (rendu := _base64_texte(value, fn)) is not None:
+                        out[key] = rendu
+                        continue
 
                 # Un noeud est protocolaire s'il HERITE d'un conteneur de
                 # protocole, ou s'il occupe une POSITION de protocole : un bloc
@@ -525,7 +583,10 @@ def _walk(
                 # meme classe que l'opacite : un tiers ecrit
                 # `{"type": "tool_use", "name": "<hote reel>"}` dans son
                 # sous-arbre et les deux valeurs sortent verbatim.
-                contrat = protocole or dans_messages or (
+                # `dans_messages` n'y figure pas : un message ne porte ni
+                # `name` ni `id` dans une requete, et l'y admettre rendait
+                # verbatim un `{"role": "user", "id": "<hote reel>"}` forge.
+                contrat = protocole or (
                     bloc_message and isinstance(btype, str)
                     and btype in CONTRACT_BLOCK_TYPES.get(key, frozenset()))
                 if key in SKIP_KEYS and (key not in CONTRACT_KEYS or contrat) \
