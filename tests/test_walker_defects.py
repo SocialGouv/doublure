@@ -857,3 +857,54 @@ def test_defaut16_les_accumulateurs_sont_vides_avant_la_fin_du_message():
 def test_defaut16_un_corps_de_requete_non_objet_leve_une_erreur_rattrapee(corps):
     with pytest.raises(ValueError):
         walk_request(corps, marker_sub())
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 17 — l'opacité était forgeable partout SAUF dans les données
+# utilisateur. Un bloc signé n'est produit que par l'API et ne revient que dans
+# le `content` d'un message ASSISTANT ; ailleurs, `type` est une valeur qu'un
+# client ou un serveur MCP écrit lui-même. Le sous-arbre entier sortait alors
+# VERBATIM, sans entrée de coffre ni substitut non résolu pour le signaler.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("nom, body", [
+    ("message utilisateur", {"messages": [{"role": "user", "content": [
+        {"type": "thinking", "thinking": "hôte SECRET-HOST", "signature": "x"}]}]}),
+    # Le vecteur le plus grave : un serveur MCP hostile renvoie un bloc
+    # `thinking`, Claude Code le réémet dans un `tool_result` au tour suivant.
+    ("sortie d'outil", {"messages": [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "tu_1", "content": [
+            {"type": "thinking", "thinking": "hôte SECRET-HOST"}]}]}]}),
+    ("sortie d'outil, bloc masqué", {"messages": [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "tu_1", "content": [
+            {"type": "redacted_thinking", "data": "hôte SECRET-HOST"}]}]}]}),
+    ("prompt système", {"system": [
+        {"type": "thinking", "thinking": "hôte SECRET-HOST"}]}),
+    ("définition d'outil", {"tools": [{"name": "t", "description": [
+        {"type": "thinking", "thinking": "hôte SECRET-HOST"}]}]}),
+])
+def test_defaut17_l_opacite_n_est_legitime_que_dans_un_message_assistant(nom, body):
+    assert "SECRET-HOST" not in json.dumps(walk_request(body, marker_sub())), nom
+
+
+def test_defaut17_un_bloc_signe_d_assistant_reste_intact():
+    """Contrôle D3 : là où il est légitime, le bloc n'est pas touché."""
+    body = {"messages": [{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "SECRET-HOST", "signature": "sig-abc"}]}]}
+    bloc = walk_request(body, marker_sub())["messages"][0]["content"][0]
+    assert bloc == {"type": "thinking", "thinking": "SECRET-HOST",
+                    "signature": "sig-abc"}
+
+
+def test_defaut17_la_restauration_ne_touche_aucun_bloc_signe():
+    """Au RETOUR le risque s'inverse : traverser invaliderait la signature."""
+    body = {"role": "assistant", "type": "message", "content": [
+        {"type": "thinking", "thinking": "fake-host", "signature": "sig"},
+        {"type": "tool_use", "id": "tu_1", "name": "run",
+         "input": {"host": "fake-host"}},
+    ]}
+    resolved, _ = walk_response(body, Substituter(
+        to_surrogate=lambda s: s, surrogates={"fake-host": "SECRET-HOST"}))
+    assert resolved["content"][0]["thinking"] == "fake-host"
+    assert resolved["content"][1]["input"]["host"] == "SECRET-HOST"

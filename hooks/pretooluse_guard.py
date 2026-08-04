@@ -60,7 +60,12 @@ SENSITIVE_FILE_PATTERNS: tuple[str, ...] = (
     # Les lookbehind écartent le CODE JavaScript (`process` + suffixe `env`,
     # `import.meta` + suffixe) : ce n'est pas un fichier de secrets, et le
     # bloquer refusait un simple `grep -r` dans des sources.
-    rf"[\w-]*(?<!process)(?<!\.meta)\.env([.\-]{_GABARIT_ENV}[\w-]+)?"
+    # Le motif commence sur le littéral `.env`, jamais sur une classe libre :
+    # un `[\w-]*` de tête rétro-traque à chaque position d'un mot long, et
+    # vingt mille caractères sans le moindre point coûtaient plusieurs
+    # secondes. Il était de toute façon redondant — `production.env` contient
+    # `.env`, et les lookbehind s'évaluent au même endroit.
+    rf"(?<!process)(?<!\.meta)\.env([.\-]{_GABARIT_ENV}[\w-]+)?"
     rf"($|[\s'\"|>;&)\],])",
     # `env.production` sans point initial (convention `env_file:` de Compose).
     # Le point APRÈS `env` est obligatoire, sinon `venv` et `python -m venv env`
@@ -78,7 +83,7 @@ SENSITIVE_FILE_PATTERNS: tuple[str, ...] = (
     r"\.docker/config\.json",
     r"\.npmrc\b",
     r"\.pypirc\b",
-    r"[\w./-]*secrets?[\w-]*\.(ya?ml|json|env|txt|conf|toml|ini)\b",
+    r"secrets?[\w-]*\.(ya?ml|json|env|txt|conf|toml|ini)\b",
     r"\.(pem|key|p12|pfx|ppk|der|jks|keystore|pkcs12)\b",
     r"/proc/[^/\s]+/environ",
     r"\.envrc\b",
@@ -209,15 +214,22 @@ def _interprete_execute(command: str) -> bool:
     `git commit -m 'fix perl -e system(env)'` : le message CITE un one-liner,
     il n'en exécute aucun. Seule la position de programme fait foi.
     """
+    # Un interpréteur dont le programme arrive par une substitution de PROCESSUS
+    # l'exécute comme s'il était donné en ligne. Le fichier `/dev/fd/…` n'existe
+    # qu'à l'exécution ; seul le texte qui le produit est lisible ici, et ce
+    # texte n'est pas du shell — `python3 <(echo 'os.system("env")')` passait.
+    procsub = "<(" in command
     for tokens in tokenize(command):
-        if not any(_basename(tokens[idx]) in _INTERPRETES
-                   for idx in _program_positions(tokens)):
+        programmes = [_basename(tokens[idx]) for idx in _program_positions(tokens)]
+        if not any(p in _INTERPRETES for p in programmes):
             continue
         # `python3 --version` n'exécute aucun code : sans cette exigence, il
         # ouvrait l'analyse et un message de commit voisin devenait suspect.
         if any(t in ("-e", "-c", "-r", "-E", "-P") for t in tokens):
             return True
         if any(_basename(t) in ("awk", "gawk", "mawk") for t in tokens):
+            return True
+        if procsub and any(p in _LANGAGES for p in programmes):
             return True
     return False
 
@@ -268,7 +280,10 @@ _STDIN_INTERPRETER_RE = re.compile(
     r"\|\s*(sudo\s+)?(python3?|perl|ruby|node|php|(ba|z|k|da)?sh)\s*(-\s*)?$|"
     r"\b(python3?|perl|ruby|node|(ba|z|k|da)?sh)\s+-\s*$|"
     r"\beval\b|\bsource\s+/dev/stdin\b",
-    re.I,
+    # `re.M` : la fin de la CHAÎNE ne suffit pas. `cat <<EOF | python3` est
+    # suivi du corps du heredoc, si bien que `| python3` n'était jamais en
+    # dernière position et le montage passait.
+    re.I | re.M,
 )
 
 #: Variables d'environnement dont la VALEUR est un secret. `env` est bloqué,
@@ -292,6 +307,12 @@ _NOM_VARIABLE_RE = re.compile(r"\$\{?!?\s*([A-Za-z_][A-Za-z0-9_]*)")
 #: compte n'est pas dans l'expansion mais dans l'affectation qui précède.
 _REF_INDIRECTE_RE = re.compile(r"\$\{!\s*([A-Za-z_]\w*)")
 
+#: Référence par ALIAS : `declare -n r=AWS_SECRET_ACCESS_KEY; echo $r`. Même
+#: mécanisme que la référence indirecte, autre syntaxe — et `$r` ne porte
+#: aucun nom sensible, seul l'alias en désigne un.
+_NAMEREF_RE = re.compile(
+    r"\b(?:declare|typeset|local)\b[^|;&\n]*?\s-[A-Za-z]*n[A-Za-z]*\s+\w+=(\$?\{?\w+)")
+
 #: Variables de CONFIGURATION dont le nom porte un mot sensible mais dont la
 #: valeur ne l'est pas. Les bloquer empêchait l'agent de vérifier sa propre
 #: configuration — `ANTHROPIC_BASE_URL` est l'entrée du proxy, il la lit à
@@ -314,7 +335,12 @@ def _variable_sensible(normalized: str) -> str | None:
         if _nom_sensible(nom):
             return nom
     # `${!x}` ne cite que `x` : le nom réellement lu est la VALEUR de `x`.
-    for cible in _REF_INDIRECTE_RE.findall(normalized):
+    # Un alias `declare -n r=CIBLE` désigne sa cible de la même façon, et
+    # celle-ci peut être écrite en clair ou passer par une variable.
+    for cible in _REF_INDIRECTE_RE.findall(normalized) + [
+            c.lstrip("${") for c in _NAMEREF_RE.findall(normalized)]:
+        if _nom_sensible(cible):
+            return cible
         for valeur in re.findall(rf"\b{re.escape(cible)}=([A-Za-z_]\w*)", normalized):
             if _nom_sensible(valeur):
                 return valeur
@@ -371,6 +397,20 @@ DENY_COMMAND_PATTERNS: tuple[tuple[str, str], ...] = (
      "exécution d'un script depuis un répertoire temporaire : contenu non analysable"),
     (r"\bhistory\b(\s|$)|\$HISTFILE\b", "l'historique de shell contient des secrets saisis"),
     (r"\.(bash|zsh|sh)_history\b", "l'historique de shell contient des secrets saisis"),
+    # Une affectation ne fait normalement rien exécuter. Ces noms-là font
+    # charger du code depuis un chemin que le hook ne peut pas lire : bash
+    # source `BASH_ENV` avant tout `-c`, l'éditeur de liens charge `LD_PRELOAD`,
+    # l'interpréteur exécute `PYTHONSTARTUP`. `BASH_ENV=/tmp/x bash -c :` passait
+    # pour un préfixe d'affectation légitime suivi d'un no-op.
+    (r"\b(BASH_ENV|SHELLOPTS|BASH_FUNC_\w*|LD_PRELOAD|LD_AUDIT|PYTHONSTARTUP|"
+     r"PERL5OPT|RUBYOPT)\s*=\s*\S",
+     "affectation qui fait exécuter du code depuis un chemin non analysable"),
+    # `ENV=production` est un idiome courant : seule une valeur de CHEMIN fait
+    # sourcer un fichier.
+    (r"\bENV\s*=\s*[^\s|;&]*/",
+     "affectation qui fait exécuter du code depuis un chemin non analysable"),
+    (r"\bNODE_OPTIONS\s*=[^|;&\n]*(--require|--import|\s-r\b)",
+     "affectation qui fait exécuter du code depuis un chemin non analysable"),
     (r"\.local/state(/[^/\s]*)*/\*", "accès générique au répertoire d'état (coffre)"),
     (r"\bfind\b[^|;&]*\.local/state\b", "énumération du répertoire d'état (coffre)"),
 )
@@ -413,10 +453,7 @@ def allow() -> dict:
 _EXPANSION_RE = re.compile(
     r"\$\{(?P<pre>#?)(?P<nom>[A-Za-z_]\w*|\d+|[@*])(?P<reste>[^}]*)\}")
 
-#: MOT contenant une expansion d'accolades : `{env,}`, `{p,}rintenv`,
-#: `c{ur,ur}l`, `{curl,autrechose}`. C'est le mot ENTIER qu'il faut expanser,
-#: préfixe et suffixe compris.
-_MOT_ACCOLADE_RE = re.compile(r"\S*\{[^{}$\s]*,[^{}$\s]*\}\S*")
+#: Une expansion d'accolades : `{env,}`, `{p,}rintenv`, `c{ur,ur}l`.
 _ACCOLADES_RE = re.compile(r"\{(?P<alts>[^{}$\s]*,[^{}$\s]*)\}")
 
 
@@ -445,6 +482,23 @@ def _expanser_mot(mot: str, profondeur: int = 0,
     return " ".join(
         _expanser_mot(avant + alt + apres, profondeur + 1, budget)
         for alt in alternatives
+    )
+
+
+def _expanser_accolades(texte: str) -> str:
+    """Expanse chaque MOT porteur d'une expansion d'accolades.
+
+    Le découpage se fait sur les ESPACES. Chercher le mot autour de l'accolade
+    (`\\S*\\{…\\}\\S*`) faisait rétro-traquer la regex à chaque position d'un mot
+    long qui n'en contient aucune : vingt mille caractères coûtaient sept
+    secondes, de quoi noyer un agent sans écrire une seule commande interdite.
+    """
+    budget = [_BUDGET_ACCOLADES]
+    morceaux = re.split(r"(\s+)", texte)
+    return "".join(
+        mot if i % 2 or "{" not in mot or "," not in mot
+        else _expanser_mot(mot, 0, budget)
+        for i, mot in enumerate(morceaux)
     )
 
 
@@ -535,8 +589,7 @@ def normalize(command: str) -> str:
     # Budget PARTAGÉ par toute la commande : un budget par mot laissait le
     # volume total exploser, et c'est la TAILLE du texte produit qui coûte
     # ensuite (dix secondes d'analyse sur un mot de quatre cents octets).
-    budget = [_BUDGET_ACCOLADES]
-    out = _MOT_ACCOLADE_RE.sub(lambda m: _expanser_mot(m.group(0), 0, budget), out)
+    out = _expanser_accolades(out)
     # Une référence collée AU MILIEU d'un mot ne sert qu'à le découper —
     # y compris sous forme indirecte (`e${!q}nv`).
     out = re.sub(r"(?<=\w)\$\{!?[A-Za-z_]\w*\}(?=\w)", "", out)
@@ -547,6 +600,35 @@ def normalize(command: str) -> str:
     return out
 
 
+def _retire_definitions(texte: str) -> str:
+    """Retire l'EN-TÊTE d'une définition de fonction ; c'est son corps qui porte
+    les programmes.
+
+    `fn() { env; }; fn` ne montrait que `fn` en position de programme, et
+    l'analyse s'arrêtait là — sur un mot que rien ne reconnaît.
+
+    Le nom est retiré en remontant depuis la parenthèse, jamais par une regex
+    qui le chercherait à gauche : `[\\w-]+\\s*\\(\\s*\\)` rétro-traque à chaque
+    position d'un mot long, ce qui coûtait quinze secondes sur vingt mille
+    caractères.
+    """
+    texte = re.sub(r"\bfunction\s+[\w-]+", " ", texte)
+    if "(" not in texte:
+        return texte
+    sortie, fin = [], 0
+    for m in re.finditer(r"\(\s*\)", texte):
+        debut = m.start()
+        while debut > fin and texte[debut - 1] in " \t":
+            debut -= 1
+        while debut > fin and (texte[debut - 1].isalnum()
+                               or texte[debut - 1] in "_-"):
+            debut -= 1
+        sortie.append(texte[fin:debut])
+        fin = m.end()
+    sortie.append(texte[fin:])
+    return " ".join(sortie)
+
+
 def tokenize(command: str) -> list[list[str]]:
     """Découpe en commandes simples, sur une base tolérante aux erreurs.
 
@@ -554,7 +636,20 @@ def tokenize(command: str) -> list[list[str]]:
     position de programme, y compris derrière `bash -c`, `xargs`, `nohup` ou
     une substitution `$(...)`.
     """
-    cleaned = re.sub(r"[$`()]", " ", normalize(command))
+    cleaned = _retire_definitions(normalize(command))
+    # La valeur de `env -S` est une COMMANDE, jamais un token — c'est pourquoi
+    # `-S` n'est pas une « option à valeur ». Sa forme longue COLLÉE
+    # (`--split-string=printenv CLE`) commençait par `-` : elle passait pour
+    # une option ordinaire et le programme qu'elle porte disparaissait.
+    cleaned = re.sub(r"\benv\s+(?:--split-string=?|-S)\s*", "env -S ", cleaned)
+    # Un GROUPE de commandes (`{ env; }`) n'est pas un programme : son corps
+    # l'est, et l'accolade arrêtait l'analyse sur un mot que rien ne reconnaît.
+    # Les accolades ne sont retirées que là où bash y voit le mot réservé —
+    # `{` suivi d'un blanc, `}` précédé d'un blanc ou d'un `;`. Les retirer
+    # partout emportait le remplaçant de `xargs -I{}`, dont l'option avalait
+    # alors le programme suivant.
+    cleaned = re.sub(r"\{(?=\s)|(?<=[\s;])\}", " ", cleaned)
+    cleaned = re.sub(r"[$`()]", " ", cleaned)
     # Les redirections séparent au même titre que `|` : sans ça, la cible de
     # `env > dump.txt` passait pour le programme exécuté PAR `env`, donc pour
     # un préfixe d'exécution légitime. Les substitutions de processus ont déjà
@@ -735,6 +830,14 @@ def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
     UNE variable non sensible. Les bloquer rendait l'agent inutilisable.
     """
     suite = tokens[idx + 1:]
+    # `bash -c env _` : la valeur de `-c` est le SCRIPT ENTIER ; ce qui suit
+    # occupe `$0`, `$1`… et n'est PAS un argument du programme. Le quoting ayant
+    # déjà été retiré, `bash -c env _` et `bash -c 'env _'` sont indiscernables
+    # ici : on émet les DEUX lectures, comme pour les branches d'une expansion.
+    if idx and tokens[idx - 1] == "-c" and suite \
+            and any(_basename(t) in _WRAPPERS_SHELL for t in tokens[:idx]) \
+            and _est_deversement(base, tokens[:idx + 1], idx):
+        return True
     if base == "env":
         # `env` ne déverse que s'il n'exécute RIEN. `env -i cmd` et
         # `env -u FOO cmd` réduisent l'environnement au lieu de l'exposer.
@@ -843,6 +946,51 @@ _INTERPRETES = frozenset({
 })
 
 
+#: Interpréteurs qui ne sont PAS des shells. La distinction compte : le corps
+#: livré à un shell est une suite de commandes, que le découpage aux sauts de
+#: ligne traite correctement ; celui livré à un langage est du code, où un saut
+#: de ligne ne sépare rien — `os.system(…)` doit rester dans le même segment
+#: que l'interpréteur pour être vu.
+_LANGAGES = frozenset({
+    "python", "python3", "perl", "ruby", "node", "deno", "bun", "php", "lua",
+    "tclsh", "awk", "gawk", "mawk", "Rscript", "julia", "expect", "swift",
+})
+_ALT_LANGAGES = "|".join(sorted(_LANGAGES, key=len, reverse=True))
+
+#: Programme livré à un interpréteur AUTREMENT qu'en ligne : here-string
+#: (`python3 <<< 'code'`) ou heredoc (`python3 <<EOF … EOF`). Bash le pousse sur
+#: l'entrée standard et l'interpréteur l'exécute — exactement comme `-c`.
+#: L'option est bornée à ce qui ne prend pas de valeur : `python3 script.py
+#: <<EOF` alimente le script en DONNÉES, il ne reçoit pas de programme. Le
+#: tiret NU en fait partie — `python3 - <<EOF` demande explicitement à lire
+#: le programme sur l'entrée standard.
+_PROGRAMME_HERESTRING_RE = re.compile(
+    rf"\b(?P<interp>{_ALT_LANGAGES})\b(?P<opts>(?:\s+-\w*)*)\s*"
+    r"<<<\s*(?P<corps>'[^']*'|\"[^\"]*\"|\S+)")
+_PROGRAMME_HEREDOC_RE = re.compile(
+    rf"\b(?P<interp>{_ALT_LANGAGES})\b(?P<opts>(?:\s+-\w*)*)\s*"
+    r"<<-?\s*(?P<q>['\"]?)(?P<mark>[A-Za-z_]\w*)(?P=q)[^\n]*\n"
+    r"(?P<corps>.*?)^\s*(?P=mark)\s*$",
+    re.S | re.M)
+
+
+def _canonise_programme(command: str) -> str:
+    """Ramène à la forme EN LIGNE un programme livré par heredoc ou here-string.
+
+    Tout le contrôle du code d'interpréteur est adossé au drapeau `-c`/`-e` ;
+    livré sur l'entrée standard, le même code n'était analysé que comme du
+    shell, où `os.system("env")` n'est qu'un mot parmi d'autres.
+    """
+    def _remplace(m: re.Match[str]) -> str:
+        # Les sauts de ligne d'un programme ne séparent pas des commandes :
+        # les garder plaçait la primitive dans un segment sans interpréteur.
+        corps = m.group("corps").strip("'\"").replace("\n", " ")
+        return f"{m.group('interp')}{m.group('opts')} -c {corps} "
+
+    return _PROGRAMME_HERESTRING_RE.sub(
+        _remplace, _PROGRAMME_HEREDOC_RE.sub(_remplace, command))
+
+
 def _neutralise_heredocs(command: str) -> str:
     """Retire le corps des heredocs cités qui ne sont pas exécutés.
 
@@ -868,7 +1016,7 @@ def _neutralise_heredocs(command: str) -> str:
 
 
 def check_bash(command: str, _profondeur: int = 0) -> str | None:
-    command = _neutralise_heredocs(command)
+    command = _canonise_programme(_neutralise_heredocs(command))
     # La branche « variable vide » d'une expansion de repli est une commande
     # complète : on l'analyse entière, pas par morceaux.
     if _profondeur < 4 and (variante := _variante_repli(command)):

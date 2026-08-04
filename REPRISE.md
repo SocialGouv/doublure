@@ -11,10 +11,15 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Rounds 3 à 9 traités. Round 10 à lancer.** jo a validé la poursuite deux fois
-(`::g`). Critère d'arrêt : plus aucun finding critique/haut hors §5.
-**Il n'est pas atteint : les neuf rounds ont TOUS produit des findings hauts ou
-critiques**, et la grande majorité étaient des régressions du round précédent.
+**Rounds 3 à 10 traités. Round 11 à lancer.** jo a validé la poursuite deux
+fois (`::g`). Critère d'arrêt : plus aucun finding critique/haut hors §5.
+**Il n'est pas atteint : les dix rounds ont TOUS produit des findings hauts ou
+critiques.** Jusqu'au round 9 c'étaient surtout des régressions du round
+précédent ; le round 10 a rompu ce motif — les correctifs du round 9 ont tous
+tenu, et ce sont des mécanismes JAMAIS modélisés (programme livré hors ligne,
+accolades, alias de variable, affectations qui exécutent) qui sont sortis.
+Deux des trois motifs à l'origine du déni de service étaient là depuis le
+tout début, jamais mesurés.
 
 ### Protocole appliqué à chaque round
 1. Deux agents `general-purpose`, `model: opus`, en parallèle : un sur le hook,
@@ -39,11 +44,11 @@ critiques**, et la grande majorité étaient des régressions du round précéde
 
 ## 2. Où en est le code
 
-**848 tests verts** (830 unitaires + 18 egress). Les six phases ont leur
+**914 tests verts** (896 unitaires + 18 egress). Les six phases ont leur
 critère de sortie prouvé (détail : `CLAUDE.md`).
 
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 830
+uv run pytest tests/ --ignore=tests/egress   # 896
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session RÉELLE + capture
@@ -55,19 +60,26 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
 **Toujours rejouer `phase3_e2e.sh` après une modification du walker, du moteur
 ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
 
-## 3. À FAIRE au round 10
+## 3. À FAIRE au round 11
 
-1. **Relire ce que le round 9 vient de réécrire** — c'est là que les
-   régressions se logent, neuf fois sur neuf :
-   - hook : la réduction d'IFS (la forme `plus` rend le TEXTE, pas un
-     séparateur), le nom des expansions (positionnel et spécial),
-     `_variante_repli` à point fixe, la porte `_interprete_execute` par
-     commande SIMPLE avec exigence du drapeau en ligne, `_REF_SIMPLE_RE`
-     (variable en position de programme), le budget d'accolades partagé,
-     `_WRAPPERS_SHELL` ;
-   - moteur : `Allowlist.is_exact` et ses deux appelants (tag d'image, segment
-     d'URL).
-2. Points **non corrigés**, à re-arbitrer :
+1. **Relire ce que le round 10 vient de réécrire** :
+   - walker : `signe_ici` / `signe_partout` — le drapeau est RECALCULÉ à chaque
+     niveau, jamais hérité, et l'asymétrie aller/retour est volontaire (au
+     retour, traverser un bloc signé casserait sa signature) ;
+   - hook : `_canonise_programme` et sa grammaire d'options (`-\w*`, tiret nu),
+     `_LANGAGES` vs shells, `_retire_definitions`, le retrait CONDITIONNEL des
+     accolades, `_NAMEREF_RE`, la double lecture de `-c` dans
+     `_est_deversement`, la réécriture `env -S`, `_expanser_accolades`.
+2. **Chercher ce qui n'a JAMAIS été modélisé, pas seulement les régressions.**
+   Le round 10 l'a montré : les correctifs du round 9 ont tous tenu, et les
+   dix contournements venaient de mécanismes absents du modèle. Pistes non
+   explorées : alias (`alias x=env`), `trap`, `PROMPT_COMMAND`, `.bashrc` via
+   `bash -l`, `coproc`, `mapfile -C`, `read -e`, complétion programmable.
+3. **Mesurer le COÛT, pas seulement la décision.** Deux des trois motifs à
+   l'origine du déni de service étaient là depuis le début et n'avaient jamais
+   été chronométrés. Tout motif dont la tête est une classe libre est un déni
+   de service en attente.
+4. Points **non corrigés**, à re-arbitrer :
    - **M3 — fragmentation de spans** : un span URL tronqué qui chevauche un
      span HOSTNAME donne DEUX noms fictifs à une machine. Pas une fuite ; une
      régression du déterminisme (§9 du plan). Piste : fusionner les spans
@@ -84,7 +96,7 @@ ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
      point-virgule puis d'un interpréteur en ligne, reste un faux positif. Le
      point-virgule sépare des INSTRUCTIONS dans un programme en ligne : le
      traiter comme une frontière de commande casserait les one-liners.
-3. Backlog hors boucle : `corpus/real/` non annoté (matière de jo),
+5. Backlog hors boucle : `corpus/real/` non annoté (matière de jo),
    KMS/rotation/journal d'accès immuable (Phase 6, hors MVP).
 
 ## 4. Déjà corrigé — DONNER cette liste aux agents
@@ -103,7 +115,9 @@ opacité forgeable · nom de ressource MCP · types de média `x-` et `vnd.` ·
 événements mal typés · delta signé futur · corps non-objet (requête et
 réponse) · démarrage de message · conteneur scalaire · tampon SSE non borné ·
 heuristique de schéma d'entrée · liste d'outils autorisés · exemples de schéma ·
-émission après la fin du message.
+émission après la fin du message · **opacité forgeable hors des données
+utilisateur** (message utilisateur, sortie d'outil relayée, prompt système,
+définition d'outil).
 
 **Moteur / coffre** : attribut partagé se substituant à lui-même · spans
 invalides ou mal formés · recouvrement partiel · tag d'image · type interne
@@ -134,7 +148,14 @@ accolade en plusieurs mots · `env` avec découpage de chaîne · préfixe
 d'affectation vide ou concaténé · heredoc au pipe collé ou consommé par un
 pipeline · famille `exec` et `spawn` · options d'enveloppe par programme ·
 champs d'outil non énumérés · `openssl` en liste noire · options d'aide seules ·
-**programme désigné par une variable** · expansion d'accolades non bornée.
+programme désigné par une variable · expansion d'accolades non bornée ·
+**programme livré hors ligne** (here-string, heredoc, tiret nu, substitution de
+processus, heredoc consommé par un pipe) · **corps d'une fonction et d'un
+groupe de commandes** · **alias `declare -n`** · **affectation qui fait
+exécuter** (`BASH_ENV`, `LD_PRELOAD`, `ENV` de chemin, `NODE_OPTIONS
+--require`) · **valeur de `-c` prise pour un préfixe d'exécution**
+(`bash -c env _`) · **forme longue collée de `env -S`** · **motifs dont la tête
+est une classe libre** (déni de service, sept secondes sur un mot long).
 
 **Faux positifs corrigés** (un agent bloqué est aussi cassé qu'un agent qui
 fuit) : `set +e` · `env -i` et `-u` · `command -v` · `compgen -A function` ·
@@ -169,6 +190,11 @@ pris pour un domaine.
   un attribut PARTAGÉ, donc non restaurable.
 - Un nom de paramètre de requête court, sans point ni arobase, n'est pas
   substitué : indiscernable d'un nom d'API.
+- **Un domaine externe d'un SEUL label sur un ccTLD qui est aussi une extension
+  de fichier** (`acme.pl`, `partenaire.md`) reste public. Le type du span ne
+  distingue pas un fichier d'un hôte — mesuré. Prix payé pour que `main.py`,
+  `lib.rs` et `README.md` restent lisibles par l'agent. Les hôtes internes,
+  multi-labels, restent couverts. Deux tests figent les deux côtés.
 - Les clés de définitions restent verbatim ; un substitut peut théoriquement
   déséquilibrer une expression de validation.
 - Une coupure de chunk peut laisser un saut de ligne en tête d'un bloc SSE.
@@ -207,7 +233,7 @@ pris pour un domaine.
   un échappement VIDE. Doubler le backslash.
 - Ne jamais lire ni afficher le répertoire d'état du coffre (règle secrets).
 
-## 8. Ce que neuf rounds ont appris — à appliquer au round 10
+## 8. Ce que dix rounds ont appris — à appliquer au round 11
 
 1. **Une approximation à UNE valeur est un contournement en attente.** Chaque
    fois que j'ai modélisé un mécanisme de bash par une seule valeur (une
@@ -232,10 +258,24 @@ pris pour un domaine.
    faux (une obfuscation citée qui ne reconstruit pas le binaire annoncé) ou
    non reproductibles (moteur construit sans l'allowlist). Corriger sur une
    preuve fausse aurait introduit un vrai défaut.
-6. **Les tests aussi peuvent avoir tort.** Deux de mes assertions étaient
-   fausses (une accolade qui n'exécute rien ; deux deltas de texte qui ne sont
-   pas un doublon mais le tampon de queue). Corriger dans le sens du
-   comportement RÉEL, pas dans celui qui arrange.
+6. **Les tests aussi peuvent avoir tort**, et les rapports d'agent aussi.
+   Trois de mes assertions étaient fausses (une accolade qui n'exécute rien ;
+   deux deltas de texte qui sont le tampon de queue, pas un doublon ;
+   `printenv HOME`, donné comme contournement, qui n'expose rien). Corriger
+   dans le sens du comportement RÉEL, pas dans celui qui arrange — et vérifier
+   un « contournement » sur une charge NOCIVE, pas sur l'exemple bénin du
+   rapport.
+7. **Chercher aussi ce qui n'a jamais été modélisé.** Neuf rounds durant, les
+   findings étaient des régressions du round précédent ; au dixième, tous les
+   correctifs ont tenu et les dix contournements venaient de mécanismes absents
+   du modèle. Relire ses propres correctifs ne suffit plus : il faut relire la
+   SPEC de l'objet analysé (ici bash) et cocher ce qu'on n'a jamais traité.
+8. **Un motif dont la tête est une classe libre est un déni de service en
+   attente.** `\S*\{`, `[\w-]*\.env`, `[\w./-]*secrets?` rétro-traquent à
+   chaque position d'un mot long : sept secondes pour vingt mille caractères,
+   de quoi noyer un agent sans écrire une commande interdite. Deux des trois
+   étaient là depuis le début, jamais chronométrés. Ancrer sur le littéral, et
+   MESURER le coût, pas seulement la décision.
 
 ## 9. Repères
 - Commits : uniquement sur demande de jo, conventional commits, en anglais.

@@ -359,6 +359,8 @@ def _walk(
     in_schema: bool = False,
     in_user_data: bool = False,
     protocole: bool = False,
+    signe_ici: bool = False,
+    signe_partout: bool = False,
 ) -> Any:
     """
     Traverse recursivement une structure JSON et applique `fn` a chaque chaine
@@ -376,7 +378,8 @@ def _walk(
     if isinstance(node, list):
         return [
             _walk(item, fn, in_schema=in_schema, in_user_data=in_user_data,
-                  protocole=protocole)
+                  protocole=protocole, signe_ici=signe_ici,
+                  signe_partout=signe_partout)
             for item in node
         ]
 
@@ -385,11 +388,16 @@ def _walk(
         # `type` peut porter autre chose qu'une chaine (propriete de schema
         # nommee "type", JSON arbitraire dans un tool_result) : on ne teste
         # l'appartenance que sur une chaine, sinon TypeError (non hashable).
-        # Dans un argument d'outil, `{"type": "thinking"}` n'est pas un bloc
-        # signe mais une valeur que n'importe qui peut ecrire : l'opacite y
-        # serait FORGEABLE.
+        # Un bloc signe n'est produit que par l'API, et ne revient que dans le
+        # `content` d'un message ASSISTANT. Partout ailleurs — sortie d'un
+        # serveur MCP relayee dans un `tool_result`, message utilisateur,
+        # `system`, definition d'outil — `type` est une valeur que le client ou
+        # un tiers ECRIT : l'opacite y est FORGEABLE, et rendait tout le
+        # sous-arbre verbatim. Restreindre a `input`/`metadata` ne fermait que
+        # deux de ces surfaces.
         btype = node.get("type")
-        if not in_user_data and isinstance(btype, str) and btype in OPAQUE_BLOCK_TYPES:
+        if (signe_ici or signe_partout) and not in_user_data \
+                and isinstance(btype, str) and btype in OPAQUE_BLOCK_TYPES:
             return node
 
         # `data` protege une charge BINAIRE (image, PDF). Une source de
@@ -491,6 +499,12 @@ def _walk(
                 # cles de routage.
                 protocole=False if entering_schema
                 else (protocole or key in PROTOCOL_CONTAINER_KEYS),
+                # Le seul emplacement ou un bloc signe est legitime. Le drapeau
+                # est RECALCULE a chaque niveau, jamais herite : sous un bloc de
+                # message assistant, un `content` imbrique porte de nouveau des
+                # donnees.
+                signe_ici=(key == "content" and node.get("role") == "assistant"),
+                signe_partout=signe_partout,
             )
         return out
 
@@ -586,8 +600,13 @@ def walk_response(
     for key, value in body.items():
         if key in RESPONSE_CONTROL_KEYS:
             continue
+        # Au RETOUR, l'opacite reste permissive : le corps vient d'Anthropic,
+        # un bloc signe qui s'y trouve n'a pas ete pose par un tiers, et la
+        # restauration ne fait jamais SORTIR de valeur. Le risque s'inverse —
+        # traverser un bloc signe invaliderait sa signature (D3), panne dure.
         out[key] = _walk(value, _resolve, in_user_data=key in USER_DATA_KEYS,
-                         protocole=key in PROTOCOL_CONTAINER_KEYS)
+                         protocole=key in PROTOCOL_CONTAINER_KEYS,
+                         signe_partout=True)
 
     if strict and unresolved:
         raise UnresolvedSurrogate(f"substituts inconnus : {sorted(set(unresolved))}")
@@ -706,7 +725,8 @@ class SSERewriter:
                 if key in RESPONSE_CONTROL_KEYS or key == "type":
                     continue
                 out[key] = _walk(value, self._resolve,
-                                 in_user_data=key in USER_DATA_KEYS)
+                                 in_user_data=key in USER_DATA_KEYS,
+                                 signe_partout=True)
             yield out
 
         else:
@@ -748,7 +768,8 @@ class SSERewriter:
         # remplis. Les emettre verbatim montrait le SUBSTITUT a l'operateur, la
         # ou walk_response restaure le meme bloc.
         if block:
-            event = {**event, "content_block": _walk(block, self._resolve)}
+            event = {**event, "content_block": _walk(block, self._resolve,
+                                                    signe_partout=True)}
         yield event
 
     def _on_delta(self, event: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -787,7 +808,7 @@ class SSERewriter:
 
         if dtype in self._DELTAS_RESOLUS:
             out = dict(event)
-            out["delta"] = _walk(delta, self._resolve)
+            out["delta"] = _walk(delta, self._resolve, signe_partout=True)
             yield out
             return
 

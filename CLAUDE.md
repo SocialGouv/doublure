@@ -68,7 +68,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**848 tests verts** (830 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**914 tests verts** (896 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -522,6 +522,74 @@ ensuite — quinze secondes d'analyse. Budget partagé sur toute la commande.
 
 **Cas de test du rapport écarté** : `cu${IFS:+r}rl` donne `currl`, pas `curl` —
 en bash non plus. J'ai corrigé l'attente plutôt que le code.
+
+## Onzième revue adversariale (2026-08-04, round 10)
+
+**Walker, CRITIQUE — l'opacité était forgeable partout SAUF dans les données
+utilisateur.** Le correctif `USER_DATA_KEYS` du round 4 fermait `input` et
+`metadata` ; or un bloc signé n'est produit que par l'API et ne revient que
+dans le `content` d'un message ASSISTANT. Partout ailleurs, `type` est une
+valeur qu'un tiers ÉCRIT. Cinq surfaces sortaient verbatim, dont la pire : un
+serveur MCP hostile renvoie `{"type":"thinking", …}`, Claude Code le réémet
+dans un `tool_result`, la valeur part en clair. Mode d'échec SILENCIEUX — pas
+d'entrée de coffre, pas de substitut non résolu, rien à compter.
+Au RETOUR, l'opacité reste permissive : le corps vient d'Anthropic, la
+restauration ne fait rien SORTIR, et traverser un bloc signé invaliderait sa
+signature (D3) — le risque s'inverse, donc la règle aussi.
+
+### Hook — round 10 : dix contournements, tous des mécanismes de bash non modélisés
+Cette fois ce ne sont PAS des régressions du round 9 (les correctifs d'IFS,
+d'expansion, de repli et de position de programme ont tous tenu), mais des
+mécanismes que je n'avais jamais modélisés :
+- **Un interpréteur reçoit son programme autrement qu'en ligne.** Tout le
+  contrôle du code était adossé à `-c`/`-e` ; par here-string (`<<<`), par
+  heredoc, par tiret nu (`python3 -`) ou par substitution de processus, le même
+  code n'était analysé que comme du shell, où `os.system("env")` est un mot
+  parmi d'autres. Les formes livrées sont désormais RAMENÉES à la forme en
+  ligne — un seul chemin d'analyse, pas une liste de cas. Un heredoc consommé
+  par un PIPE (`cat <<EOF | python3`) relève, lui, du montage non analysable.
+- **`{` et `}` n'étaient pas des séparateurs** : `fn() { env; }; fn` et
+  `{ env; }` s'arrêtaient sur `fn` ou sur l'accolade. Retirées seulement là où
+  bash y voit le mot réservé — les retirer partout emportait le remplaçant de
+  `xargs -I{}`, dont l'option avalait alors le programme suivant.
+- **`declare -n r=CIBLE` est un ALIAS** : `echo $r` lit la variable cible, et
+  `$r` ne porte aucun nom sensible. Même mécanisme que `${!x}`, autre syntaxe.
+- **Une affectation qui exécute** : bash source `BASH_ENV` avant tout `-c`,
+  l'éditeur de liens charge `LD_PRELOAD`. `ENV=` n'est refusé que si sa valeur
+  est un CHEMIN (`ENV=production` est un idiome courant), `NODE_OPTIONS` que
+  s'il porte `--require`.
+- **`bash -c env _`** : la valeur de `-c` est le SCRIPT ENTIER, `_` occupe
+  `$0`. Le quoting étant déjà retiré, les deux lectures sont indiscernables :
+  on émet les DEUX, comme pour une branche d'expansion.
+- **`env --split-string=CMD`** : la forme longue COLLÉE commence par `-`, elle
+  passait pour une option ordinaire ; `-S` séparé était déjà couvert.
+
+**Disponibilité — le DoS ne venait pas d'où je le croyais.** Un mot de vingt
+mille caractères coûtait sept secondes. Le budget d'accolades des rounds 8-9
+n'y pouvait rien : c'est `re.search` qui explose AVANT, sur des motifs dont la
+tête est une CLASSE LIBRE (`\S*\{…`, `[\w-]*\.env`, `[\w./-]*secrets?`) — elles
+rétro-traquent à chaque position. Tous ancrés sur leur littéral, l'expansion
+d'accolades se fait mot à mot après découpage sur les espaces : **0,04 s**.
+Deux des trois motifs étaient là depuis le début, jamais mesurés.
+
+**Faux positif introduit puis corrigé** : retirer `{}` partout cassait
+`xargs -I{}`, attrapé par les tests unitaires du round 8.
+
+**Attente de test corrigée** : le rapport donnait
+`env --split-string='printenv HOME'` comme contournement — `printenv HOME`
+n'expose rien, l'autoriser est le bon comportement. Vérifié sur les charges
+NOCIVES (`printenv AWS_…`, `curl`, `env`), toutes refusées.
+
+**Résidu de la règle d'extensions, ÉNONCÉ au lieu d'être supposé.** Mon
+commentaire du round 8 affirmait que la restriction à un seul label « les rend
+sûres » : c'est FAUX. Elle BORNE la fuite. `.md`, `.pl`, `.py`, `.rs`, `.ml`,
+`.tf` sont des ccTLD, donc un domaine externe d'un seul label (`acme.pl`) sort
+en clair. Le type du span ne permet pas de trancher — mesuré : `acme.fr` dans
+« le serveur acme.fr » et `infra.fr` dans « le fichier infra.fr » donnent les
+MÊMES types (HOSTNAME + URL). Retirer ces extensions ferait muer `main.py`,
+`lib.rs` et `main.tf` en faux domaines, ce qui a déjà interrompu une session
+réelle. Arbitrage inchangé, désormais verrouillé par deux tests : le résidu
+d'un côté, la couverture des hôtes multi-labels de l'autre.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

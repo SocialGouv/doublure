@@ -668,3 +668,29 @@ def test_une_entree_exacte_vaut_toujours_pour_une_sous_partie(tmp_path):
     assert eng.substitute_value(
         "CONTAINER_IMAGE", "registry.acme.io/app:python3.12-slim").endswith(
             ":python3.12-slim")
+
+
+# --------------------------------------------------------------------------- #
+# Round 10 — le résidu de la règle d'extensions, ÉNONCÉ plutôt que supposé
+#
+# La restriction du radical à un seul label borne la fuite, elle ne la supprime
+# pas : plusieurs de ces extensions sont des ccTLD réellement enregistrables.
+# Un domaine externe d'un seul label sort donc en clair. Ce test n'est pas une
+# validation, c'est le CONSTAT verrouillé : s'il se met à échouer, c'est que
+# l'arbitrage a changé et que la documentation doit suivre.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("valeur", ["acme.pl", "partenaire.md", "billing.py"])
+def test_residu_un_domaine_externe_d_un_seul_label_reste_public(valeur):
+    """Le prix payé pour que `main.py` et `README.md` restent lisibles."""
+    assert Allowlist.load()(valeur)
+
+
+@pytest.mark.parametrize("valeur", [
+    "db-01.acme.internal", "srv-billing.acme.pl", "api.acme.md",
+])
+def test_un_hote_multi_labels_n_est_jamais_public_meme_sur_ces_ccTLD(valeur):
+    """La contrepartie : les hôtes internes sont multi-labels, donc couverts."""
+    assert not Allowlist.load()(valeur), (
+        f"{valeur!r} rendu public : il sortirait en clair, sans trace")
