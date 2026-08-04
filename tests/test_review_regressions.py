@@ -706,3 +706,67 @@ def test_un_hote_multi_labels_n_est_jamais_public_meme_sur_ces_ccTLD(valeur):
     """La contrepartie : les hôtes internes sont multi-labels, donc couverts."""
     assert not Allowlist.load()(valeur), (
         f"{valeur!r} rendu public : il sortirait en clair, sans trace")
+
+
+# --------------------------------------------------------------------------- #
+# Round 11 — la queue LIBRE des règles de forme
+#
+# Le round 8 avait fermé cette classe pour la règle d'extensions : une règle
+# `re:` ne doit pas rendre public un identifiant à PLUSIEURS labels, car les
+# labels supplémentaires portent le nom d'organisation. La même queue libre
+# subsistait ailleurs — chemins d'import Go, chemins d'URL, chemins d'image —
+# et celles-là acceptaient le tiret, donc un vrai nom d'hôte y entrait.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("valeur", [
+    # chemins d'URL
+    "https://json-schema.org/db-01.acme.internal/schema",
+    "https://docs.anthropic.com/srv-billing-prod.acmecorp.internal",
+    "https://github.com/anthropics/tenant-nda-acme.internal.corp/prive",
+    # chemins d'import Go
+    "k8s.io/db-01.acme.internal",
+    "golang.org/x/srv-billing-prod.acmecorp.internal",
+    "sigs.k8s.io/db-01.acme.internal/pkg",
+    # chemins d'image
+    "registry.k8s.io/db-01.acme.internal/app",
+    "mcr.microsoft.com/srv-billing-prod.acmecorp.internal",
+    "gcr.io/distroless/tenant-acme-nda.internal",
+    "docker.io/library/db-01.acme.internal",
+])
+def test_une_regle_de_forme_ne_rend_pas_public_un_chemin_multi_labels(valeur):
+    assert not Allowlist.load()(valeur), (
+        f"{valeur!r} rendu public : il sortirait en clair")
+
+
+@pytest.mark.parametrize("valeur", [
+    "https://json-schema.org/draft/2020-12/schema",
+    "https://docs.anthropic.com/en/api/messages",
+    "https://docs.anthropic.com/guide/index.html",
+    "https://github.com/anthropics/claude-code",
+    "k8s.io/api/core/v1",
+    "golang.org/x/net/http2",
+    "sigs.k8s.io/controller-runtime",
+    "docker.io/library/postgres:16",
+    "registry.k8s.io/pause:3.9",
+    "gcr.io/distroless/static-debian12:nonroot",
+])
+def test_le_resserrement_ne_casse_pas_les_valeurs_publiques_legitimes(valeur):
+    """Substituer une URL de standard ou une image publique casse le protocole
+    ou prive le modèle d'une référence qu'il sait lire."""
+    assert Allowlist.load()(valeur), f"{valeur!r} serait substitué à tort"
+
+
+@pytest.mark.parametrize("valeur", [
+    "sigs.k8s.io/tenant-acme-nda/prive",
+    "org.apache.kafka.streams.internal.acme.PaymentsClient",
+])
+def test_residu_un_segment_d_un_seul_label_sous_un_prefixe_public(valeur):
+    """Résidu ASSUMÉ, compté par `public_by_shape`.
+
+    Un segment d'un seul label sous un préfixe public est indiscernable d'un
+    vrai module (`sigs.k8s.io/controller-runtime`) ou d'un vrai paquet
+    (`org.apache.kafka.streams.KafkaStreams`). Les paquets Java n'acceptent en
+    outre pas le tiret, ce qui exclut la plupart des noms d'hôtes internes.
+    """
+    assert Allowlist.load()(valeur)

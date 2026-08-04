@@ -600,6 +600,43 @@ la liste dédoublonnée des tokens rendus publics par une règle de FORME, avec
 leurs types de span et la règle en cause. Une entrée EXACTE n'y figure pas —
 c'est une décision prise token par token, pas une heuristique.
 
+## Douzième revue adversariale (2026-08-04, round 11 — walker et moteur)
+
+**CRITIQUE — mon correctif du round 10 était encore forgeable.** J'avais
+restreint l'opacité au `content` d'un message ASSISTANT, en testant
+`node.get("role")` sur le dict COURANT. N'importe quel dict imbriqué portant ce
+rôle l'obtenait donc — y compris dans un `tool_result`, dont le contenu vient
+d'un serveur MCP. La propriété avait été RÉTRÉCIE, pas supprimée : de « tout
+dict de type thinking » à « tout dict de rôle assistant ». Cinq surfaces,
+vérifiées.
+La légitimité est une propriété de POSITION : elle descend depuis la racine
+`messages` (`dans_messages`), elle ne se déduit pas d'un nœud isolé. C'est la
+troisième fois que ce piège se referme sur moi — `SKIP_KEYS` au round 5,
+l'heuristique de protocole au round 6, celui-ci.
+
+**La queue LIBRE des règles de forme, partout ailleurs.** Le round 8 avait
+fermé cette classe pour la règle d'extensions. La même queue subsistait dans
+les chemins d'URL (`(/[\w./-]*)?`), les chemins d'import Go et les chemins
+d'image — et ces deux dernières acceptent le TIRET, donc un vrai nom d'hôte y
+entre : `k8s.io/db-01.acme.internal`, `registry.k8s.io/db-01.acme.internal/app`,
+`https://json-schema.org/db-01.acme.internal/schema` sortaient en clair.
+Chaque segment est désormais borné à un mot ou à un nom de fichier (UN point) ;
+pour une image, à un mot sans point — dans une référence d'image, le point
+désigne un hôte de registre, déjà épinglé par le préfixe.
+**L'agent n'avait testé que les URL et les paquets Java : les six fuites des
+chemins Go et image viennent de ma propre extension du périmètre.**
+
+**Deux défauts mineurs, tous deux des pannes futures** : une sous-clé
+inattendue dans `cache_control` faisait substituer `type` — qui n'accepte que
+`ephemeral` — donc 400 sur la requête ENTIÈRE dès qu'Anthropic ajoute un champ ;
+et un type d'événement SSE inconnu était rendu verbatim, ses substituts non
+restaurés (l'opérateur voit le nom fictif, un outil s'y exécuterait).
+
+**Résidu assumé, compté** : un segment d'UN SEUL label sous un préfixe public
+(`sigs.k8s.io/tenant-acme-nda`, `org.apache.kafka.…acme.PaymentsClient`) reste
+public — indiscernable d'un vrai module ou d'un vrai paquet. Les paquets Java
+n'acceptent pas le tiret, ce qui exclut la plupart des noms d'hôtes internes.
+
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
 (le 4ᵉ vient de la revue adversariale) :

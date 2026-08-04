@@ -9,10 +9,14 @@
 # `github.com/<org-interne>/...` sont SENSIBLES et n'y entrent jamais.
 
 # --- Chemins d'import Go publics (ce sont littéralement des domaines) -------
+# Chaque SEGMENT est borné à un mot ou à un nom de fichier (UN point). Une
+# classe contenant la barre oblique ET le point acceptait un chemin entier :
+# `k8s.io/db-01.acme.internal` sortait en clair. Même classe que le radical
+# corrigé au round 8, et que les chemins d'URL ci-dessous.
 github.com/spf13/cobra
-re:k8s\.io(/[A-Za-z0-9/._-]+)?
-re:golang\.org/x/[A-Za-z0-9/._-]+
-re:sigs\.k8s\.io/[A-Za-z0-9/._-]+
+re:k8s\.io(/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?)*
+re:golang\.org/x/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?(/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?)*
+re:sigs\.k8s\.io/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?(/[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?)*
 
 # --- Packages Java/Kotlin publics (com.<org-interne>.* reste sensible) ------
 re:org\.apache\.(kafka|hadoop|spark|cassandra|flink|zookeeper|maven|logging|commons|http|tomcat|lucene|camel|beam)[A-Za-z0-9._]*
@@ -21,11 +25,14 @@ re:io\.netty\.(buffer|channel|handler|util|bootstrap|resolver|codec)[A-Za-z0-9._
 re:javax\.[A-Za-z0-9._]+
 
 # --- Images publiques --------------------------------------------------------
-re:docker\.io/library/[a-z0-9._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
-re:gcr\.io/distroless/[a-z0-9/._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
-re:quay\.io/prometheus/[a-z0-9/._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
-re:registry\.k8s\.io/[a-z0-9/._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
-re:mcr\.microsoft\.com/[a-z0-9/._-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
+# Le nom de dépôt ne porte PAS de point : dans une référence d'image, le point
+# désigne un hôte de registre, déjà épinglé par le préfixe. L'autoriser
+# laissait passer un segment à deux labels — `distroless/tenant-acme.internal`.
+re:docker\.io/library/[a-z0-9_-]+(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
+re:gcr\.io/distroless/[a-z0-9_-]+(/[a-z0-9_-]+)*(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
+re:quay\.io/prometheus/[a-z0-9_-]+(/[a-z0-9_-]+)*(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
+re:registry\.k8s\.io/[a-z0-9_-]+(/[a-z0-9_-]+)*(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
+re:mcr\.microsoft\.com/[a-z0-9_-]+(/[a-z0-9_-]+)*(:(v?\d+(\.\d+)*(-(alpine|slim|bookworm|bullseye|nonroot|rc\d*|beta\d*))?|latest|stable|edge|alpine|slim|nonroot|distroless))?
 
 # --- Providers Terraform ------------------------------------------------------
 hashicorp/aws
@@ -74,15 +81,20 @@ re:login\.windows\.net
 re:(Mail|Calendars|Files|Sites|User|Group|Directory|Policy|Application|Team|Chat|Presence|Device|Reports|AuditLog)\.(Read|ReadWrite|ReadBasic|Send|Manage)(\.(All|Shared|Selected))?
 
 # --- Standards et méta-schémas (structurels : les substituer casse le protocole)
-re:https?://json-schema\.org(/[\w./-]*)?
-re:https?://(www\.)?w3\.org(/[\w./-]*)?
-re:https?://spdx\.org(/[\w./-]*)?
-re:https?://schema\.org(/[\w./-]*)?
-re:https?://(docs\.)?(anthropic|claude)\.com(/[\w./-]*)?
-re:https?://platform\.claude\.com(/[\w./-]*)?
-re:https?://(www\.)?github\.com/(anthropics|modelcontextprotocol)(/[\w./-]*)?
-re:https?://(registry\.)?npmjs\.(org|com)(/[\w./-]*)?
-re:https?://pypi\.org(/[\w./-]*)?
+# Le CHEMIN est du texte libre : chaque segment est borné à un mot ou à un nom
+# de fichier (UN seul point). `[\w./-]*` acceptait un chemin entier, si bien
+# qu'un hôte interne glissé dedans — `.../db-01.acme.internal/schema` —
+# sortait avec l'URL. Même classe que le radical corrigé au round 8 : une
+# règle de FORME ne doit pas rendre public un identifiant multi-labels.
+re:https?://json-schema\.org(/[\w-]+(\.[\w-]+)?)*/?
+re:https?://(www\.)?w3\.org(/[\w-]+(\.[\w-]+)?)*/?
+re:https?://spdx\.org(/[\w-]+(\.[\w-]+)?)*/?
+re:https?://schema\.org(/[\w-]+(\.[\w-]+)?)*/?
+re:https?://(docs\.)?(anthropic|claude)\.com(/[\w-]+(\.[\w-]+)?)*/?
+re:https?://platform\.claude\.com(/[\w-]+(\.[\w-]+)?)*/?
+re:https?://(www\.)?github\.com/(anthropics|modelcontextprotocol)(/[\w-]+(\.[\w-]+)?)*/?
+re:https?://(registry\.)?npmjs\.(org|com)(/[\w-]+(\.[\w-]+)?)*/?
+re:https?://pypi\.org(/[\w-]+(\.[\w-]+)?)*/?
 
 # --------------------------------------------------------------------------- #
 # Noms de FICHIERS dont l'extension coïncide avec un TLD. Le détecteur classe

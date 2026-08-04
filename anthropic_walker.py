@@ -105,6 +105,25 @@ def _forme_connue(value: Any, formes: dict[str, re.Pattern[str]]) -> bool:
         for cle, val in value.items()
     )
 
+
+def _traverse_hors_forme(value: Any, fn: Callable[[str], str],
+                         formes: dict[str, re.Pattern[str]]) -> Any:
+    """Traverse une valeur de forme INCONNUE, sans casser ce qui est connu.
+
+    Une sous-cle dont la valeur a exactement la forme attendue reste verbatim :
+    `cache_control.type` n'accepte que `ephemeral` ou `persistent`, et le
+    substituer fait refuser la requete ENTIERE. Un champ ajoute demain a cote
+    suffisait a declencher ce 400. Le reste est traverse en mode donnees.
+    """
+    if not isinstance(value, dict):
+        return _walk(value, fn, in_user_data=True)
+    return {
+        cle: (val if (cle in formes and isinstance(val, str)
+                      and formes[cle].fullmatch(val))
+              else _walk(val, fn, in_user_data=True))
+        for cle, val in value.items()
+    }
+
 #: Types MIME dont la charge est binaire : `data` y reste opaque. Tout le
 #: reste — texte, JSON, media_type absent — est traverse.
 #: Enumeres precisement : `application/x-` et `application/vnd.` couvraient
@@ -361,6 +380,7 @@ def _walk(
     protocole: bool = False,
     signe_ici: bool = False,
     signe_partout: bool = False,
+    dans_messages: bool = False,
 ) -> Any:
     """
     Traverse recursivement une structure JSON et applique `fn` a chaque chaine
@@ -379,7 +399,7 @@ def _walk(
         return [
             _walk(item, fn, in_schema=in_schema, in_user_data=in_user_data,
                   protocole=protocole, signe_ici=signe_ici,
-                  signe_partout=signe_partout)
+                  signe_partout=signe_partout, dans_messages=dans_messages)
             for item in node
         ]
 
@@ -422,7 +442,7 @@ def _walk(
                     # verbatim, qui est justement ce qu'un client peut y ecrire.
                     out[key] = (
                         value if _forme_connue(value, formes)
-                        else _walk(value, fn, in_user_data=True)
+                        else _traverse_hors_forme(value, fn, formes)
                     )
                     continue
 
@@ -499,11 +519,16 @@ def _walk(
                 # cles de routage.
                 protocole=False if entering_schema
                 else (protocole or key in PROTOCOL_CONTAINER_KEYS),
-                # Le seul emplacement ou un bloc signe est legitime. Le drapeau
-                # est RECALCULE a chaque niveau, jamais herite : sous un bloc de
-                # message assistant, un `content` imbrique porte de nouveau des
-                # donnees.
-                signe_ici=(key == "content" and node.get("role") == "assistant"),
+                # Le seul emplacement ou un bloc signe est legitime. La
+                # legitimite est une propriete de POSITION : elle se descend
+                # depuis la racine `messages`, elle ne se deduit PAS du dict
+                # courant. Tester le seul `role` la rendait FORGEABLE — un
+                # serveur MCP place `{"role": "assistant", "content": [...]}`
+                # dans un `tool_result` et le sous-arbre ressort verbatim.
+                # `dans_messages` retombe a False sous ce niveau : un `content`
+                # imbrique porte de nouveau des donnees.
+                signe_ici=(dans_messages and key == "content"
+                           and node.get("role") == "assistant"),
                 signe_partout=signe_partout,
             )
         return out
@@ -557,7 +582,8 @@ def walk_request(body: dict[str, Any], sub: Substituter) -> dict[str, Any]:
         # c'est ici qu'il faut reconnaitre `metadata`.
         out[key] = _walk(value, sub.to_surrogate,
                          in_user_data=key in USER_DATA_KEYS,
-                         protocole=key in PROTOCOL_CONTAINER_KEYS)
+                         protocole=key in PROTOCOL_CONTAINER_KEYS,
+                         dans_messages=key == "messages")
 
     return out
 
@@ -730,8 +756,18 @@ class SSERewriter:
             yield out
 
         else:
-            # message_start, message_stop, ping
-            yield event
+            # `ping`, et TOUT type d'evenement ajoute par l'API. Le rendre
+            # verbatim laissait ses substituts non restaures : l'operateur
+            # voyait le nom FICTIF, et un outil s'y serait execute. Un type
+            # inconnu est justement celui qu'aucun test ne couvre.
+            out = dict(event)
+            for key, value in event.items():
+                if key in RESPONSE_CONTROL_KEYS or key == "type":
+                    continue
+                out[key] = _walk(value, self._resolve,
+                                 in_user_data=key in USER_DATA_KEYS,
+                                 signe_partout=True)
+            yield out
 
     # -- interne ------------------------------------------------------------ #
 
