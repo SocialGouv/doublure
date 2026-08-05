@@ -497,7 +497,15 @@ class SurrogateEngine:
             # Le préfixe d'algorithme (`sha256:`) est structurel : le perdre
             # empêche le modèle de savoir à quoi il a affaire.
             algo, sep, rest = v.partition(":")
-            if sep and re.fullmatch(r"(?i)(sha\d+|md5|blake\d*|crc\d*)", algo):
+            # Registre FERMÉ, et non une forme libre : un préfixe inconnu
+            # (`srv-billing-01:deadbeef`) serait CONSERVÉ, donc une fuite.
+            # Mais le restreindre à `sha\d+` perdait `sha3-256`, `SHA-256`,
+            # `blake2b`, `keccak256`, `xxh64` — et l'opérateur voyait un
+            # hexadécimal nu, sans savoir à quoi il avait affaire (D1).
+            if sep and re.fullmatch(
+                    r"(?i)(sha-?\d+|sha3-\d+|shake\d+|md[45]|blake[23][bs]?"
+                    r"|keccak\d*|crc\d*|xxh\d*|ripemd\d*|whirlpool|sm3)",
+                    algo):
                 # `sha256:` sans corps se re-substituerait à lui-même : la
                 # garde `candidat == réel` rejette les 64 tentatives et la
                 # requête tombe en 503. On donne un corps de longueur par

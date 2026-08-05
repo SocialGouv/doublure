@@ -956,6 +956,29 @@ apostrophes serait FAUX — `bash -c '${!x}'` les fait bien exécuter. Le refus
 est visible et contournable (heredoc cité, chaîne scindée), là où l'inverse
 serait silencieux.
 
+### Moteur — round 16 : DEUXIÈME round propre d'affilée
+Aucun finding critique ni haut, après avoir attaqué en priorité la règle qui
+vient d'ÉLARGIR le public (l'insensibilité à la casse), les URI sans autorité,
+le proxy, le détecteur, le walker et le moteur.
+
+**La question laissée ouverte a sa réponse** : le proxy EST fail-closed quand
+le détecteur est indisponible — `DetectionUnavailable` remonte jusqu'au 503,
+vérifié aussi sur un port fermé. Nuance documentée : un texte DÉJÀ pseudonymisé
+continue d'être servi par le cache pendant l'indisponibilité ; seul un texte
+nouveau tombe en 503.
+
+**Un manquement à D1 corrigé** : le préfixe d'algorithme d'une empreinte
+(`sha3-256:`, `SHA-256:`, `blake2b:`, `keccak256:`, `xxh64:`) était PERDU —
+l'opérateur voyait un hexadécimal nu sans savoir à quoi il avait affaire. Le
+registre reste FERMÉ, et c'est essentiel : une forme libre conserverait
+`srv-billing-01:deadbeef`, donc ferait fuir la partie avant le deux-points.
+Deux tests figent les deux côtés.
+
+**Limite mesurée, assumée** : un schéma d'URI NON reconnu qui porte une
+arobase (`webmail:alice@hôte`) retombe dans la branche SSH et perd sa
+structure. La partie locale est écartée, donc aucune fuite — c'est une perte
+sémantique, du même ordre que celle corrigée pour `mailto:` au round 15.
+
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
 (le 4ᵉ vient de la revue adversariale) :

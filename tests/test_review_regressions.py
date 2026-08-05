@@ -909,3 +909,33 @@ def test_une_forme_ssh_garde_son_userinfo_retire(tmp_path):
                           is_public=Allowlist.load().is_exact)
     rendu = eng.substitute_value("URL", "https://oauth2:ghp_jeton@github.com/o/d")
     assert "ghp_jeton" not in rendu and "oauth2" not in rendu, rendu
+
+
+# --------------------------------------------------------------------------- #
+# Round 16 — le préfixe d'algorithme d'une empreinte est structurel (D1)
+#
+# Le restreindre à `sha\d+|md5|blake\d*|crc\d*` perdait `sha3-256`, `SHA-256`,
+# `blake2b`, `keccak256`, `xxh64` : l'opérateur voyait un hexadécimal nu, sans
+# savoir à quoi il avait affaire. Le registre reste FERMÉ — un préfixe libre
+# conserverait `srv-billing-01:deadbeef`, donc une fuite.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("prefixe", [
+    "sha256", "sha1", "sha512", "md5", "sha3-256", "SHA-256",
+    "blake2b", "blake3", "keccak256", "xxh64", "ripemd160",
+])
+def test_le_prefixe_d_algorithme_est_conserve(tmp_path, prefixe):
+    eng = engine(tmp_path)
+    valeur = f"{prefixe}:a3f1b2c4d5e6f7089a1b2c3d4e5f6071"
+    assert eng.substitute_value("HASH", valeur).startswith(f"{prefixe}:")
+
+
+@pytest.mark.parametrize("prefixe", [
+    "srv-billing-01", "acme.internal", "db-master-prod", "tenant-acme",
+])
+def test_un_prefixe_hors_registre_n_est_jamais_conserve(tmp_path, prefixe):
+    """Sinon la partie AVANT le deux-points sortirait en clair."""
+    eng = engine(tmp_path)
+    rendu = eng.substitute_value("HASH", f"{prefixe}:a3f1b2c4d5e6")
+    assert prefixe not in rendu, rendu

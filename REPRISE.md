@@ -11,7 +11,14 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Rounds 3 à 15 traités. Round 16 à lancer.** jo a validé la poursuite deux
+**Rounds 3 à 16 traités. Round 17 à lancer.**
+
+**Le critère d'arrêt est atteint sur la MOITIÉ moteur/walker** :
+rounds 15 ET 16 sans aucun finding critique ni haut, sur des
+périmètres différents (proxy, détecteur, allowlist, coffre, SSE,
+surfaces exotiques de l'API). Le HOOK, lui, en produit encore un par
+round — et chacun vient d'un mécanisme de bash jamais modélisé ou du
+trou laissé entre deux gardes voisines. jo a validé la poursuite deux
 fois (`::g`). Critère d'arrêt : plus aucun finding critique/haut hors §5.
 **Il n'est pas atteint : les dix rounds ont TOUS produit des findings hauts ou
 critiques.** Jusqu'au round 9 c'étaient surtout des régressions du round
