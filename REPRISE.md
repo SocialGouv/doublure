@@ -117,6 +117,73 @@ ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
 7. Backlog hors boucle : `corpus/real/` non annoté (matière de jo),
    KMS/rotation/journal d'accès immuable (Phase 6, hors MVP).
 
+## 3 bis. Chantier EN COURS : remplacer les heuristiques par un PARSEUR
+
+Arbitrage de jo (2026-08-05) : **arrêter la boucle adversariale sur le hook et
+attaquer le parseur.** Le moteur, lui, est stable — rounds 15 et 16 sans aucun
+finding critique ni haut.
+
+### Ce qui est FAIT et prouvé
+- **Fail-closed du hook** (`f1e00f8`) — prérequis absolu, et défaut réel
+  trouvé en préparant ce chantier : une exception dans l'analyse faisait sortir
+  le hook SANS écrire de décision, donc l'outil s'exécutait. Trois tests le
+  figent.
+- **Sonde de faisabilité**, mesurée :
+  - commande réaliste **0,00 ms**, 500 Ko **70 ms**, processus + import
+    **21 ms**, relance sous l'interpréteur du projet **+30 ms** ;
+  - les vingt mécanismes qui ont coûté un round chacun sont analysés SANS
+    erreur par la grammaire ;
+  - `tree-sitter` et `tree-sitter-bash` sont déclarés dans `pyproject.toml`.
+
+### Ce que la grammaire apporte, et ce qu'elle n'apporte PAS
+Elle donne la STRUCTURE : `case`, définitions de fonction, groupes, heredocs,
+commentaires, substitutions — tout ce que j'ai bricolé pendant quatorze rounds.
+Elle n'ÉVALUE pas : `e${IFS//?/}nv` reste un seul nœud, `${!m[k1]}` une
+expansion. La logique d'expansion et d'indirection reste NÉCESSAIRE.
+
+Le vrai gain est ailleurs : elle rend les arguments **avec leur quoting
+intact**. Toute la difficulté « le quoting est déjà retiré, on ne sait pas où
+la sous-commande s'arrête » — qui m'a forcé à émettre deux lectures pour
+`trap`, `mapfile -C`, `bash -c` — disparaît.
+
+### PIÈGES déjà payés, à ne pas repayer
+1. **`declare`, `export`, `readonly`, `typeset`, `local` ne sont PAS des
+   nœuds `command`** mais des `declaration_command` ; `unset` est un
+   `unset_command`. Un parcours naïf des seuls `command` les manque tous —
+   c'est-à-dire TOUTE la famille des déverseurs durcie au round 15. Un A/B sur
+   le corpus des tests l'a montré AVANT le remplacement.
+2. **Le hook tourne sous le python SYSTÈME** (`#!/usr/bin/env python3`), qui
+   n'a pas la grammaire. Il faut se relancer sous `.venv/bin/python` par
+   `os.execv` (qui PRÉSERVE stdin), et REFUSER si la grammaire reste
+   introuvable. Le code de l'amorçage a été écrit, mesuré, puis RETIRÉ : il
+   coûtait 30 ms par appel pour un parseur pas encore branché. Le remettre en
+   même temps que le branchement.
+3. **La grammaire ne déplie pas les enveloppes** : `command env`, `bash -c env`,
+   `xargs -I{} env` ne montrent que le premier mot. `_WRAPPERS` et
+   `_program_positions` restent nécessaires — c'est de la sémantique.
+4. **`normalize` DÉTRUIT le quoting**, dont la grammaire a besoin. L'AST doit
+   travailler sur le texte BRUT, et les expansions être traitées par nœud.
+   C'est le point dur du chantier, pas un détail d'ordre d'appel.
+
+### Méthode qui a marché pour dé-risquer
+`/tmp/ab_ast.py` : extraire toutes les commandes citées par les tests, faire
+tourner ANCIEN et NOUVEAU découpage, et CLASSER les divergences (la grammaire
+voit moins / plus / autre chose). C'est ce qui a sorti le piège nº 1. Refaire
+cet A/B à chaque étape du remplacement, et ne swapper que quand chaque classe
+de divergence est expliquée.
+
+### Reste à faire, dans l'ordre
+1. Extracteur AST rendant, par commande simple : le programme et ses arguments
+   AVEC leur quoting, plus les corps de heredoc et les substitutions comme
+   nœuds distincts.
+2. Rebrancher `_program_positions` sur ces arguments exacts (les enveloppes
+   restent), puis supprimer les béquilles devenues inutiles : retrait des
+   commentaires, `_retire_definitions`, accolades conditionnelles, découpage
+   `case`, double lecture des sous-commandes.
+3. Remettre l'amorçage et le refus si la grammaire manque.
+4. Revalider : la suite complète, les sept scripts `/tmp/verif_r1*.py` des
+   rounds 10 à 16, et les deux preuves E2E.
+
 ## 4. Déjà corrigé — DONNER cette liste aux agents
 
 **Proxy / walker** : passthrough sur chemin non modélisé · surfaces sortantes
