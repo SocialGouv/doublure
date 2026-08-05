@@ -931,6 +931,31 @@ plausibles »).
   une adresse. Idem `data:`, et un dépôt AUTO-HÉBERGÉ retombait sur un simple
   MOT, que le modèle ne peut ni cloner ni lire comme une URL.
 
+## Dix-septième revue adversariale (2026-08-05, round 16 — hook)
+
+**Un seul finding, et il tombe pile dans les deux motifs que j'avais demandé
+de chercher.** J'avais durci SÉPARÉMENT, au round précédent, l'exemption des
+indices de tableau (`${!arr[@]}`, qui exige désormais les crochets) et la
+détection d'indirection (`${!nom}`, dont la classe excluait le crochet
+ouvrant). Entre les deux, `${!m[k1]}` n'était couvert par AUCUNE des deux —
+alors que c'est une indirection à part entière : la VALEUR de l'élément nomme
+la cible, et bash la suit. Six formes d'indice vérifiées, toutes ouvertes.
+
+C'est le motif de la JUMELLE et celui de l'EXEMPTION QUI DÉBORDE combinés :
+deux gardes voisines durcies chacune de son côté laissent un trou au milieu.
+Nommer ces motifs dans la consigne de l'agent est ce qui l'a fait chercher là.
+
+Disponibilité et faux positifs : RAS sur 78 commandes DevOps et sur des
+entrées de 25 000 caractères (45 ms).
+
+**Faux positif ajouté à la liste des assumés** : citer la syntaxe
+d'indirection dans une chaîne (`echo 'la syntaxe est ${!x}'`) est refusé. Le
+quoting est retiré par la normalisation anti-obfuscation, donc une citation
+devient indistinguable d'une expansion réelle. Blanchir les régions entre
+apostrophes serait FAUX — `bash -c '${!x}'` les fait bien exécuter. Le refus
+est visible et contournable (heredoc cité, chaîne scindée), là où l'inverse
+serait silencieux.
+
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
 (le 4ᵉ vient de la revue adversariale) :

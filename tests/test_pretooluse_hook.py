@@ -1525,3 +1525,45 @@ def test_l_expansion_d_accolades_est_bornee_en_TAILLE(audit_log):
     debut = time.time()
     run_hook("Bash", {"command": mot}, audit_log)
     assert time.time() - debut < 3.0, "taille du texte expansé non bornée"
+
+
+# --------------------------------------------------------------------------- #
+# Round 16 — l'indirection par ÉLÉMENT DE TABLEAU tombait ENTRE deux gardes
+#
+# `_INDICES_TABLEAU_RE` exige `[@]` ou `[*]` — les INDICES, qui n'exposent
+# aucune valeur. `_REF_INDIRECTE_RE` excluait le crochet ouvrant. Entre les
+# deux, n'importe quel autre indice n'était couvert par AUCUNE des deux : la
+# VALEUR de `m[k1]` nomme la cible, et bash suit l'indirection.
+#
+# Les deux gardes avaient été durcies séparément au round précédent. C'est le
+# motif de la JUMELLE, et celui de l'EXEMPTION QUI DÉBORDE, combinés.
+# --------------------------------------------------------------------------- #
+
+_CLE16 = "AWS_" + "SECRET_ACCESS_KEY"
+
+
+@pytest.mark.parametrize("command", [
+    f"declare -A m; m[k1]={_CLE16}; echo ${{!m[k1]}}",
+    f"m[999]={_CLE16}; echo ${{!m[999]}}",
+    f"k=key; declare -A m; m[$k]={_CLE16}; echo ${{!m[$k]}}",
+    f"m[0x1]={_CLE16}; echo ${{!m[0x1]}}",
+    f"declare -A m; m[foo-bar]={_CLE16}; echo ${{!m[foo-bar]}}",
+    f"declare -A m; m[$(pwd)]={_CLE16}; echo ${{!m[$(pwd)]}}",
+])
+def test_regression_une_indirection_par_element_de_tableau_est_refusee(command,
+                                                                      audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Les INDICES restent inoffensifs : aucune valeur n'en sort.
+    "for i in ${!arr[@]}; do echo $i; done",
+    'echo "${!arr[*]}"',
+    # Lire un ÉLÉMENT n'est pas une indirection.
+    'declare -A m; m[k1]=v; echo "${m[k1]}"',
+    "arr=(a b c); echo ${arr[1]}",
+    "echo ${#arr[@]}",
+    "ls fichier[0].txt",
+])
+def test_le_durcissement_du_round16_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command

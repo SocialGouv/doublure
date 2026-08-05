@@ -331,7 +331,14 @@ _NOM_VARIABLE_RE = re.compile(r"\$\{?!?\s*([A-Za-z_][A-Za-z0-9_]*)")
 #: suspecte toute regex CITANT cette syntaxe — la prose redevenait du code,
 #: le défaut que les rounds 5 et 8 avaient éliminé ailleurs.
 _REF_INDIRECTE_RE = re.compile(
-    r"\$\{!\s*([A-Za-z_]\w*|\d+|[@*])[^}\\\[(?]{0,32}\}")
+    r"\$\{!\s*([A-Za-z_]\w*|\d+|[@*])"
+    # Un INDICE de tableau est toléré ici : `${!m[k1]}` est une indirection à
+    # part entière — c'est la VALEUR de l'élément qui nomme la cible. Exclure
+    # le crochet ouvrant la faisait tomber entre cette garde et l'exemption
+    # des indices (`${!arr[@]}`), qui exige `[@]` ou `[*]` : tout autre indice
+    # n'était couvert par AUCUNE des deux.
+    r"(?:\[[^\]}]{0,32}\])?"
+    r"[^}\\\[(?]{0,32}\}")
 
 #: `${!arr[@]}` et `${!arr[*]}` rendent les INDICES d'un tableau : aucune
 #: valeur de variable n'en sort. C'est la seule forme d'indirection inoffensive.
