@@ -1,33 +1,54 @@
-# Reprise de session — état au 2026-08-04
+# Reprise de session — état au 2026-08-05
 
 > Ce fichier complète `CLAUDE.md` (qui porte l'état des phases et les décisions
 > verrouillées). Ici : **le travail EN COURS**, ce qui reste à faire, les
-> pièges déjà payés, et ce que neuf rounds de revue ont appris.
+> pièges déjà payés, et ce que seize rounds de revue ont appris.
 > Ordre de lecture à la reprise : `CLAUDE.md` → ce fichier → `git log`.
 
-## 1. Consigne en cours (non terminée)
+## 0. À FAIRE EN PREMIER, à la reprise
 
+**Le travail en cours est le PARSEUR du hook (§3 bis), pas la boucle
+adversariale — jo l'a arrêtée le 2026-08-05 pour cette raison précise.**
+
+1. Vérifier l'état RÉEL avant d'agir :
+   ```bash
+   git log --oneline -5 && git status --short
+   uv run pytest tests/ --ignore=tests/egress -q      # doit être vert
+   ss -lntp | grep 9000                               # détecteur en écoute ?
+   ```
+2. Lire §3 bis EN ENTIER : l'architecture est validée, les quatre pièges sont
+   écrits, et les 15 échecs de l'essai de branchement SONT la spécification du
+   reste. Ne pas re-dériver tout ça.
+3. Reprendre à « Reste à faire, dans l'ordre » (fin de §3 bis).
+
+Rien n'est poussé sur un remote — le dépôt est local, tout est committé.
+
+## 1. Consigne en cours — et celle qui est CLOSE
+
+### En cours : le parseur (§3 bis)
+Arbitrage de jo, 2026-08-05, sur trois options que je lui ai posées :
+**« arrêter la boucle et attaquer le parseur bash »**. Raison énoncée : les
+findings du hook des cinq derniers rounds (`trap`, `case`, `coproc`,
+`mapfile -C`, l'indirection par tableau, les liaisons de variables) sont tous
+GRATUITS avec un AST, et une denylist sur un langage aussi vaste que bash ne
+converge pas vers zéro par la seule méthode adversariale.
+
+### Close : la boucle adversariale
 > « Relance une revue adversariale agent opus 5 effort max sur l'ensemble du
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Rounds 3 à 16 traités. Round 17 à lancer.**
+**Rounds 3 à 16 traités.** État à l'arrêt :
+- **Moteur / walker / proxy / détecteur : critère d'arrêt ATTEINT.** Rounds 15
+  ET 16 sans aucun finding critique ni haut, sur des périmètres différents.
+- **Hook : environ un contournement par round**, jusqu'au dernier inclus. Deux
+  motifs se répètent et méritent d'être cherchés explicitement si la boucle
+  reprend : **la JUMELLE** (une branche durcie, sa sœur laissée ouverte) et
+  **l'EXEMPTION QUI DÉBORDE** (une garde ajoutée contre un faux positif finit
+  par couvrir un cas dangereux — c'est ainsi que `${!PREFIX@}` est passé).
 
-**Le critère d'arrêt est atteint sur la MOITIÉ moteur/walker** :
-rounds 15 ET 16 sans aucun finding critique ni haut, sur des
-périmètres différents (proxy, détecteur, allowlist, coffre, SSE,
-surfaces exotiques de l'API). Le HOOK, lui, en produit encore un par
-round — et chacun vient d'un mécanisme de bash jamais modélisé ou du
-trou laissé entre deux gardes voisines. jo a validé la poursuite deux
-fois (`::g`). Critère d'arrêt : plus aucun finding critique/haut hors §5.
-**Il n'est pas atteint : les dix rounds ont TOUS produit des findings hauts ou
-critiques.** Jusqu'au round 9 c'étaient surtout des régressions du round
-précédent ; le round 10 a rompu ce motif, et le round 11 a produit LES DEUX à
-la fois — quatre mécanismes de bash jamais modélisés (`trap`, `case`, `coproc`,
-`mapfile -C`) ET trois régressions de mes correctifs du round 10, dont un déni
-de service. La consigne « chercher aussi ce qui n'a jamais été modélisé » a
-payé : c'est elle qui a sorti les quatre familles.
-
+Si la boucle reprend un jour, le protocole et les prompts qui marchent sont
+en §3 ; les listes à donner aux agents sont en §4 et §5.
 ### Protocole appliqué à chaque round
 1. Deux agents `general-purpose`, `model: opus`, en parallèle : un sur le hook,
    un sur walker + moteur + proxy.
@@ -57,11 +78,11 @@ payé : c'est elle qui a sorti les quatre familles.
 
 ## 2. Où en est le code
 
-**918 tests verts** (900 unitaires + 18 egress). Les six phases ont leur
+**1245 tests verts** (1227 unitaires + 18 egress). Les six phases ont leur
 critère de sortie prouvé (détail : `CLAUDE.md`).
 
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 900
+uv run pytest tests/ --ignore=tests/egress   # 1227
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session RÉELLE + capture
@@ -73,7 +94,15 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
 **Toujours rejouer `phase3_e2e.sh` après une modification du walker, du moteur
 ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
 
-## 3. À FAIRE au round 16
+Sept scripts de vérification des rounds 10 à 16 vivent dans `/tmp`
+(`verif_r1*.py`). Ils NE SURVIVENT PAS à un redémarrage — leur contenu est
+figé dans `tests/test_pretooluse_hook.py` et `tests/test_review_regressions.py`,
+qui sont la vraie non-régression. Ne pas les recréer : lancer la suite.
+
+Outil de dé-risque du parseur : `uv run python tests/ab_decoupage.py` — il
+CLASSE les divergences entre l'ancien découpage et la grammaire.
+
+## 3. SI la boucle adversariale reprend un jour
 
 1. **Chercher la JUMELLE de chaque correctif.** C'est le motif des rounds 12 à
    14, sans exception : je durcis une branche et laisse l'autre ouverte —
@@ -118,6 +147,10 @@ ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
    KMS/rotation/journal d'accès immuable (Phase 6, hors MVP).
 
 ## 3 bis. Chantier EN COURS : remplacer les heuristiques par un PARSEUR
+
+**→ `docs/parseur-hook.md` porte le CODE exact de l'essai, les faits de
+grammaire vérifiés et les 15 échecs qui spécifient le reste. Le lire
+avant de recommencer quoi que ce soit.** Ce qui suit en est le résumé.
 
 Arbitrage de jo (2026-08-05) : **arrêter la boucle adversariale sur le hook et
 attaquer le parseur.** Le moteur, lui, est stable — rounds 15 et 16 sans aucun
@@ -320,7 +353,30 @@ pris pour un domaine.
 - Une coupure de chunk peut laisser un saut de ligne en tête d'un bloc SSE.
 - Corpus réel non annoté ; télémétrie coupée par les réglages de jo.
 
-## 6. Déviations à faire valider par jo
+## 6. Arbitrages RENDUS par jo — ne pas les re-litiger
+
+- **2026-08-05, boucle adversariale** : arrêtée au profit du parseur (§3 bis).
+  Trois options posées, jo a choisi le parseur. Raison : les findings du hook
+  sont gratuits avec un AST.
+- **2026-08-04, `.pl` et `.ml` retirés** de la règle d'extensions : ce sont les
+  deux ccTLD de la liste à porter un vrai volume de domaines, et leur valeur
+  comme extension de fichier est nulle ici (zéro fichier Perl ou OCaml).
+  Principe énoncé : **la liste se rejuge extension par extension, pas en bloc.**
+- **2026-08-04, `public_by_shape`** : le détecteur COMPTE ce qu'une règle de
+  FORME rend public. jo a demandé que le résidu cesse d'être silencieux.
+- **2026-08-05, paquets Java/Kotlin** : gardés « à moins que cela n'expose pas
+  une lib tierce mais quelque chose de spécifique au repo ». Appliqué en
+  épinglant le second niveau de `javax.` — la seule règle qui n'en épinglait
+  aucun.
+- **2026-08-02, D9** : pas de pare-feu local, ça se traite au déploiement.
+- **IA locale + inventaire** : piste discutée avec jo, PAS encore engagée.
+  L'inventaire des noms propres au dépôt fermerait la plupart des résidus de
+  §5 ; il se construit avec la même matière que le corpus doré (Phase 5). Le
+  troisième étage (« demander à l'humain en cas de doute ») exige : défaut =
+  SUBSTITUER pendant l'attente, réponse PERSISTÉE et monotone, et un taux
+  d'escalade bas — sinon l'agent est inutilisable.
+
+## 6 bis. Déviations encore à faire valider par jo
 - **Allowlist cloud resserrée** à `<service>[.<région>].<cloud>` (le littéral
   couvrant tout le domaine laissait fuir un endpoint de ressource).
 - **Règle d'extensions de fichiers** dans `config/allowlist.txt` : rend publics
@@ -353,7 +409,7 @@ pris pour un domaine.
   un échappement VIDE. Doubler le backslash.
 - Ne jamais lire ni afficher le répertoire d'état du coffre (règle secrets).
 
-## 8. Ce que dix rounds ont appris — à appliquer au round 11
+## 8. Ce que seize rounds ont appris
 
 1. **Une approximation à UNE valeur est un contournement en attente.** Chaque
    fois que j'ai modélisé un mécanisme de bash par une seule valeur (une

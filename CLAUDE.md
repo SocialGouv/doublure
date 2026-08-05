@@ -12,8 +12,10 @@ voit rien.
 3. Ce fichier — réponses verrouillées + état. C'est lui qui survit à la
    compaction : le tenir à jour à chaque fin de phase.
 4. `REPRISE.md` — le travail EN COURS, ce qui reste à faire, et les pièges
-   déjà payés. **À lire juste après ce fichier à toute reprise de session** :
-   une boucle de revue adversariale est en cours et n'est pas terminée.
+   déjà payés. **À lire juste après ce fichier à toute reprise de session.**
+   Sa §0 dit quoi faire en premier. Le chantier en cours est le PARSEUR du
+   hook (`docs/parseur-hook.md`), pas la boucle adversariale : jo l'a arrêtée
+   le 2026-08-05.
 
 ## Réponses §3 (verrouillées par jo le 2026-08-01 — ne pas re-demander)
 1. **Déterminisme : par PROJET par défaut, configurable** (session/projet/
