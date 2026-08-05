@@ -35,6 +35,52 @@ from urllib.parse import urlsplit
 STATE_DIR = Path(os.environ.get("ANONPROXY_STATE_DIR", Path.home() / ".local/state/anonproxy"))
 AUDIT_LOG = Path(os.environ.get("ANONPROXY_AUDIT_LOG", STATE_DIR / "canal2_audit.jsonl"))
 
+#: Claude Code lance ce hook comme un exécutable, donc sous le python SYSTÈME
+#: (`#!/usr/bin/env python3`), qui n'a pas la grammaire. On se relance sous
+#: l'interpréteur du projet ; `os.execv` PRÉSERVE stdin, l'événement reste
+#: lisible après la relance.
+_RACINE = Path(__file__).resolve().parents[1]
+_PYTHON_PROJET = _RACINE / ".venv" / "bin" / "python"
+_MARQUEUR_RELANCE = "ANONPROXY_HOOK_RELANCE"
+
+
+def _charger_grammaire():
+    try:
+        import tree_sitter_bash
+        from tree_sitter import Language, Parser
+
+        return Parser(Language(tree_sitter_bash.language()))
+    except Exception:  # noqa: BLE001 — import, ABI, version : tout vaut échec
+        return None
+
+
+_PARSEUR = _charger_grammaire()
+
+
+class GrammaireIndisponible(RuntimeError):
+    """Sans grammaire, le découpage n'est pas fiable : l'analyse refuse.
+
+    Remontée jusqu'à `main`, qui la traduit en refus — jamais en autorisation.
+    """
+
+
+def _relance_sous_interpreteur_du_projet() -> None:
+    """Rejoue ce hook sous le python du projet, une seule fois.
+
+    La relance a lieu depuis `main`, avant toute lecture de stdin, et JAMAIS à
+    l'import : une suite de tests lancée sans la grammaire verrait sinon son
+    propre processus remplacé.
+    """
+    if _PARSEUR is not None or os.environ.get(_MARQUEUR_RELANCE):
+        return
+    if not _PYTHON_PROJET.exists():
+        return
+    if Path(sys.executable).resolve() == _PYTHON_PROJET.resolve():
+        return
+    os.environ[_MARQUEUR_RELANCE] = "1"  # sans quoi deux pythons sans grammaire bouclent
+    os.execv(str(_PYTHON_PROJET),
+             [str(_PYTHON_PROJET), str(Path(__file__).resolve())])
+
 #: Chemins du coffre : l'agent ne doit jamais les lire (ni par Read, ni par Bash).
 VAULT_PATTERNS = (
     r"\.local/state/anonproxy",
@@ -603,7 +649,10 @@ _EXPANSION_RE = re.compile(
     r"\$\{(?P<pre>#?)(?P<nom>[A-Za-z_]\w*|\d+|[@*])(?P<reste>[^}]*)\}")
 
 #: Une expansion d'accolades : `{env,}`, `{p,}rintenv`, `c{ur,ur}l`.
-_ACCOLADES_RE = re.compile(r"\{(?P<alts>[^{}$\s]*,[^{}$\s]*)\}")
+#: Le `$` qui précède est EXCLU : `${IFS,,}` est une expansion de PARAMÈTRE,
+#: dont la virgule est un opérateur de casse. La traiter comme une alternative
+#: recopiait `env$IFS> env$> env$>` à la place de la commande.
+_ACCOLADES_RE = re.compile(r"(?<!\$)\{(?P<alts>[^{}$\s]*,[^{}$\s]*)\}")
 
 
 #: Nombre total d'alternatives émises pour UN mot. Borner la seule profondeur
@@ -649,12 +698,63 @@ def _expanser_accolades(texte: str) -> str:
     secondes, de quoi noyer un agent sans écrire une seule commande interdite.
     """
     budget = [_BUDGET_ACCOLADES, _BUDGET_CARACTERES]
+    return _expanser_span(texte, budget)
+
+
+def _expanser_span(texte: str, budget: list[int]) -> str:
     morceaux = re.split(r"(\s+)", texte)
     return "".join(
         mot if i % 2 or "{" not in mot or "," not in mot
         else _expanser_mot(mot, 0, budget)
         for i, mot in enumerate(morceaux)
     )
+
+
+def _spans_non_cites(texte: str) -> list[tuple[int, int]]:
+    """Bornes des régions HORS guillemets, par un balayage lexical.
+
+    La grammaire ne peut pas servir ici : c'est justement l'expansion
+    d'accolades qui la fait échouer (`{env,}` n'est pas du bash valide tant
+    qu'elle n'a pas eu lieu). Un balayage suffit à savoir ce qui est cité.
+    """
+    spans: list[tuple[int, int]] = []
+    debut = i = 0
+    n = len(texte)
+    while i < n:
+        c = texte[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c in "'\"":
+            spans.append((debut, i))
+            fin = i + 1
+            while fin < n and texte[fin] != c:
+                fin += 2 if c == '"' and texte[fin] == "\\" else 1
+            i = debut = min(fin + 1, n)
+            continue
+        i += 1
+    spans.append((debut, n))
+    return spans
+
+
+def _expanse_hors_quotes(texte: str) -> str:
+    """Expanse les accolades sans jamais toucher à l'intérieur d'un guillemet.
+
+    L'expansion doit PRÉCÉDER la grammaire : `{env,}` la fait tomber en erreur,
+    et le mot reconstruit (`env`) n'apparaît nulle part dans l'arbre. Mais une
+    accolade CITÉE est du texte — un corps JSON en est plein, et l'expanser
+    briserait l'appariement des guillemets dont la grammaire dépend.
+    """
+    if "{" not in texte or "," not in texte:
+        return texte
+    budget = [_BUDGET_ACCOLADES, _BUDGET_CARACTERES]
+    sortie, fin = [], 0
+    for debut, borne in _spans_non_cites(texte):
+        sortie.append(texte[fin:debut])
+        sortie.append(_expanser_span(texte[debut:borne], budget))
+        fin = borne
+    sortie.append(texte[fin:])
+    return "".join(sortie)
 
 
 #: Opérateurs qui rendent SOIT la valeur de la variable, SOIT le texte de
@@ -786,82 +886,214 @@ def normalize(command: str) -> str:
     return out
 
 
-def _retire_definitions(texte: str) -> str:
-    """Retire l'EN-TÊTE d'une définition de fonction ; c'est son corps qui porte
-    les programmes.
+#: Nom neutre substitué à un nom de fonction que la grammaire refuse.
+_NOM_FONCTION_NEUTRE = "fonction_au_nom_inattendu"
 
-    `fn() { env; }; fn` ne montrait que `fn` en position de programme, et
-    l'analyse s'arrêtait là — sur un mot que rien ne reconnaît.
 
-    Le nom est retiré en remontant depuis la parenthèse, jamais par une regex
+def _canonise_noms_de_fonction(texte: str) -> str:
+    """Rend analysable une définition de fonction au nom inattendu.
+
+    Bash accepte presque tout dans un nom de fonction (`my.fn`, `a@b`, `a%b`,
+    `a+b`, `1fn`) ; la grammaire n'en accepte qu'une partie, et l'arbre part
+    alors en ERREUR — le CORPS disparaît, alors que c'est lui qui porte les
+    programmes. Seul le nom est remplacé : la structure, elle, redevient
+    lisible.
+
+    Le nom est délimité en remontant depuis la parenthèse, jamais par une regex
     qui le chercherait à gauche : `[\\w-]+\\s*\\(\\s*\\)` rétro-traque à chaque
     position d'un mot long, ce qui coûtait quinze secondes sur vingt mille
     caractères.
     """
-    texte = re.sub(r"\bfunction\s+\S+", " ", texte)
     if "(" not in texte:
         return texte
     sortie, fin = [], 0
     for m in re.finditer(r"\(\s*\)", texte):
-        debut = m.start()
-        while debut > fin and texte[debut - 1] in " \t":
-            debut -= 1
-        # Bash accepte presque tout dans un nom de fonction : `my.fn`, `a+b`,
-        # `a@b`, `a/b`, `1fn`. Se limiter aux caractères de mot laissait le
-        # reste du nom en position de programme, où rien ne le reconnaît, et
-        # l'analyse s'arrêtait avant le corps.
-        while debut > fin and texte[debut - 1] not in " \t\n|;&<>(){}\"'":
-            debut -= 1
-        sortie.append(texte[fin:debut])
-        fin = m.end()
+        borne = m.start()
+        while borne > fin and texte[borne - 1] in " \t":
+            borne -= 1
+        depart = borne
+        while depart > fin and texte[depart - 1] not in " \t\n|;&<>(){}\"'":
+            depart -= 1
+        nom = texte[depart:borne]
+        # Un nom déjà analysable est laissé tel quel ; sans nom du tout, la
+        # parenthèse n'ouvre pas une définition (`echo ()` n'en est pas une).
+        if not nom or re.fullmatch(r"[A-Za-z_]\w*", nom):
+            continue
+        sortie.append(texte[fin:depart])
+        sortie.append(_NOM_FONCTION_NEUTRE)
+        fin = borne
     sortie.append(texte[fin:])
-    return " ".join(sortie)
+    return "".join(sortie)
+
+
+#: Nœuds de la grammaire qui portent un PROGRAMME. `declare`, `export`,
+#: `readonly`, `typeset` et `local` ne sont PAS des `command` mais des
+#: `declaration_command`, et `unset` a son propre nœud : les omettre manquait
+#: TOUTE la famille des déverseurs. Trouvé par le différentiel avant le
+#: remplacement, pas après.
+_NOEUDS_COMMANDE = ("command", "declaration_command", "unset_command")
+
+#: Enfants qui ne sont pas des MOTS de la commande : la cible d'une redirection
+#: n'est pas un programme, un commentaire n'est pas exécuté. Le CORPS d'un
+#: heredoc est écarté ici, puis routé à part — c'est du code, pas un argument.
+_ENFANTS_HORS_MOT = ("file_redirect", "heredoc_redirect", "herestring_redirect",
+                     "comment")
+
+#: Profondeur maximale de ré-analyse d'un script imbriqué (`bash -c 'bash -c …'`,
+#: heredoc dans un heredoc).
+_PROFONDEUR_SCRIPT = 4
+
+#: Options de `find` dont la valeur est une commande, terminée par `\;` ou `+`.
+_CLAUSES_EXEC = ("-exec", "-execdir", "-ok", "-okdir")
+
+#: `-c` d'un shell, éventuellement au bout d'un groupe d'options courtes, avec
+#: sa valeur ATTACHÉE : `bash -c"env"`, `bash -xcenv`. Bash concatène le mot,
+#: puis c'est le shell appelé qui sépare l'option de sa valeur.
+_OPT_C_ATTACHEE_RE = re.compile(r"^-[A-Za-z]*c(?P<valeur>.*)$")
+
+
+def _reduire_token(mot: str) -> str:
+    """Ce que bash tire d'un MOT, une fois son quoting résolu.
+
+    Mêmes réductions que `normalize`, appliquées mot à mot : c'est la grammaire
+    qui a découpé, donc les frontières sont exactes et il n'y a plus rien à
+    deviner sur l'endroit où un argument cité se termine. Un nœud rend
+    exactement UN mot — l'expansion d'accolades, seule à en produire plusieurs,
+    a déjà eu lieu avant l'analyse.
+    """
+    out = _EXPANSION_RE.sub(_reduire_expansion, mot)
+    out = re.sub(r"(?<=\w)\$\{!?[A-Za-z_]\w*\}(?=\w)", "", out)
+    out = out.replace("''", "").replace('""', "")
+    out = re.sub(r"\[([^\]/@*])\]", r"\1", out)
+    out = out.replace("\\$", "")
+    out = re.sub(r"\\(.)", r"\1", out)
+    return out.replace("'", "").replace('"', "")
+
+
+def _sous_scripts(mots: list[str]) -> list[str]:
+    """Arguments dont la VALEUR est un script entier, à ré-analyser.
+
+    C'est la contrepartie du gain de la grammaire : un argument cité arrive
+    d'un seul tenant, si bien que `bash -c 'f() { env; }; f'` ne montre plus
+    son intérieur par accident. Il faut donc l'ouvrir explicitement — et on
+    sait alors exactement où il commence et où il finit, ce qui supprime les
+    doubles lectures qu'imposait la perte du quoting.
+    """
+    bases = [_basename(m) for m in mots]
+    scripts: list[str] = []
+    for i, mot in enumerate(mots):
+        valeur = mots[i + 1] if i + 1 < len(mots) else ""
+        # `-c` n'introduit une commande que pour un SHELL : pour `git`, `docker`
+        # ou `xargs` il veut dire autre chose. La valeur peut être ATTACHÉE
+        # (`bash -c"env"`, `bash -xcenv`) : la grammaire concatène comme bash,
+        # et c'est à la lecture des options de séparer les deux — sans quoi le
+        # mot `-cenv` ne ressemble plus à rien.
+        if any(b in _WRAPPERS_SHELL for b in bases[:i]) and (
+                attachee := _OPT_C_ATTACHEE_RE.match(mot)):
+            scripts.append(attachee.group("valeur") or valeur)
+        # `mapfile -C RAPPEL -c N` exécute RAPPEL toutes les N lignes lues.
+        elif mot == "-C" and any(b in ("mapfile", "readarray") for b in bases[:i]):
+            scripts.append(valeur)
+        # La valeur de `env -S` est une COMMANDE entière, jamais un token.
+        elif mot == "-S" and any(b == "env" for b in bases[:i]):
+            scripts.append(valeur)
+    # `trap CMD SIGNAL` : le nom du signal SUIT la commande, si bien que
+    # `trap env EXIT` se lit « env exécute EXIT », donc comme un préfixe
+    # légitime. Les spécifications de signal forment un vocabulaire FERMÉ :
+    # tout le reste est la commande.
+    if bases and bases[0] == "trap":
+        scripts += [m for m in mots[1:]
+                    if m != "--" and not m.startswith("-")
+                    and not _SIGNAL_RE.fullmatch(m)]
+    return [s for s in scripts if s]
+
+
+def _commandes_ast(source: str, profondeur: int = 0) -> list[list[str]]:
+    """Commandes simples, telles que la GRAMMAIRE de bash les découpe.
+
+    Les réécritures sémantiques sont appliquées à CHAQUE niveau : un script
+    imbriqué peut lui aussi porter un `coproc`, un alias ou une accolade à
+    expanser, et le faire remonter d'un cran serait le laisser passer.
+    """
+    octets = _reecritures_semantiques(source).encode("utf-8", "surrogateescape")
+    racine = _PARSEUR.parse(octets).root_node
+    sorties: list[list[str]] = []
+    pile = [racine]
+    while pile:
+        noeud = pile.pop()
+        if noeud.type == "heredoc_body":
+            # Un corps de heredoc est du CODE quand un interpréteur le
+            # consomme. La question « donnée ou code » est tranchée en amont
+            # par `_neutralise_heredocs`, qui vide les corps qui ne le sont
+            # pas ; ici, il reste à l'analyser comme un script.
+            if profondeur < _PROFONDEUR_SCRIPT:
+                texte = octets[noeud.start_byte:noeud.end_byte].decode("utf-8", "replace")
+                sorties += _commandes_ast(texte, profondeur + 1)
+            continue
+        if noeud.type in _NOEUDS_COMMANDE:
+            mots = [
+                _reduire_token(
+                    octets[e.start_byte:e.end_byte].decode("utf-8", "replace"))
+                for e in noeud.children if e.type not in _ENFANTS_HORS_MOT
+            ]
+            mots = [m for m in mots if m]
+            if any(m in _CLAUSES_EXEC for m in mots):
+                # Le terminateur d'une clause `-exec` (`\;` ou `+`) n'est pas un
+                # argument. La grammaire le rend comme un mot ordinaire, et
+                # l'échappement qui le distinguait tombe à la réduction : le
+                # garder faisait passer `find … -exec env \;` pour `env`
+                # exécutant `;`, donc pour un préfixe d'exécution légitime.
+                mots = [m for m in mots if m not in (";", "+")]
+            if mots:
+                sorties.append(mots)
+                if profondeur < _PROFONDEUR_SCRIPT:
+                    for script in _sous_scripts(mots):
+                        sorties += _commandes_ast(script, profondeur + 1)
+        pile.extend(reversed(noeud.children))
+    return sorties
+
+
+def _reecritures_semantiques(command: str) -> str:
+    """Ce que bash FAIT et que la grammaire ne montre pas.
+
+    La grammaire décrit la SYNTAXE ; ces trois formes-là demandent de savoir ce
+    que bash en fait à l'exécution.
+    """
+    # `coproc NOM cmd` : le nom est FACULTATIF, donc la commande occupe tantôt
+    # la première position, tantôt la seconde — les deux lectures sont émises.
+    # `coproc { cmd; }` n'est pas connu de la grammaire : elle rend `coproc`
+    # avec les mots `{` et `cmd`, où le corps n'est plus un programme. Isoler
+    # le groupe le lui redonne.
+    out = _canonise_noms_de_fonction(_expanse_hors_quotes(command))
+    out = re.sub(r"\bcoproc\s+([A-Za-z_]\w*)\s+(?=\S)", r"coproc \1 ; ", out)
+    out = re.sub(r"\bcoproc\s+(?=\{)", "coproc ; ", out)
+    # `alias e=env` puis `e` sur une AUTRE ligne : bash développe l'alias (il
+    # ne vaut pas dans la ligne qui le DÉFINIT, mais vaut dans les suivantes).
+    valeurs = [m.group(1) for m in
+               re.finditer(r"\balias\s+[A-Za-z_]\w*=(\S+)", out)]
+    out += "".join(f" ; {v}" for v in valeurs)
+    # `env --split-string=CMD` : la forme longue COLLÉE commence par `-`, elle
+    # passait pour une option ordinaire et le programme disparaissait.
+    return re.sub(r"\benv\s+(?:--split-string=?|-S)\s*", "env -S ", out)
 
 
 def tokenize(command: str) -> list[list[str]]:
-    """Découpe en commandes simples, sur une base tolérante aux erreurs.
+    """Découpe en commandes simples — par la GRAMMAIRE, plus par approximation.
 
-    On ne cherche pas à réimplémenter bash : seulement à voir CHAQUE mot en
-    position de programme, y compris derrière `bash -c`, `xargs`, `nohup` ou
-    une substitution `$(...)`.
+    Quatorze rounds de revue adversariale ont mesuré la limite d'un découpage
+    heuristique : commentaire pris pour un programme, accolade qui arrête
+    l'analyse, `case` dont le corps disparaît, nom de fonction aux caractères
+    inattendus, argument cité dont on ne savait pas où il finit. La grammaire
+    répond à toutes ces questions par construction.
+
+    Ce qu'elle ne fait PAS : évaluer. Les expansions, les enveloppes et les
+    indirections restent traitées ici — c'est de la sémantique de bash, pas de
+    la syntaxe.
     """
-    cleaned = _retire_definitions(normalize(command))
-    # `case X in MOTIF) CMD;; esac` : la commande suit la parenthèse fermante,
-    # et l'analyse s'arrêtait sur `case`. On ne reconnaît `case` qu'en POSITION
-    # DE COMMANDE — sinon un message de commit contenant « case … in … » verrait
-    # ses parenthèses coupées, et la prose redeviendrait du code.
-    if re.search(r"(?:^|[|;&\n])\s*case\s+\S+\s+in\b", cleaned):
-        cleaned = re.sub(r"(?:^|[|;&\n])\s*case\s+\S+\s+in\b", " ; ", cleaned)
-        cleaned = cleaned.replace(")", " ; ")
-    # `coproc NOM cmd` : le nom est FACULTATIF, donc `cmd` occupe tantôt la
-    # première position, tantôt la seconde. On isole la suite en commande
-    # propre : les deux lectures sont couvertes.
-    cleaned = re.sub(r"\bcoproc\s+([A-Za-z_]\w*)\s+(?=\S)", r"coproc \1 ; ", cleaned)
-    # `alias e=env` puis `e` sur une AUTRE ligne : bash développe l'alias (les
-    # alias ne valent pas dans la ligne où ils sont définis, mais valent dans
-    # les suivantes). La valeur est analysée comme une commande à part entière.
-    valeurs = [m.group(1) for m in
-               re.finditer(r"\balias\s+[A-Za-z_]\w*=(\S+)", cleaned)]
-    cleaned += "".join(f" ; {v}" for v in valeurs)
-    # La valeur de `env -S` est une COMMANDE, jamais un token — c'est pourquoi
-    # `-S` n'est pas une « option à valeur ». Sa forme longue COLLÉE
-    # (`--split-string=printenv CLE`) commençait par `-` : elle passait pour
-    # une option ordinaire et le programme qu'elle porte disparaissait.
-    cleaned = re.sub(r"\benv\s+(?:--split-string=?|-S)\s*", "env -S ", cleaned)
-    # Un GROUPE de commandes (`{ env; }`) n'est pas un programme : son corps
-    # l'est, et l'accolade arrêtait l'analyse sur un mot que rien ne reconnaît.
-    # Les accolades ne sont retirées que là où bash y voit le mot réservé —
-    # `{` suivi d'un blanc, `}` précédé d'un blanc ou d'un `;`. Les retirer
-    # partout emportait le remplaçant de `xargs -I{}`, dont l'option avalait
-    # alors le programme suivant.
-    cleaned = re.sub(r"\{(?=\s)|(?<=[\s;])\}", " ", cleaned)
-    cleaned = re.sub(r"[$`()]", " ", cleaned)
-    # Les redirections séparent au même titre que `|` : sans ça, la cible de
-    # `env > dump.txt` passait pour le programme exécuté PAR `env`, donc pour
-    # un préfixe d'exécution légitime. Les substitutions de processus ont déjà
-    # été retirées à ce stade, `<` et `>` ne peuvent plus qu'ouvrir un fichier.
-    parts = re.split(r"[|;&\n<>]+|\|\||&&", cleaned)
-    return [p.split() for p in parts if p.strip()]
+    if _PARSEUR is None:
+        raise GrammaireIndisponible(
+            "grammaire bash introuvable : le découpage ne peut pas être vérifié")
+    return _commandes_ast(command)
 
 
 def _basename(token: str) -> str:
@@ -1353,10 +1585,17 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
     # première, qui exécute bel et bien.
     # Une substitution en ÉCRITURE (`> >(cmd)`) désigne une DESTINATION, pas un
     # programme : son consommateur est analysé à part.
+    # Le découpage travaille sur la commande BRUTE : c'est le quoting qui dit
+    # où un argument commence et où il finit, et la grammaire s'appuie dessus.
+    # La normaliser d'abord faisait RENAÎTRE une structure que les guillemets
+    # avaient supprimée — `git commit -m 'handle case in parser(env)'`
+    # redevenait un sous-shell exécutant `env`. Les contrôles par REGEX, eux,
+    # continuent de porter sur le texte normalisé : c'est là que l'obfuscation
+    # se neutralise.
     exterieur = _NESTED_RE.sub(
         lambda m: (" destination_de_flux "
                    if m.group(0).startswith(">") else _MARQUEUR_SUBSTITUTION),
-        normalized)
+        command)
     exterieur = _par_segment(
         exterieur,
         lambda seg: (_APPEL_LANGAGE_RE.sub(_MARQUEUR_SUBSTITUTION, seg)
@@ -1480,6 +1719,9 @@ def evaluate(event: dict) -> tuple[dict, str | None]:
 
 
 def main() -> int:
+    # AVANT toute lecture de stdin : `os.execv` la préserve, mais l'événement
+    # ne doit pas avoir été consommé par le processus qui disparaît.
+    _relance_sous_interpreteur_du_projet()
     try:
         event = json.load(sys.stdin)
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:

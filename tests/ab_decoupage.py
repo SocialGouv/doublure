@@ -1,49 +1,27 @@
-"""A/B : le découpage par GRAMMAIRE contre les heuristiques du hook.
+"""Ce que la grammaire ne comprend PAS — là où se cachent les contournements.
 
-Outil de DÉ-RISQUE, pas un test : il ne juge pas, il CLASSE les
-divergences pour qu'aucune ne soit remplacée sans être expliquée.
-C'est lui qui a montré que les builtins de déclaration ne sont pas des
-nœuds `command` mais des `declaration_command` — un remplacement à
-l'aveugle aurait rouvert toute cette famille d'un coup.
+Outil de diagnostic, pas un test : il ne juge pas, il SIGNALE.
+
+Il a d'abord servi de différentiel entre les heuristiques et la grammaire, le
+temps du remplacement — c'est lui qui a montré que les builtins de déclaration
+ne sont pas des nœuds `command` mais des `declaration_command`, ce qu'un
+remplacement à l'aveugle aurait rouvert d'un coup.
+
+Une fois le remplacement fait, la question utile a changé. Un nœud `ERROR`
+signifie que la grammaire n'a pas su lire l'entrée : le sous-arbre est alors
+plat, et un programme peut y disparaître. Les deux contournements du round 17
+(`{env,}` non expansé, `a@b() { env; }` au nom de fonction refusé) étaient
+exactement cela. D'où ce balayage : il liste les commandes du corpus de tests
+que la grammaire refuse encore, et celles qu'elle réduit à rien.
 
 Usage : uv run python tests/ab_decoupage.py
-
-On ne remplace rien tant qu'on n'a pas vu, sur le corpus entier des tests, où
-les deux divergent — et pourquoi.
 """
+import pathlib
 import re
 import sys
-import pathlib
 
 sys.path.insert(0, "hooks")
 import pretooluse_guard as g  # noqa: E402
-
-from tree_sitter import Language, Parser  # noqa: E402
-import tree_sitter_bash  # noqa: E402
-
-PARSEUR = Parser(Language(tree_sitter_bash.language()))
-
-
-def commandes_ast(source: str) -> list[list[str]]:
-    """Commandes simples vues par la grammaire, tokens TELS QU'ÉCRITS."""
-    octets = source.encode("utf-8")
-    arbre = PARSEUR.parse(octets)
-    sorties: list[list[str]] = []
-
-    def texte(n):
-        return octets[n.start_byte:n.end_byte].decode("utf-8", "replace")
-
-    pile = [arbre.root_node]
-    while pile:
-        n = pile.pop()
-        if n.type in ("command", "declaration_command", "unset_command"):
-            mots = [texte(e) for e in n.children
-                    if e.type not in ("file_redirect", "heredoc_redirect",
-                                      "herestring_redirect", "comment")]
-            if mots:
-                sorties.append(mots)
-        pile.extend(n.children)
-    return sorties
 
 
 def corpus() -> list[str]:
@@ -60,45 +38,36 @@ def corpus() -> list[str]:
     return out
 
 
+def erreurs(source: str) -> int:
+    """Nombre de nœuds ERROR après les réécritures que le hook applique."""
+    prepare = g._reecritures_semantiques(source)
+    racine = g._PARSEUR.parse(prepare.encode("utf-8", "surrogateescape")).root_node
+    if not racine.has_error:
+        return 0
+    total, pile = 0, [racine]
+    while pile:
+        noeud = pile.pop()
+        total += noeud.type in ("ERROR", "MISSING")
+        pile.extend(noeud.children)
+    return total
+
+
 if __name__ == "__main__":
     cas = corpus()
     print(f"{len(cas)} commandes extraites des tests\n")
-    divergences = []
+    en_erreur, sans_commande = [], []
     for cmd in cas:
-        try:
-            ancien = g.tokenize(cmd)
-            nouveau = commandes_ast(cmd)
-        except Exception as exc:  # noqa: BLE001
-            divergences.append((cmd, f"EXCEPTION {type(exc).__name__}", ""))
-            continue
-        prog_ancien = {t[i] for t in ancien for i in g._program_positions(t)}
-        prog_nouveau = {t[0] for t in nouveau if t}
-        if prog_ancien != prog_nouveau:
-            divergences.append((cmd, sorted(prog_ancien), sorted(prog_nouveau)))
+        if erreurs(cmd):
+            en_erreur.append(cmd)
+        if not g.tokenize(cmd):
+            sans_commande.append(cmd)
 
-    # Classement des divergences plutôt qu'un déversement.
-    classes = {"grammaire voit MOINS (enveloppe non dépliée)": [],
-               "grammaire voit MOINS (autre)": [],
-               "grammaire voit PLUS": [],
-               "les deux diffèrent": []}
-    enveloppes = g._WRAPPERS
-    for cmd, a, n in divergences:
-        if not isinstance(a, list):
-            classes["les deux diffèrent"].append((cmd, a, n))
-            continue
-        sa, sn = set(a), set(n)
-        if sn < sa:
-            manquants = sa - sn
-            cle = ("grammaire voit MOINS (enveloppe non dépliée)"
-                   if any(g._basename(x) in enveloppes for x in sn)
-                   else "grammaire voit MOINS (autre)")
-            classes[cle].append((cmd, sorted(manquants), n))
-        elif sa < sn:
-            classes["grammaire voit PLUS"].append((cmd, sorted(sn - sa), n))
-        else:
-            classes["les deux diffèrent"].append((cmd, a, n))
-
-    for nom, items in classes.items():
-        print(f"\n### {nom} : {len(items)}")
-        for cmd, detail, n in items[:6]:
-            print(f"  {cmd[:64]!r}\n     {detail}  →  {n}")
+    print(f"### la grammaire tombe en ERREUR : {len(en_erreur)}")
+    for cmd in en_erreur[:20]:
+        print(f"  {cmd[:72]!r}")
+    print(f"\n### aucune commande extraite : {len(sans_commande)}")
+    for cmd in sans_commande[:20]:
+        print(f"  {cmd[:72]!r}")
+    print("\nUne entrée listée ici n'est pas forcément un défaut — un fragment "
+          "de commande\nn'est pas du bash complet. Mais toute entrée qui EST "
+          "une commande entière\ndoit être expliquée avant d'être ignorée.")

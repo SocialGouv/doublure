@@ -1,220 +1,165 @@
-# Remplacer les heuristiques du hook par un PARSEUR
+# Le découpage du hook repose sur une GRAMMAIRE
 
-Ce document existe pour qu'une session neuve n'ait rien à re-dériver. Il porte
-l'architecture validée, le **code exact** de l'essai de branchement, les faits
-mesurés, et les échecs qui spécifient le reste.
+Fait le 2026-08-05 (round 17). Ce document dit ce que la grammaire apporte, ce
+qu'elle n'apporte pas, et les quatre pièges qui ont coûté une itération chacun —
+pour qu'ils ne soient pas re-découverts.
 
-Contexte : `REPRISE.md` §3 bis. Arbitrage de jo le 2026-08-05 — arrêter la
-boucle adversariale sur le hook, attaquer le parseur.
+Arbitrage de jo, 2026-08-05 : arrêter la boucle adversariale sur le hook,
+attaquer le parseur. Raison énoncée : les findings du hook sont gratuits avec
+un AST.
 
 ## Pourquoi
 
 Seize rounds de revue adversariale sur `hooks/pretooluse_guard.py`. Le moteur
-s'est stabilisé (deux rounds sans finding) ; le hook produit environ un
-contournement par round, et **chacun vient d'un mécanisme de bash jamais
+s'est stabilisé (deux rounds sans finding) ; le hook produisait environ un
+contournement par round, et **chacun venait d'un mécanisme de bash jamais
 modélisé ou du trou laissé entre deux gardes voisines** : `trap`, `case`,
 `coproc`, `mapfile -C`, les noms de fonction à caractères étendus, le
 commentaire pris pour un programme, l'indirection par élément de tableau.
 
-Tous sont GRATUITS avec un arbre syntaxique. Une denylist qui approxime la
+Tous sont gratuits avec un arbre syntaxique. Une denylist qui approxime la
 grammaire de bash ne converge pas vers zéro par la seule méthode adversariale.
-
-## Ce qui est mesuré
-
-| | |
-|---|---|
-| commande réaliste | **0,00 ms** |
-| 500 Ko de texte | 70 ms |
-| processus + import | 21 ms |
-| relance sous l'interpréteur du projet | +30 ms |
-| timeout du hook (`.claude/settings.json`) | 10 s |
-
-Les vingt mécanismes qui ont coûté un round chacun sont analysés **sans erreur**
-par la grammaire (`root_node.has_error` faux partout).
-
-Dépendances déclarées dans `pyproject.toml` : `tree-sitter`, `tree-sitter-bash`.
 
 ## Ce que la grammaire apporte — et ce qu'elle n'apporte PAS
 
 Elle donne la **structure** : `case`, définitions de fonction, groupes,
-heredocs, commentaires, substitutions. Tout ce que quatorze rounds
-d'heuristiques approximaient.
+heredocs, commentaires, substitutions, concaténations. Tout ce que quatorze
+rounds d'heuristiques approximaient.
 
-Elle **n'évalue pas**. `e${IFS//?/}nv` reste un seul nœud, `${!m[k1]}` reste
-une expansion. La logique d'expansion, d'enveloppe et d'indirection reste
-NÉCESSAIRE — c'est de la sémantique de bash, pas de la syntaxe.
+Elle **n'évalue pas**. `e${IFS//?/}nv` reste un seul nœud, `${!m[k1]}` reste une
+expansion. La logique d'expansion, d'enveloppe et d'indirection reste
+NÉCESSAIRE — c'est de la sémantique de bash, pas de la syntaxe. Elle vit dans
+`_reduire_token` (mot à mot) et dans `_reecritures_semantiques`.
 
 Le vrai gain : les arguments arrivent **avec leur quoting intact**. Toute la
 difficulté « le quoting est déjà retiré, on ne sait pas où la sous-commande
-s'arrête » — qui a forcé des doubles lectures pour `trap`, `mapfile -C` et
+s'arrête » — qui imposait des doubles lectures pour `trap`, `mapfile -C` et
 `bash -c` — disparaît.
+
+## L'ordre des passes, qui est tout le sujet
+
+```
+commande BRUTE
+  │
+  ├─► normalize()          quoting/globs détruits  ──► contrôles par REGEX
+  │                                                    (coffre, fichiers,
+  │                                                     DENY_COMMAND_PATTERNS,
+  │                                                     variables sensibles)
+  │
+  └─► _NESTED_RE / _REF_SIMPLE_RE (marqueurs)
+        └─► tokenize()  =  _reecritures_semantiques  ──►  grammaire
+                                                            └─► _reduire_token
+```
+
+**Le découpage travaille sur la commande BRUTE.** Normaliser d'abord faisait
+RENAÎTRE une structure que les guillemets avaient supprimée : `git commit -m
+'handle case in parser(env)'` redevenait un sous-shell exécutant `env`. Les
+neuf faux positifs du premier branchement venaient tous de là, et ils
+ressuscitaient exactement le défaut que les rounds 5, 8 et 9 avaient éliminé.
+
+Les contrôles par regex, eux, gardent le texte normalisé : c'est là que
+l'obfuscation (`an[o]nproxy`, `an''onproxy`) se neutralise.
+
+## Les quatre pièges, chacun payé une fois
+
+### 1. Une expansion d'accolades doit précéder la grammaire
+`{env,}` n'est pas du bash valide tant que l'expansion n'a pas eu lieu :
+l'arbre part en `ERROR`, et le mot reconstruit (`env`) n'apparaît nulle part.
+L'expansion se fait donc AVANT l'analyse — mais seulement **hors guillemets**
+(`_expanse_hors_quotes`), sinon un corps JSON (`'{"a":1,"b":2}'`) est expansé
+et l'appariement des guillemets, dont la grammaire dépend, est rompu.
+
+Corollaire trouvé en corrigeant : `${IFS,,}` n'est PAS une alternative, c'est
+un opérateur de casse. Sans le `(?<!\$)` de `_ACCOLADES_RE`,
+`env${IFS,,}> /tmp/dump.txt` était réécrit en `env$IFS> env$> env$>`.
+
+### 2. La grammaire refuse des noms de fonction que bash accepte
+`my.fn()` passe, `a@b()`, `a%b()`, `1fn()` non : l'arbre part en `ERROR` et le
+CORPS disparaît — or c'est lui qui porte les programmes. Seul le NOM est
+remplacé par un identifiant neutre (`_canonise_noms_de_fonction`), la structure
+redevient lisible. Le nom est délimité en remontant depuis la parenthèse,
+jamais par une regex qui le chercherait à gauche : une classe libre en tête
+rétro-traque à chaque position d'un mot long (quinze secondes sur vingt mille
+caractères, round 10).
+
+### 3. Un argument CITÉ ne se lit plus par accident
+C'est le gain, et c'est ce qui casse si on ne fait rien : `bash -c 'f() { env;
+}; f'` rend un `raw_string` que la grammaire n'ouvre pas. Il faut ré-analyser
+EXPLICITEMENT (`_sous_scripts`) : la valeur de `-c` d'une enveloppe SHELL,
+l'argument de `trap` (moins les spécifications de signal), la valeur de
+`mapfile -C` / `readarray -C`, la valeur de `env -S`, et le corps d'un heredoc
+(qui pend sous `heredoc_redirect`, donc hors des mots de la commande).
+
+Chaque niveau repasse par `_reecritures_semantiques` : un script imbriqué peut
+lui aussi porter un `coproc`, un alias ou une accolade.
+
+### 4. La grammaire concatène, comme bash — la lecture des options aussi
+`bash -c"env"` donne un nœud `concatenation` (`word` + `string`), réduit en
+`-cenv`. Ni la règle `-c` ni la ré-analyse ne le voyaient : **contournement
+introduit par mon propre correctif**, trouvé en attaquant le code neuf. Le
+découper au tokeniseur serait faux (bash produit bien UN mot, et
+`/usr/"bin"/env` doit rester `/usr/bin/env`) : c'est à la couche qui lit les
+options de séparer `-c` de sa valeur attachée (`_OPT_C_ATTACHEE_RE`).
 
 ## Faits de grammaire, vérifiés
 
 ```
 export -p          → declaration_command      (PAS command)
-declare -x | head  → command + declaration_command
 readonly -p        → declaration_command
 local -n r=X       → declaration_command
 unset FOO          → unset_command
 env                → command
+bash <<'FIN'…      → heredoc_redirect → heredoc_start, heredoc_body, heredoc_end
+bash -c 'f() {…}'  → command_name, word(-c), raw_string      (non ouvert)
+bash -c"env"       → command_name, concatenation(word(-c), string)
+coproc { ls; }     → coproc/{/ls en MOTS, puis une commande `}`
+                     (la grammaire ne connaît PAS cette forme)
 ```
 
-```
-bash <<'FIN'\nls\nFIN
-  redirected_statement
-    command → command_name → word
-    heredoc_redirect → << , heredoc_start , heredoc_body , heredoc_end
+`find … -exec env \;` : le terminateur arrive comme un mot ordinaire, et
+l'échappement qui le distinguait tombe à la réduction — le garder faisait
+passer `env` pour un préfixe exécutant `;`.
 
-coproc { ls; }
-  command → command_name(word=coproc), word({), word(ls)
-  ; command → command_name(word=})        ← la grammaire NE connaît PAS cette forme
+## Amorçage
 
-bash -c 'f() { ls; }; f'
-  command → command_name(word=bash), word(-c), raw_string  ← non ouvert
-```
+Claude Code lance le hook comme un exécutable, donc sous le python SYSTÈME, qui
+n'a pas la grammaire. `_relance_sous_interpreteur_du_projet` le rejoue sous
+`.venv/bin/python` ; `os.execv` PRÉSERVE stdin, l'événement reste lisible.
 
-## Le code de l'essai (architecture validée)
+La relance a lieu depuis `main`, **jamais à l'import** : une suite de tests
+lancée sans la grammaire verrait sinon son propre processus remplacé. Un
+marqueur d'environnement empêche la boucle si le second interpréteur ne l'a pas
+non plus.
 
-À reprendre tel quel. Il manque UNIQUEMENT la ré-analyse des sous-commandes.
+## Invariant
 
-### Amorçage — le hook tourne sous le python SYSTÈME
+Le hook est **fail-closed** depuis `f1e00f8`. La grammaire est devenue un
+prérequis de l'analyse : sans elle, `tokenize` lève `GrammaireIndisponible`,
+`main` écrit un REFUS. Un hook qui plante n'écrit aucune décision, et l'outil
+s'exécute — c'est le seul mode d'échec qui ouvre le canal au lieu de le fermer.
+Figé par `test_sans_grammaire_le_hook_refuse`.
 
-```python
-_RACINE = Path(__file__).resolve().parents[1]
-_PYTHON_PROJET = _RACINE / ".venv" / "bin" / "python"
+## Outil de diagnostic
 
+`uv run python tests/ab_decoupage.py` — liste les commandes du corpus de tests
+que la grammaire refuse encore (`ERROR`) ou réduit à rien. Un nœud `ERROR`
+signifie que le sous-arbre est plat, donc qu'un programme peut y disparaître :
+c'est ainsi que `{env,}` et `a@b()` ont été trouvés.
 
-def _charger_grammaire():
-    try:
-        import tree_sitter_bash
-        from tree_sitter import Language, Parser
-        return Parser(Language(tree_sitter_bash.language()))
-    except Exception:      # import, ABI, version : tout vaut échec
-        return None
+Il a d'abord servi de différentiel entre les heuristiques et la grammaire, le
+temps du remplacement — c'est lui qui a montré le piège des
+`declaration_command` AVANT le remplacement, ce qui aurait sinon rouvert d'un
+coup toute la famille des déverseurs durcie au round 15.
 
+## Mesures (2026-08-05)
 
-_PARSEUR = _charger_grammaire()
-if _PARSEUR is None and _PYTHON_PROJET.exists() \
-        and Path(sys.executable).resolve() != _PYTHON_PROJET.resolve():
-    os.execv(str(_PYTHON_PROJET),
-             [str(_PYTHON_PROJET), str(Path(__file__).resolve())])
-
-
-class GrammaireIndisponible(RuntimeError):
-    """Sans grammaire, aucune analyse n'est fiable : on refuse."""
-```
-
-`os.execv` PRÉSERVE stdin, donc l'événement JSON reste lisible après la
-relance. Vérifié depuis les trois points d'entrée (python système, python du
-projet, exécutable direct).
-
-### Réduction MOT À MOT plutôt que sur toute la chaîne
-
-C'est le point dur : `normalize()` détruit le quoting dont la grammaire a
-besoin. La réduction se fait donc par mot, APRÈS que la grammaire a découpé.
-
-```python
-def _reduire_token(mot: str) -> str:
-    out = _EXPANSION_RE.sub(_reduire_expansion, mot)
-    out = re.sub(r"(?<=\w)\$\{!?[A-Za-z_]\w*\}(?=\w)", "", out)
-    out = out.replace("''", "").replace('""', "")
-    out = re.sub(r"\[([^\]/@*])\]", r"\1", out)
-    out = out.replace("\\$", "")
-    out = re.sub(r"\\(.)", r"\1", out)
-    return out.replace("'", "").replace('"', "")
-```
-
-### Découpage par la grammaire
-
-```python
-_NOEUDS_COMMANDE = ("command", "declaration_command", "unset_command")
-_ENFANTS_HORS_MOT = ("file_redirect", "heredoc_redirect",
-                     "herestring_redirect", "comment")
-
-
-def _commandes_ast(source: str) -> list[list[str]]:
-    octets = source.encode("utf-8", "surrogateescape")
-    racine = _PARSEUR.parse(octets).root_node
-    sorties, pile = [], [racine]
-    while pile:
-        noeud = pile.pop()
-        if noeud.type in _NOEUDS_COMMANDE:
-            mots = [_reduire_token(
-                        octets[e.start_byte:e.end_byte].decode("utf-8", "replace"))
-                    for e in noeud.children if e.type not in _ENFANTS_HORS_MOT]
-            mots = [m for m in mots if m]
-            if mots:
-                sorties.append(mots)
-        pile.extend(reversed(noeud.children))
-    return sorties
-```
-
-### Réécritures sémantiques, conservées
-
-Ce que bash FAIT et que la grammaire ne montre pas.
-
-```python
-def _reecritures_semantiques(command: str) -> str:
-    out = re.sub(r"\bcoproc\s+([A-Za-z_]\w*)\s+(?=\S)", r"coproc \1 ; ", command)
-    valeurs = [m.group(1)
-               for m in re.finditer(r"\balias\s+[A-Za-z_]\w*=(\S+)", out)]
-    out += "".join(f" ; {v}" for v in valeurs)
-    return re.sub(r"\benv\s+(?:--split-string=?|-S)\s*", "env -S ", out)
-```
-
-## Les 15 échecs, et ce qu'ils spécifient
-
-Branché tel quel : **15 tests rouges sur ~700**. Reverté — un contrôle de
-sécurité ne se laisse pas à moitié échangé. Les échecs sont la spécification.
-
-### 1. Ré-analyser les sous-commandes CITÉES — le travail principal
-`bash -c 'f() { env; }; f'` rend un `raw_string` que la grammaire n'ouvre pas.
-Avant, le quoting était détruit globalement et l'intérieur devenait visible
-PAR ACCIDENT. Il faut désormais ré-analyser explicitement :
-- la valeur de `-c` d'une enveloppe SHELL (`_WRAPPERS_SHELL`) ;
-- l'argument de `trap` (moins les spécifications de signal, cf. `_SIGNAL_RE`) ;
-- la valeur de `mapfile -C` / `readarray -C` ;
-- la valeur de `env -S`.
-
-C'est le gain recherché : il s'implémente, il ne s'hérite pas.
-
-### 2. Router le corps des heredocs
-`heredoc_body` pend sous `heredoc_redirect`, donc écarté par
-`_ENFANTS_HORS_MOT`. `bash <<'FIN'\nenv\nFIN` passait. Un corps livré à un
-interpréteur est du CODE ; livré à `cat > f`, c'est de la donnée (règle déjà
-acquise, cf. `_neutralise_heredocs`).
-
-### 3. `coproc { cmd; }`
-La grammaire ne connaît pas cette forme : elle rend `coproc` avec les mots `{`
-et `cmd`, puis une commande `}`. Le corps est visible comme MOT, pas comme
-programme.
-
-### 4. Noms de fonction à caractères étendus
-`a@b() { env; }`, `a%b() { env; }` : à vérifier, la grammaire ne les reconnaît
-probablement pas comme `function_definition`.
-
-### 5. Deux faux positifs à COMPRENDRE, pas à faire taire
-```
-git commit -m 'handle case in parser(env)'
-python3 -c "env = 42; print(env)"
-```
-
-## Méthode de dé-risque, à refaire à chaque étape
-
-`uv run python tests/ab_decoupage.py` — extrait les ~650 commandes citées par
-les tests, fait tourner ANCIEN et NOUVEAU découpage, et **classe** les
-divergences (la grammaire voit moins / plus / autre chose).
-
-C'est lui qui a sorti le piège des `declaration_command` AVANT le
-remplacement : sans lui, toute la famille des déverseurs durcie au round 15
-était rouverte d'un coup.
-
-Ne remplacer que quand chaque classe de divergence est expliquée.
-
-## Invariant à ne pas casser
-
-Le hook est **fail-closed** depuis `f1e00f8` : une exception dans l'analyse
-écrit un refus au lieu de planter. C'est le prérequis de tout ce chantier — un
-hook qui plante n'écrit AUCUNE décision, et l'outil s'exécute. Si la grammaire
-manque, il faut REFUSER, jamais laisser passer.
+| | |
+|---|---|
+| commande réaliste | 0,003 s |
+| mot de 20 000 caractères | 0,016 s |
+| 500 Ko de texte | 0,42 s |
+| 100 groupes d'accolades | 0,010 s |
+| 5 000 `declare -n` | 0,47 s |
+| 1 000 lignes | 0,08 s |
+| relance sous l'interpréteur du projet | +30 ms |
+| timeout du hook (`.claude/settings.json`) | 10 s |

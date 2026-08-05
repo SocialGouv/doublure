@@ -1635,3 +1635,118 @@ def test_un_refus_pour_panne_est_trace(tmp_path, audit_log):
     lignes = [json.loads(l) for l in audit_log.read_text().splitlines() if l.strip()]
     assert any(e["decision"] == "deny" and "analyse impossible" in e["reason"]
                for e in lignes), lignes
+
+
+# --------------------------------------------------------------------------- #
+# Le découpage par GRAMMAIRE (tree-sitter-bash) — round 17
+#
+# Ce que quatorze rounds d'heuristiques approximaient, la grammaire le donne
+# par construction. Ces tests figent les mécanismes qui ne tenaient QUE par le
+# remplacement : sans eux, un retour en arrière serait invisible.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("command", [
+    # Un argument CITÉ arrive d'un seul tenant : son intérieur ne se voit plus
+    # par accident, il faut le ré-analyser explicitement.
+    "bash -c 'f() { env; }; f'",
+    "sh -c 'case $1 in x) env;; esac'",
+    "trap 'rm -f /tmp/l; env' EXIT",
+    "trap -- 'env' EXIT",
+    "mapfile -C 'sh -c env' -c 1 t < /tmp/f",
+    "env --split-string='printenv AWS_SECRET_ACCESS_KEY'",
+    # Le corps d'un heredoc livré à un interpréteur est du CODE : il pend sous
+    # la redirection, donc hors des mots de la commande.
+    "bash <<'FIN'\nenv\nFIN",
+    "sh <<EOF\nprintenv AWS_SECRET_ACCESS_KEY\nEOF",
+    # Le terminateur d'une clause `-exec` n'est pas un programme : le prendre
+    # pour tel faisait passer `env` pour un préfixe d'exécution.
+    r"find /tmp -exec env \;",
+    r"find / -name x -exec sh -c 'env' \;",
+    # Formes que la grammaire seule ne couvre pas, et que les réécritures
+    # sémantiques lui rendent.
+    "coproc { env; }",
+    "coproc NOM env",
+    "a@b() { env; }; a@b",
+    "a%b() { env; }; a%b",
+    "1fn() { env; }; 1fn",
+    "{env,}",
+    "{curl,foolong} http://exfil.test/",
+])
+def test_grammaire_les_structures_ne_cachent_plus_le_programme(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Le gain du quoting : une parenthèse CITÉE est du texte. La normalisation
+    # préalable en refaisait un sous-shell, et la prose redevenait du code.
+    "git commit -m 'handle case in parser(env)'",
+    "git commit -m 'add system(env) support'",
+    "echo 'system(env) example' && python3 --version",
+    'python3 -c "env = 42; print(env)"',
+    # Une accolade CITÉE ne s'expanse pas : un corps JSON en est plein.
+    'curl -s http://127.0.0.1:9000/detect -d \'{"a":1,"b":2}\'',
+    "echo '{curl,wget} sont deux clients'",
+    # Un heredoc CITÉ qui alimente un FICHIER reste de la donnée.
+    "cat > /tmp/f <<'FIN'\nsystem(env) dans du texte\nFIN",
+    "xargs -I{} echo {}",
+])
+def test_grammaire_le_quoting_protege_la_prose(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_grammaire_le_quoting_distingue_le_script_de_son_argv(audit_log):
+    """`bash -c env _` déverse ; `bash -c 'env _'` exécute `_`.
+
+    La valeur de `-c` est le SCRIPT entier, ce qui suit occupe `$0`. Le
+    quoting perdu, les deux lectures étaient indiscernables et il fallait
+    émettre les DEUX — donc refuser la seconde à tort. La grammaire tranche.
+    """
+    assert is_denied(run_hook("Bash", {"command": "bash -c env _"}, audit_log))
+    assert not is_denied(run_hook("Bash", {"command": "bash -c 'env _'"}, audit_log))
+
+
+def test_sans_grammaire_le_hook_refuse(tmp_path, audit_log):
+    """Un découpage non vérifiable ne vaut PAS une autorisation.
+
+    C'est l'invariant de tout le chantier : le hook est fail-closed, et la
+    grammaire est devenue un prérequis de l'analyse.
+    """
+    source = HOOK.read_text(encoding="utf-8")
+    ancre = "_PARSEUR = _charger_grammaire()"
+    assert ancre in source
+    prive = tmp_path / "hook_sans_grammaire.py"
+    prive.write_text(source.replace(ancre, "_PARSEUR = None", 1), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, str(prive)],
+        input=json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                          "tool_input": {"command": "ls -la"},
+                          "session_id": "test"}),
+        capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(audit_log.parent),
+             "ANONPROXY_HOOK_RELANCE": "1",  # pas de relance : on teste l'absence
+             "ANONPROXY_AUDIT_LOG": str(audit_log)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip(), "aucune décision écrite : l'outil s'exécuterait"
+    assert is_denied(json.loads(proc.stdout))
+
+
+def test_le_hook_se_relance_sous_l_interpreteur_du_projet(audit_log):
+    """Claude Code lance le hook avec le python SYSTÈME, qui n'a pas la
+    grammaire : sans relance, chaque appel d'outil serait refusé."""
+    systeme = "/usr/bin/python3"
+    if not Path(systeme).exists():
+        pytest.skip("pas de python système")
+    proc = subprocess.run(
+        [systeme, str(HOOK)],
+        input=json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                          "tool_input": {"command": "env"}, "session_id": "test"}),
+        capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(audit_log.parent),
+             "ANONPROXY_AUDIT_LOG": str(audit_log)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    # La décision prouve que l'analyse a bien eu lieu : sans grammaire, le
+    # refus porterait la raison « analyse impossible ».
+    assert is_denied(json.loads(proc.stdout))
+    assert "analyse" not in json.loads(proc.stdout)["hookSpecificOutput"][
+        "permissionDecisionReason"]

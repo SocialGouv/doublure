@@ -7,8 +7,9 @@
 
 ## 0. À FAIRE EN PREMIER, à la reprise
 
-**Le travail en cours est le PARSEUR du hook (§3 bis), pas la boucle
-adversariale — jo l'a arrêtée le 2026-08-05 pour cette raison précise.**
+**Le parseur (§3 bis) est FAIT et prouvé le 2026-08-05. La boucle adversariale
+reste CLOSE — jo l'a arrêtée pour cette raison précise. Il n'y a pas de
+chantier ouvert : demander à jo ce qu'il veut attaquer.**
 
 1. Vérifier l'état RÉEL avant d'agir :
    ```bash
@@ -16,22 +17,29 @@ adversariale — jo l'a arrêtée le 2026-08-05 pour cette raison précise.**
    uv run pytest tests/ --ignore=tests/egress -q      # doit être vert
    ss -lntp | grep 9000                               # détecteur en écoute ?
    ```
-2. Lire §3 bis EN ENTIER : l'architecture est validée, les quatre pièges sont
-   écrits, et les 15 échecs de l'essai de branchement SONT la spécification du
-   reste. Ne pas re-dériver tout ça.
-3. Reprendre à « Reste à faire, dans l'ordre » (fin de §3 bis).
+2. Si le sujet touche au hook : lire `docs/parseur-hook.md` AVANT tout — il
+   porte l'ordre des passes (qui est tout le sujet) et les quatre pièges déjà
+   payés. Ne pas les re-dériver.
+3. Ce qui reste ouvert est en §6 bis, et la piste « IA locale + inventaire »
+   en §6. Rien n'y est engagé.
 
 Rien n'est poussé sur un remote — le dépôt est local, tout est committé.
 
-## 1. Consigne en cours — et celle qui est CLOSE
+## 1. Les deux consignes, toutes deux CLOSES
 
-### En cours : le parseur (§3 bis)
+### Close : le parseur (§3 bis) — FAIT le 2026-08-05
 Arbitrage de jo, 2026-08-05, sur trois options que je lui ai posées :
 **« arrêter la boucle et attaquer le parseur bash »**. Raison énoncée : les
 findings du hook des cinq derniers rounds (`trap`, `case`, `coproc`,
 `mapfile -C`, l'indirection par tableau, les liaisons de variables) sont tous
 GRATUITS avec un AST, et une denylist sur un langage aussi vaste que bash ne
 converge pas vers zéro par la seule méthode adversariale.
+
+Livré : `tokenize` s'appuie sur `tree-sitter-bash`, la grammaire est un
+PRÉREQUIS (sans elle le hook refuse), et le hook se relance sous
+l'interpréteur du projet. Preuves : 1255 tests unitaires, `phase4_e2e.sh` et
+`phase3_e2e.sh` verts en session réelle. **Tout est dans
+`docs/parseur-hook.md`** — surtout l'ordre des passes et les quatre pièges.
 
 ### Close : la boucle adversariale
 > « Relance une revue adversariale agent opus 5 effort max sur l'ensemble du
@@ -78,11 +86,11 @@ en §3 ; les listes à donner aux agents sont en §4 et §5.
 
 ## 2. Où en est le code
 
-**1245 tests verts** (1227 unitaires + 18 egress). Les six phases ont leur
+**1273 tests verts** (1255 unitaires + 18 egress). Les six phases ont leur
 critère de sortie prouvé (détail : `CLAUDE.md`).
 
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 1227
+uv run pytest tests/ --ignore=tests/egress   # 1255
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session RÉELLE + capture
@@ -92,15 +100,18 @@ uv run python tests/detect_latency.py        # P95 < 150 ms
 Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
 
 **Toujours rejouer `phase3_e2e.sh` après une modification du walker, du moteur
-ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
+ou de l'allowlist**, et `phase4_e2e.sh` après une modification du hook. Trois
+défauts n'ont été vus QUE par eux (§7).
 
-Sept scripts de vérification des rounds 10 à 16 vivent dans `/tmp`
-(`verif_r1*.py`). Ils NE SURVIVENT PAS à un redémarrage — leur contenu est
-figé dans `tests/test_pretooluse_hook.py` et `tests/test_review_regressions.py`,
-qui sont la vraie non-régression. Ne pas les recréer : lancer la suite.
+Les scripts de vérification des rounds 10 à 17 vivaient dans `/tmp` et NE
+SURVIVENT PAS à un redémarrage. Leur contenu est figé dans
+`tests/test_pretooluse_hook.py` et `tests/test_review_regressions.py`, qui sont
+la vraie non-régression. Ne pas les recréer : lancer la suite.
 
-Outil de dé-risque du parseur : `uv run python tests/ab_decoupage.py` — il
-CLASSE les divergences entre l'ancien découpage et la grammaire.
+Diagnostic du parseur : `uv run python tests/ab_decoupage.py` — il liste les
+commandes que la grammaire refuse (`ERROR`) ou réduit à rien. Un nœud `ERROR`
+veut dire que le sous-arbre est plat, donc qu'un programme peut y disparaître :
+c'est ainsi que `{env,}` et `a@b()` ont été trouvés.
 
 ## 3. SI la boucle adversariale reprend un jour
 
@@ -146,107 +157,54 @@ CLASSE les divergences entre l'ancien découpage et la grammaire.
 7. Backlog hors boucle : `corpus/real/` non annoté (matière de jo),
    KMS/rotation/journal d'accès immuable (Phase 6, hors MVP).
 
-## 3 bis. Chantier EN COURS : remplacer les heuristiques par un PARSEUR
+## 3 bis. Le découpage du hook par GRAMMAIRE — FAIT le 2026-08-05
 
-**→ `docs/parseur-hook.md` porte le CODE exact de l'essai, les faits de
-grammaire vérifiés et les 15 échecs qui spécifient le reste. Le lire
-avant de recommencer quoi que ce soit.** Ce qui suit en est le résumé.
+**→ `docs/parseur-hook.md` fait foi.** Il porte l'ordre des passes, les quatre
+pièges payés, les faits de grammaire vérifiés et les mesures. Le lire avant
+toute modification du hook. Ce qui suit n'en est que le repère.
 
-Arbitrage de jo (2026-08-05) : **arrêter la boucle adversariale sur le hook et
-attaquer le parseur.** Le moteur, lui, est stable — rounds 15 et 16 sans aucun
-finding critique ni haut.
+Arbitrage de jo (2026-08-05) : arrêter la boucle adversariale sur le hook et
+attaquer le parseur. Le moteur, lui, était déjà stable — rounds 15 et 16 sans
+aucun finding critique ni haut.
 
-### Ce qui est FAIT et prouvé
-- **Fail-closed du hook** (`f1e00f8`) — prérequis absolu, et défaut réel
-  trouvé en préparant ce chantier : une exception dans l'analyse faisait sortir
-  le hook SANS écrire de décision, donc l'outil s'exécutait. Trois tests le
-  figent.
-- **Sonde de faisabilité**, mesurée :
-  - commande réaliste **0,00 ms**, 500 Ko **70 ms**, processus + import
-    **21 ms**, relance sous l'interpréteur du projet **+30 ms** ;
-  - les vingt mécanismes qui ont coûté un round chacun sont analysés SANS
-    erreur par la grammaire ;
-  - `tree-sitter` et `tree-sitter-bash` sont déclarés dans `pyproject.toml`.
+### Livré
+- `tokenize` s'appuie sur `tree-sitter-bash`. Les béquilles de quatorze rounds
+  ont disparu : retrait des commentaires, suppression des en-têtes de fonction,
+  accolades conditionnelles, découpage `case`, double lecture des
+  sous-commandes. La structure vient de la grammaire.
+- Ce qu'elle n'apporte pas reste écrit à la main : expansions, enveloppes,
+  indirections — c'est de la sémantique de bash, pas de la syntaxe.
+- **La grammaire est un PRÉREQUIS** : sans elle, `tokenize` lève
+  `GrammaireIndisponible` et le hook REFUSE. Le hook se relance sous
+  `.venv/bin/python` (`os.execv` préserve stdin), depuis `main` et jamais à
+  l'import — sinon une suite de tests sans grammaire verrait son propre
+  processus remplacé.
 
-### Ce que la grammaire apporte, et ce qu'elle n'apporte PAS
-Elle donne la STRUCTURE : `case`, définitions de fonction, groupes, heredocs,
-commentaires, substitutions — tout ce que j'ai bricolé pendant quatorze rounds.
-Elle n'ÉVALUE pas : `e${IFS//?/}nv` reste un seul nœud, `${!m[k1]}` une
-expansion. La logique d'expansion et d'indirection reste NÉCESSAIRE.
+### Preuves
+- **1255 tests unitaires** verts (28 ajoutés pour ce round).
+- `bash tests/phase4_e2e.sh` → **PASS** en session Claude Code réelle : commande
+  interdite bloquée avant exécution, tracée, raison exacte citée par le modèle.
+- `bash tests/phase3_e2e.sh` → **PASS** : 0 valeur réelle sur 393,6 Ko capturés,
+  restauration 3/3 côté opérateur.
+- Disponibilité : 0,003 s sur une commande réaliste, 0,42 s sur 500 Ko,
+  0,47 s sur 5 000 `declare -n`.
 
-Le vrai gain est ailleurs : elle rend les arguments **avec leur quoting
-intact**. Toute la difficulté « le quoting est déjà retiré, on ne sait pas où
-la sous-commande s'arrête » — qui m'a forcé à émettre deux lectures pour
-`trap`, `mapfile -C`, `bash -c` — disparaît.
-
-### PIÈGES déjà payés, à ne pas repayer
-1. **`declare`, `export`, `readonly`, `typeset`, `local` ne sont PAS des
-   nœuds `command`** mais des `declaration_command` ; `unset` est un
-   `unset_command`. Un parcours naïf des seuls `command` les manque tous —
-   c'est-à-dire TOUTE la famille des déverseurs durcie au round 15. Un A/B sur
-   le corpus des tests l'a montré AVANT le remplacement.
-2. **Le hook tourne sous le python SYSTÈME** (`#!/usr/bin/env python3`), qui
-   n'a pas la grammaire. Il faut se relancer sous `.venv/bin/python` par
-   `os.execv` (qui PRÉSERVE stdin), et REFUSER si la grammaire reste
-   introuvable. Le code de l'amorçage a été écrit, mesuré, puis RETIRÉ : il
-   coûtait 30 ms par appel pour un parseur pas encore branché. Le remettre en
-   même temps que le branchement.
-3. **La grammaire ne déplie pas les enveloppes** : `command env`, `bash -c env`,
-   `xargs -I{} env` ne montrent que le premier mot. `_WRAPPERS` et
-   `_program_positions` restent nécessaires — c'est de la sémantique.
-4. **`normalize` DÉTRUIT le quoting**, dont la grammaire a besoin. L'AST doit
-   travailler sur le texte BRUT, et les expansions être traitées par nœud.
-   C'est le point dur du chantier, pas un détail d'ordre d'appel.
-
-### Méthode qui a marché pour dé-risquer
-`/tmp/ab_ast.py` : extraire toutes les commandes citées par les tests, faire
-tourner ANCIEN et NOUVEAU découpage, et CLASSER les divergences (la grammaire
-voit moins / plus / autre chose). C'est ce qui a sorti le piège nº 1. Refaire
-cet A/B à chaque étape du remplacement, et ne swapper que quand chaque classe
-de divergence est expliquée.
-
-### Essai de branchement FAIT, puis REVERTÉ — et ce qu'il a spécifié
-Le découpage a été branché sur la grammaire (`tokenize` → `_commandes_ast`),
-la suite lancée, puis le tout revu en arrière : **15 tests rouges sur ~700**,
-et un contrôle de sécurité ne se laisse pas à moitié échangé. Ces 15 échecs
-ne sont PAS un revers, ce sont la spécification du reste, tirée de faits :
-
-1. **Un argument CITÉ est un seul nœud** — c'est le gain de la grammaire, et
-   c'est aussi ce qui casse. `bash -c 'f() { env; }; f'` rend un `raw_string`
-   que la grammaire n'ouvre pas. Avant, le quoting était détruit globalement
-   et l'intérieur devenait visible PAR ACCIDENT. Il faut désormais RÉ-ANALYSER
-   explicitement : valeur de `-c` d'un shell, argument de `trap`, valeur de
-   `mapfile -C`, valeur de `env -S`. C'est le travail principal — et c'est
-   exactement le gain recherché, mais il s'implémente, il ne s'hérite pas.
-2. **Le corps d'un heredoc est un `heredoc_body`**, enfant de
-   `heredoc_redirect` — donc écarté si l'on saute les redirections.
-   `bash <<'FIN'\nenv\nFIN` passait. Il doit être routé : corps livré à un
-   interpréteur = CODE.
-3. **`coproc { cmd; }`** : la grammaire ne connaît pas cette forme. Elle rend
-   `coproc` avec les mots `{` et `cmd`, puis une commande `}`. Le corps est
-   visible comme MOT, pas comme programme.
-4. **Noms de fonction à caractères étendus** (`a@b()`, `a%b()`) : à vérifier,
-   la grammaire ne les reconnaît probablement pas comme `function_definition`.
-5. **Nouveaux faux positifs à comprendre**, pas à faire taire :
-   `git commit -m 'handle case in parser(env)'`,
-   `python3 -c "env = 42; print(env)"`.
-
-Le patch complet de l'essai est reproductible : amorçage + `_reduire_token`
-(la réduction de `normalize` appliquée MOT À MOT) + `_commandes_ast` +
-`_reecritures_semantiques`. C'est la bonne architecture ; il lui manque la
-ré-analyse des sous-commandes.
-
-### Reste à faire, dans l'ordre
-1. Extracteur AST rendant, par commande simple : le programme et ses arguments
-   AVEC leur quoting, plus les corps de heredoc et les substitutions comme
-   nœuds distincts.
-2. Rebrancher `_program_positions` sur ces arguments exacts (les enveloppes
-   restent), puis supprimer les béquilles devenues inutiles : retrait des
-   commentaires, `_retire_definitions`, accolades conditionnelles, découpage
-   `case`, double lecture des sous-commandes.
-3. Remettre l'amorçage et le refus si la grammaire manque.
-4. Revalider : la suite complète, les sept scripts `/tmp/verif_r1*.py` des
-   rounds 10 à 16, et les deux preuves E2E.
+### Ce que ce round a appris, et qui vaut au-delà du parseur
+1. **L'ordre des passes était tout le sujet.** Le découpage travaille sur la
+   commande BRUTE ; seuls les contrôles par regex gardent le texte normalisé.
+   Normaliser avant de parser faisait RENAÎTRE une structure que les guillemets
+   avaient supprimée, et les neuf faux positifs du premier branchement venaient
+   tous de là — ils ressuscitaient d'un coup le défaut que les rounds 5, 8 et 9
+   avaient éliminé.
+2. **Un outil exact ne remplace pas une approximation sans travail.** Le gain
+   (« les arguments arrivent avec leur quoting ») ne s'hérite pas : il oblige à
+   ré-analyser EXPLICITEMENT ce qui était visible par accident.
+3. **Le code neuf est la surface la plus fraîche.** Le seul contournement
+   restant du round a été trouvé en attaquant mes propres correctifs, pas
+   l'ancien code : `bash -c"env"` arrive concaténé. Même motif que la JUMELLE —
+   la forme séparée durcie, la forme collée laissée ouverte.
+4. **Un nœud `ERROR` est un angle mort**, pas un détail : le sous-arbre devient
+   plat et un programme peut y disparaître. `tests/ab_decoupage.py` les liste.
 
 ## 4. Déjà corrigé — DONNER cette liste aux agents
 

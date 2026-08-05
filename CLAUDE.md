@@ -13,9 +13,9 @@ voit rien.
    compaction : le tenir à jour à chaque fin de phase.
 4. `REPRISE.md` — le travail EN COURS, ce qui reste à faire, et les pièges
    déjà payés. **À lire juste après ce fichier à toute reprise de session.**
-   Sa §0 dit quoi faire en premier. Le chantier en cours est le PARSEUR du
-   hook (`docs/parseur-hook.md`), pas la boucle adversariale : jo l'a arrêtée
-   le 2026-08-05.
+   Sa §0 dit quoi faire en premier. Le PARSEUR du hook est FAIT
+   (`docs/parseur-hook.md`) ; la boucle adversariale reste close — jo l'a
+   arrêtée le 2026-08-05.
 
 ## Réponses §3 (verrouillées par jo le 2026-08-01 — ne pas re-demander)
 1. **Déterminisme : par PROJET par défaut, configurable** (session/projet/
@@ -70,7 +70,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**918 tests verts** (900 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**1273 tests verts** (1255 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -980,6 +980,54 @@ Deux tests figent les deux côtés.
 arobase (`webmail:alice@hôte`) retombe dans la branche SSH et perd sa
 structure. La partie locale est écartée, donc aucune fuite — c'est une perte
 sémantique, du même ordre que celle corrigée pour `mailto:` au round 15.
+
+## Round 17 (2026-08-05) — le hook découpe par GRAMMAIRE, plus par approximation
+Arbitrage de jo : arrêter la boucle adversariale, attaquer le parseur. Fait.
+`tokenize` s'appuie sur `tree-sitter-bash` ; détail, pièges et mesures dans
+`docs/parseur-hook.md`. Ce que quatorze rounds d'heuristiques approximaient —
+`case`, définitions de fonction, groupes, heredocs, commentaires,
+concaténations — est désormais donné par construction.
+
+**L'ordre des passes est tout le sujet.** Le découpage travaille sur la
+commande BRUTE ; les contrôles par regex gardent le texte normalisé. Normaliser
+avant de parser faisait RENAÎTRE une structure que les guillemets avaient
+supprimée : `git commit -m 'handle case in parser(env)'` redevenait un
+sous-shell exécutant `env`. Les neuf faux positifs du premier branchement
+venaient tous de là — ils ressuscitaient d'un coup le défaut que les rounds 5,
+8 et 9 avaient éliminé.
+
+**Quatre pièges, chacun payé une fois** : l'expansion d'accolades doit précéder
+la grammaire (`{env,}` la fait tomber en ERREUR, et le mot reconstruit
+n'apparaît nulle part) mais seulement HORS guillemets, sinon un corps JSON
+casse l'appariement dont la grammaire dépend · la grammaire refuse des noms de
+fonction que bash accepte (`a@b`, `a%b`, `1fn`), et le CORPS disparaît avec le
+nom — seul le nom est remplacé · un argument CITÉ ne se lit plus par accident,
+il faut le RÉ-ANALYSER (`-c` d'un shell, `trap`, `mapfile -C`, `env -S`, corps
+de heredoc) · le terminateur d'une clause `-exec` arrive comme un mot ordinaire,
+et faisait passer `env` pour un préfixe exécutant `;`.
+
+**Contournement introduit par mon propre correctif, trouvé en attaquant le code
+neuf** : `bash -c"env"` donne un nœud de CONCATÉNATION, réduit en `-cenv`, que
+ni la règle `-c` ni la ré-analyse ne voyaient. Le découper au tokeniseur serait
+faux — bash produit bien UN mot, et `/usr/"bin"/env` doit rester
+`/usr/bin/env` : c'est à la couche qui lit les options de séparer `-c` de sa
+valeur attachée. Même motif que la JUMELLE des rounds précédents : la forme
+séparée durcie, la forme collée laissée ouverte.
+
+Corollaire trouvé en corrigeant : `${IFS,,}` n'est pas une alternative mais un
+opérateur de casse — sans le `(?<!\$)` de `_ACCOLADES_RE`,
+`env${IFS,,}> /tmp/dump.txt` était réécrit en `env$IFS> env$> env$>`.
+
+**La grammaire est un PRÉREQUIS de l'analyse** : sans elle, `tokenize` lève et
+le hook REFUSE. Claude Code lançant le hook sous le python système, qui ne l'a
+pas, `main` se relance sous `.venv/bin/python` (`os.execv` préserve stdin) —
+jamais à l'import, sinon une suite de tests sans grammaire verrait son propre
+processus remplacé.
+
+Preuves : 1255 tests unitaires, `tests/phase4_e2e.sh` **PASS** en session
+réelle (refus avant exécution, tracé, raison exacte citée par le modèle),
+`tests/phase3_e2e.sh` **PASS** (0 valeur réelle sur 393,6 Ko, restauration
+3/3). Disponibilité : 0,003 s sur une commande réaliste, 0,42 s sur 500 Ko.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
