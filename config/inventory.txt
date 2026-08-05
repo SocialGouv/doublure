@@ -1,0 +1,35 @@
+# Inventaire — « ce qui est À NOUS, et n'est donc JAMAIS public » (§6, complément)
+#
+# Miroir exact de l'allowlist, et son INVERSE logique. L'allowlist dit ce qui
+# est public ; ce fichier dit ce qui ne peut pas l'être, quelle que soit la
+# forme. Il PRIME sur toute règle de forme.
+#
+# Raison d'être : les résidus documentés (rounds 8 à 14) ne sont pas des
+# questions de FORME mais d'INVENTAIRE. `org.apache.kafka.acme.PaymentsClient`
+# et `org.apache.kafka.clients.KafkaProducer` ont la même forme ; seul le fait
+# de savoir que `acme` est à nous les sépare. Une règle de forme ne peut pas
+# trancher, un inventaire si — et sans probabilité.
+#
+# Formes acceptées :
+#   - ligne simple      : un LABEL qui est à nous. Un identifiant est à nous
+#                         dès qu'un de ses segments (séparés par . / : @ + _ -)
+#                         est égal à cette ligne, sans tenir compte de la casse.
+#   - ligne `re:<regex>`: la valeur ENTIÈRE est à nous si la regex matche
+#                         intégralement.
+#
+# ATTENTION : une entrée trop générique substitue du vocabulaire courant, ce
+# qui prive le modèle de références utiles sans rien protéger. N'y mettre que
+# des labels DISTINCTIFS : raison sociale, noms de zones internes, trigrammes
+# d'équipe, préfixes de nommage. Pas `api`, pas `prod`, pas `billing`.
+#
+# Le fichier vit en terrain neutre : le service de détection (côté GPL) et le
+# moteur de substituts le lisent tous les deux, comme l'allowlist. C'est la
+# LISTE qui compte, pas le code de lecture.
+
+# --- Organisation (corpus SYNTHÉTIQUE — à remplacer par les vrais en Phase 5)
+acmecorp
+acme
+
+# --- Zones internes ---------------------------------------------------------
+re:[\w-]+\.acmecorp\.internal
+re:[\w-]+\.acmecorp\.example
