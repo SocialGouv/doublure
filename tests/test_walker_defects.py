@@ -1212,3 +1212,89 @@ def test_defaut25_une_valeur_reelle_de_l_api_reste_verbatim(cle, valeur):
 def test_defaut25_un_id_de_message_n_est_pas_un_contrat():
     body = {"messages": [{"role": "user", "id": "SECRET-HOST", "content": "x"}]}
     assert "SECRET-HOST" not in json.dumps(walk_request(body, marker_sub()))
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 26 — j'avais fermé le type de PREMIER niveau d'un `media_type` et
+# laissé le SOUS-TYPE accepter les points. `text/db-01.acme.internal` en avait
+# donc la forme, et sortait verbatim — sans entrée de coffre ni substitut non
+# résolu pour le signaler. Même classe que la règle d'extensions du round 8 :
+# une règle de forme qui rend des valeurs PUBLIQUES échoue en silence.
+# --------------------------------------------------------------------------- #
+
+
+def _media(valeur):
+    return {"messages": [{"role": "user", "content": [
+        {"type": "image", "media_type": valeur, "text": "x"}]}]}
+
+
+@pytest.mark.parametrize("valeur", [
+    "text/db-01.acme.internal",
+    "image/x-acme-registry.acme.corp",
+    "multipart/form-data; boundary=db-01.acme.internal",
+    "text/plain; charset=db-01.acme.internal",
+])
+def test_defaut26_un_media_type_ne_porte_pas_d_hote(valeur):
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    rendu = walk_request(_media(valeur), sabotage)["messages"][0]["content"][0]
+    assert rendu["media_type"] != valeur, f"{valeur} rendu verbatim"
+
+
+@pytest.mark.parametrize("valeur", [
+    "text/plain", "image/png", "application/json", "application/vnd.api+json",
+    "application/vnd.google-earth.kml+xml",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain; charset=utf-8", "multipart/form-data; boundary=abc123",
+    "application/x-yaml", "text/markdown",
+])
+def test_defaut26_un_media_type_reel_reste_verbatim(valeur):
+    """Le substituer fait refuser la requête entière."""
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    rendu = walk_request(_media(valeur), sabotage)["messages"][0]["content"][0]
+    assert rendu["media_type"] == valeur, f"{valeur} substitué"
+
+
+def test_defaut26_residu_l_arbre_vendeur_reste_dotte():
+    """Résidu ASSUMÉ : un arbre vendeur est pointé PAR NATURE.
+
+    `application/vnd.<vendeur>.<produit>` a la même forme qu'un arbre
+    contenant un hôte. Le distinguer demanderait de savoir que `acme` est à
+    nous — une question d'INVENTAIRE, pas de forme. Même arbitrage que les
+    paquets Java sous un préfixe tiers.
+    """
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    valeur = "application/vnd.acme.db-01.acme.internal+json"
+    rendu = walk_request(_media(valeur), sabotage)["messages"][0]["content"][0]
+    assert rendu["media_type"] == valeur
+
+
+# --------------------------------------------------------------------------- #
+# DÉFAUT 27 — le protocole MCP écrit `mimeType`, pas `media_type` ; et un
+# `file_id` désigne un fichier DÉJÀ téléversé.
+# --------------------------------------------------------------------------- #
+
+
+def test_defaut27_une_charge_binaire_declaree_en_mimeType_reste_intacte():
+    """Ne lire que `media_type` faisait prendre un petit binaire pour du texte,
+    donc le décoder, le substituer et le ré-encoder — corrompu."""
+    import base64 as b64
+    charge = b64.b64encode(bytes([0x89, 0x50, 0x4E, 0x47, 0x41, 0x42])).decode()
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "resource", "mimeType": "image/png", "data": charge}]}]}
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    assert walk_request(body, sabotage)["messages"][0]["content"][0]["data"] == charge
+
+
+def test_defaut27_un_file_id_designe_un_fichier_deja_televerse():
+    """Le substituer donne un identifiant qui ne correspond à rien : 404."""
+    sabotage = Substituter(to_surrogate=lambda s: "SABOTÉ")
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "container_upload", "file_id": "file_xyz789"}]}]}
+    rendu = walk_request(body, sabotage)["messages"][0]["content"][0]
+    assert rendu["file_id"] == "file_xyz789"
+
+
+def test_defaut27_un_file_id_hors_position_reste_une_donnee():
+    body = {"messages": [{"role": "user", "content": [
+        {"type": "text", "text": "ok", "file_id": "SECRET-HOST"}]}]}
+    assert "SECRET-HOST" not in json.dumps(walk_request(body, marker_sub()))

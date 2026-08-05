@@ -820,6 +820,65 @@ RFC 6838 (`text/plain; charset=utf-8`), que ma forme refusait.
 (`db_master_prod`) reste indiscernable d'un type de bloc. Même limite que
 partout ailleurs — c'est une question d'inventaire, pas de forme.
 
+## Quinzième revue adversariale (2026-08-05, round 14)
+
+Les deux moitiés ont trouvé la MÊME chose : mes correctifs de la veille avaient
+durci une branche et laissé sa jumelle intacte.
+
+### Hook — l'inversion ne couvrait qu'une des deux branches
+J'avais rendu `${!x}` fail-closed, mais `declare -n r=CIBLE` lisait la cible
+DIRECTEMENT — ce qui est juste quand elle est écrite en clair, et faux quand
+elle vient d'un paramètre positionnel : `f() { declare -n r=$1; }; f AWS_…`
+déclarait la cible anodine faute d'affectation visible. Une cible qui n'est
+pas un identifiant littéral exige désormais la même preuve que l'indirection.
+
+**Le marqueur de substitution était ENTOURÉ d'espaces.** `A=x $V` (deux mots,
+le second est le programme) devenait donc indistinguable de `A=x$V` (un seul
+mot, une valeur d'affectation) — et l'exception faite au round 8 pour la
+seconde couvrait la première, qui exécute bel et bien. Le marqueur reste
+COLLÉ là où la substitution l'était ; l'exception disparaît d'elle-même, et
+l'opacité se teste par inclusion et non par égalité.
+
+**`${VAR@P}` interprète le prompt, donc EXÉCUTE** les substitutions que la
+variable contient. Deux étages manquaient : ma normalisation réduisait
+`${X@P}` à `$X`, faisant disparaître l'opérateur avant qu'aucun motif ne
+puisse le voir ; et `printf -v PS1` reconstruisait le `$` par `\x24`, hors de
+portée du motif PS0/PS4.
+
+**L'arithmétique lit une variable SANS dollar** : `echo $((AWS_SECRET…))`, et
+le contrôle des noms exigeait le sigil.
+
+Quatre faux positifs corrigés : `declare -pF` (le `-F` porte sur les
+FONCTIONS, aucune valeur n'est listée) · une regex citant `\${!x}` — `\$` est
+un dollar LITTÉRAL, le réduire à `$` en faisait une vraie indirection ·
+`${!ARR[@]}` où le tableau porte un nom sensible (seuls les INDICES sortent) ·
+une substitution de processus en ÉCRITURE (`> >(tee log)`), qui désigne une
+destination et non un programme.
+
+### Walker — j'avais fermé le premier niveau et laissé le sous-type ouvert
+`SCALAR_SKIP_FORMS["media_type"]` épinglait le registre de PREMIER niveau
+(round 13) mais laissait le sous-type accepter les points :
+`text/db-01.acme.internal` en avait la forme et sortait verbatim, sans entrée
+de coffre ni substitut non résolu. Sous-type sans point, arbres `vnd.`/`prs.`
+bornés, `x-` explicite ; les dix types réels testés restent intacts, y compris
+`application/vnd.openxmlformats-officedocument.wordprocessingml.document`.
+
+Deux pannes en attente : le protocole MCP écrit **`mimeType`** (camelCase), que
+je ne lisais pas — une petite charge binaire y était prise pour du texte, donc
+décodée, substituée et ré-encodée, c'est-à-dire CORROMPUE. Et
+`container_upload.file_id` désigne un fichier DÉJÀ téléversé : le substituer
+donne un identifiant qui ne correspond à rien.
+
+**Résidu assumé** : un arbre vendeur est pointé PAR NATURE
+(`application/vnd.acme.db-01.acme.internal+json`). Le distinguer demanderait
+de savoir que `acme` est à nous — question d'INVENTAIRE, pas de forme. Même
+arbitrage que les paquets sous un préfixe tiers.
+
+**Coffre et concurrence, aucun finding** : isolation entre portées, persistance
+après réouverture, fail-closed sur mauvaise clé, injectivité sur 50 fils et
+50 valeurs, déterminisme entre processus, 4000 valeurs sans épuisement. D1 et
+D6 tiennent — c'est la première fois qu'ils étaient attaqués sous cet angle.
+
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
 (le 4ᵉ vient de la revue adversariale) :

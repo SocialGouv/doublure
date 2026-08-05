@@ -346,7 +346,7 @@ _INDICES_TABLEAU_RE = re.compile(r"\$\{!\s*[A-Za-z_]\w*(?:\[[@*]\]|[@*])\}")
 #: capturé, et la résolution des affectations fait le reste.
 _NAMEREF_RE = re.compile(
     r"\b(?:declare|typeset|local)\b[^|;&\n]*?\s-[A-Za-z]*n[A-Za-z]*\s+"
-    r"([A-Za-z_]\w*)(?:=(\$?\{?\w+))?")
+    r"([A-Za-z_]\w*)(?:=(\$?\{?[\w@*]+\}?))?")
 
 #: Les trois façons de poser une variable. `read` et `printf -v` échappaient
 #: entièrement à l'index, qui n'admettait qu'un littéral en membre droit.
@@ -376,7 +376,19 @@ def _nom_sensible(nom: str) -> bool:
     return nom.upper() not in _VARS_PUBLIQUES and bool(_SENSITIVE_NAME_RE.search(nom))
 
 
+#: En contexte arithmétique, `$((PORT))` lit la variable sans dollar : le
+#: contrôle des noms, qui exige le sigil, n'y voyait rien.
+_ARITHMETIQUE_RE = re.compile(r"\$\(\((.*?)\)\)", re.S)
+
+
 def _variable_sensible(normalized: str) -> str | None:
+    for expression in _ARITHMETIQUE_RE.findall(normalized):
+        for nom in re.findall(r"[A-Za-z_]\w*", expression):
+            if _nom_sensible(nom):
+                return nom
+    # `${!arr[@]}` ne rend que des INDICES : le nom du tableau, même sensible,
+    # n'expose aucune valeur.
+    normalized = _INDICES_TABLEAU_RE.sub(" ", normalized)
     for nom in _NOM_VARIABLE_RE.findall(normalized):
         if _nom_sensible(nom):
             return nom
@@ -385,8 +397,7 @@ def _variable_sensible(normalized: str) -> str | None:
     # celle-ci est écrite EN CLAIR — les deux cas ne se traitent donc pas
     # pareil : pour l'alias on lit la cible, pour l'indirection il faut la
     # PROUVER.
-    indirections = _REF_INDIRECTE_RE.findall(
-        _INDICES_TABLEAU_RE.sub("", normalized))
+    indirections = _REF_INDIRECTE_RE.findall(normalized)
     alias = [(valeur or nom).lstrip("${")
              for nom, valeur in _NAMEREF_RE.findall(normalized)]
     if not indirections and not alias:
@@ -431,9 +442,13 @@ def _variable_sensible(normalized: str) -> str | None:
     for cible in indirections:
         if not _prouve_inoffensif(cible, exige_une_affectation=True):
             return cible
-    # ALIAS : la cible est écrite en clair, on peut la lire directement.
+    # ALIAS : la cible est normalement écrite EN CLAIR, on peut la lire. Mais
+    # `declare -n r=$1` la fait venir d'un paramètre positionnel, dont la
+    # valeur est aussi inconnue que celle d'une indirection — et la brancher
+    # sur la lecture directe la déclarait anodine faute d'affectation visible.
     for cible in alias:
-        if not _prouve_inoffensif(cible, exige_une_affectation=False):
+        litteral = re.fullmatch(r"[A-Za-z_]\w*", cible) is not None
+        if not _prouve_inoffensif(cible, exige_une_affectation=not litteral):
             return cible
     return None
 
@@ -500,6 +515,11 @@ DENY_COMMAND_PATTERNS: tuple[tuple[str, str], ...] = (
      "affectation qui fait exécuter du code depuis un chemin non analysable"),
     # `ENV=production` est un idiome courant : seule une valeur de CHEMIN fait
     # sourcer un fichier.
+    (r"\$\{[^}]*@P\}",
+     "l'expansion de prompt (`@P`) exécute les substitutions que la variable "
+     "contient : son contenu n'est pas analysable avant exécution"),
+    (r"\bprintf\s+(?:-\S+\s+)*-v\s+(PS[0-9]|PROMPT_COMMAND)\b",
+     "construction d'une variable dont la valeur est exécutée comme une commande"),
     (r"\b(PROMPT_COMMAND|command_not_found_handle)\s*=\s*\S",
      "affectation d'une variable dont la valeur est exécutée comme une commande"),
     (r"\bPS[04]\s*=[^|;&\n]*(\$\(|`)",
@@ -644,6 +664,11 @@ def _variante_vide(command: str) -> str | None:
 def _reduire_expansion(m: re.Match[str]) -> str:
     """Ce que bash tire d'une expansion, sans jamais perdre le nom de variable."""
     nom, reste = m.group("nom"), m.group("reste")
+    # `${VAR@P}` interprète le prompt, donc EXÉCUTE les substitutions que la
+    # variable contient. Le réduire à `$VAR` faisait disparaître l'opérateur
+    # avant que le motif de refus ne puisse le voir.
+    if reste.startswith("@P"):
+        return m.group(0)
     if nom == "IFS":
         # IFS vaut un SÉPARATEUR — sauf avec `+` ou `:+`, qui rendent le texte
         # de droite : `e${IFS:+nv}` reconstruit bel et bien `env`. Tout
@@ -707,6 +732,9 @@ def normalize(command: str) -> str:
     out = re.sub(r"(?<=\w)\$\{!?[A-Za-z_]\w*\}(?=\w)", "", out)
     out = out.replace("''", "").replace('""', "")
     out = re.sub(r"\[([^\]/])\]", r"\1", out)     # glob [o] → o
+    # `\$` est un dollar LITTÉRAL : bash n'y voit aucune expansion. Le
+    # réduire à `$` transformait `grep '\${!x}'` en une vraie indirection.
+    out = out.replace("\\$", "")
     out = re.sub(r"\\(.)", r"\1", out)            # \e → e
     out = out.replace("'", "").replace('"', "")
     # Un `#` en tête de MOT ouvre un commentaire : bash ignore la fin de ligne.
@@ -910,15 +938,11 @@ def _program_positions(tokens: list[str]) -> list[int]:
             i += 2 if tok in _OPT_AVEC_VALEUR.get(enveloppe, frozenset()) else 1
             continue
         if "=" in tok or _DUREE_RE.fullmatch(tok):
-            # `D=$(ls)` : le marqueur laissé par la substitution est la VALEUR
-            # de l'affectation, pas un programme. On ne saute QUE lui — `X= env`
-            # est un préfixe d'affectation vide, et `env` y est bien exécuté.
-            # Exiger que le token FINISSE par `=` ratait `X=v$(cmd)-final`, où
-            # la substitution est concaténée : motif courant en CI.
-            if "=" in tok and tokens[i + 1:i + 2] == [_MARQUEUR_SUBSTITUTION]:
-                i += 2
-            else:
-                i += 1
+            # `D=$(ls)` : le marqueur est COLLÉ à l'affectation, donc dans le
+            # même token — il n'y a rien à sauter de plus. `A=x $V`, lui,
+            # laisse le marqueur dans un token SÉPARÉ, qui occupe bien une
+            # position de programme.
+            i += 1
             continue
         base = _basename(tok)
         if base == "command" and any(t in ("-v", "-V") for t in tokens[i + 1:]):
@@ -1026,9 +1050,13 @@ def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
     if base in ("declare", "typeset", "export"):
         # Les options courtes se COMBINENT : `-px` vaut `-p -x`, et l'égalité
         # stricte les ratait toutes.
+        courtes = [t for t in options if not t.startswith("--")]
+        # `-f` et `-F` portent sur les FONCTIONS : `declare -pF` ne liste que
+        # des noms de fonctions, aucune valeur.
+        if any(set(t.lstrip("-")) & {"f", "F"} for t in courtes):
+            return False
         return not options or any(
-            set(t.lstrip("-")) & {"p", "x"}
-            for t in options if not t.startswith("--"))
+            set(t.lstrip("-")) & {"p", "x"} for t in courtes)
     if _MARQUEUR_SUBSTITUTION in suite:
         # Le nom de la variable est produit à l'exécution : il peut être
         # n'importe lequel. Fail-closed.
@@ -1267,20 +1295,32 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
     # Toute région imbriquée — substitution du shell comme appel de langage —
     # est RETIRÉE de la commande englobante après analyse : ses mots n'y sont
     # pas des arguments, et son résultat n'est pas connu d'avance.
-    exterieur = _NESTED_RE.sub(f" {_MARQUEUR_SUBSTITUTION} ", normalized)
+    # Le marqueur n'est PAS entouré d'espaces : il doit rester COLLÉ là où la
+    # substitution l'était. Les entourer rendait `A=x $V` (deux mots, le
+    # second est le programme) identique à `A=x$V` (un seul mot, une valeur
+    # d'affectation) — et l'exception faite pour la seconde couvrait la
+    # première, qui exécute bel et bien.
+    # Une substitution en ÉCRITURE (`> >(cmd)`) désigne une DESTINATION, pas un
+    # programme : son consommateur est analysé à part.
+    exterieur = _NESTED_RE.sub(
+        lambda m: (" destination_de_flux "
+                   if m.group(0).startswith(">") else _MARQUEUR_SUBSTITUTION),
+        normalized)
     exterieur = _par_segment(
         exterieur,
-        lambda seg: (_APPEL_LANGAGE_RE.sub(f" {_MARQUEUR_SUBSTITUTION} ", seg)
+        lambda seg: (_APPEL_LANGAGE_RE.sub(_MARQUEUR_SUBSTITUTION, seg)
                      if _interprete_execute(seg) else seg),
     )
     # Une variable en position de programme est opaque (`$SHELL -c env`).
-    exterieur = _REF_SIMPLE_RE.sub(f" {_MARQUEUR_SUBSTITUTION} ", exterieur)
+    exterieur = _REF_SIMPLE_RE.sub(_MARQUEUR_SUBSTITUTION, exterieur)
 
     for tokens in tokenize(exterieur):
-        opaque = _MARQUEUR_SUBSTITUTION in tokens
+        # Le marqueur peut être COLLÉ à d'autres caractères (`a$(cmd)b`) :
+        # l'appartenance exacte ne le voyait plus une fois le padding retiré.
+        opaque = any(_MARQUEUR_SUBSTITUTION in t for t in tokens)
         for idx in _program_positions(tokens):
             base = _basename(tokens[idx])
-            if base == _MARQUEUR_SUBSTITUTION:
+            if _MARQUEUR_SUBSTITUTION in base:
                 return ("le programme exécuté est produit par une substitution : "
                         "son contenu n'est pas analysable avant exécution")
             if base in ENV_DUMP_PROGRAMS and _est_deversement(base, tokens, idx):

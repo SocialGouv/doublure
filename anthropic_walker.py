@@ -81,6 +81,7 @@ SKIP_KEYS: frozenset[str] = frozenset(
         "tool_use_id",
         "name",
         "server_name",
+        "file_id",
         "data",
         "cache_control",
     }
@@ -107,9 +108,17 @@ SCALAR_SKIP_FORMS: dict[str, re.Pattern[str]] = {
     # Le type de premier niveau est un registre FERME (RFC 6838). Sans lui,
     # `srv-billing-prod-01/acme-internal` avait la forme d'un type de media.
     # Les parametres (`; charset=utf-8`) sont valides et doivent passer.
+    "mimeType": re.compile(
+        r"(text|image|audio|video|application|font|model|message|multipart|"
+        r"example)/(?:[\w+-]+|(?:vnd|prs)(?:\.[\w+-]+){1,4}|x-[\w+-]+)"
+        r"(\s*;\s*[\w+-]+=[\w+-]+)*"),
     "media_type": re.compile(
         r"(text|image|audio|video|application|font|model|message|multipart|"
-        r"example)/[\w.+-]+(\s*;\s*[\w.+-]+=[\w.+-]+)*"),
+        r"example)/(?:"
+        r"[\w+-]+"                # sous-type enregistre : AUCUN point
+        r"|(?:vnd|prs)(?:\.[\w+-]+){1,4}"   # arbres vendeur et personnel
+        r"|x-[\w+-]+"             # arbre non enregistre
+        r")(\s*;\s*[\w+-]+=[\w+-]+)*"),
 }
 
 #: Cles de bloc dont la valeur est une STRUCTURE de protocole, pas du texte.
@@ -428,7 +437,7 @@ USER_DATA_KEYS: frozenset[str] = frozenset({"input", "metadata"})
 #: `{"type": …, "name": …, "uri": …}` — ce sont des donnees : les recopier
 #: faisait fuir le nom reel ET empechait sa restauration au retour.
 CONTRACT_KEYS: frozenset[str] = frozenset(
-    {"name", "id", "tool_use_id", "server_name"})
+    {"name", "id", "tool_use_id", "server_name", "file_id"})
 
 #: Ou chaque cle de contrat est legitime, EN PLUS d'un conteneur de protocole.
 #: Le type du bloc ne suffit pas — c'etait le defaut precedent — mais combine a
@@ -452,6 +461,10 @@ CONTRACT_BLOCK_TYPES: dict[str, frozenset[str]] = {
     # `mcp_servers[].name` reste verbatim (cle de routage) : substituer le
     # `server_name` qui lui repond cassait la correspondance.
     "server_name": frozenset({"mcp_tool_use", "mcp_tool_result"}),
+    # `file_id` designe un fichier deja televerse : un substitut ne correspond
+    # a rien, et l'API repond 404.
+    "file_id": frozenset({"container_upload", "container_reference", "file",
+                          "image", "document"}),
 }
 
 #: Conteneurs dont les ENTREES sont des noeuds de protocole : le nom d'un outil
@@ -525,7 +538,10 @@ def _walk(
         # laissait fuir les cas sans media_type, avec `application/json`, ou
         # avec une casse differente (les types MIME sont insensibles a la
         # casse, RFC 2045).
-        media = node.get("media_type")
+        # Le protocole MCP ecrit `mimeType` (camelCase) sur ses ressources.
+        # Ne lire que `media_type` faisait prendre une petite charge binaire
+        # pour du texte : decodee, substituee, re-encodee — corrompue.
+        media = node.get("media_type") or node.get("mimeType")
         media = media.lower() if isinstance(media, str) else ""
         # `type == "base64"` dit comment la charge est ENCODEE, pas ce qu'elle
         # contient. Le prendre pour une preuve de binarite faisait recopier

@@ -1372,3 +1372,81 @@ def test_regression_source_positionnels_et_historique(command, audit_log):
 ])
 def test_le_durcissement_du_round13_n_ajoute_pas_de_faux_positifs(command, audit_log):
     assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# Round 14 — l'inversion du round précédent ne couvrait qu'une des deux branches
+#
+# `${!x}` exige désormais une preuve, mais `declare -n r=CIBLE` lisait la cible
+# directement — ce qui est juste quand elle est écrite EN CLAIR, et faux quand
+# elle vient d'un paramètre positionnel, dont la valeur est aussi inconnue.
+# --------------------------------------------------------------------------- #
+
+_CLE14 = "AWS_" + "SECRET_ACCESS_KEY"
+
+
+@pytest.mark.parametrize("command", [
+    f"f() {{ declare -n r=$1; echo $r; }}; f {_CLE14}",
+    f"f() {{ declare -n r=${{1}}; echo $r; }}; f {_CLE14}",
+    f"f() {{ declare -n r=$*; echo $r; }}; f {_CLE14}",
+    f"f() {{ declare -n r=$@; echo $r; }}; f {_CLE14}",
+    f"f() {{ local -n r=$1; echo $r; }}; f {_CLE14}",
+])
+def test_regression_un_alias_vers_un_positionnel_exige_une_preuve(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # Le marqueur d'une substitution était ENTOURÉ d'espaces : `A=x $V` (deux
+    # mots, le second est le programme) devenait indistinguable de `A=x$V`
+    # (un seul mot, une valeur d'affectation), et l'exception faite pour la
+    # seconde couvrait la première.
+    "V=env; A=x $V",
+    "V=env; A=x ${V}",
+    "f() { A=x $1; }; f env",
+    "A=x $(echo env)",
+    "A=x `echo env`",
+])
+def test_regression_un_prefixe_d_affectation_ne_couvre_pas_le_programme(command,
+                                                                       audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # `@P` interprète le prompt, donc exécute les substitutions que la
+    # variable contient — quelle que soit la façon dont elle a été remplie.
+    'printf -v PS1 "\\x24(env)"; echo "${PS1@P}"',
+    'printf -v PS0 "\\x24(env)"; :',
+    'X=x; echo "${X@P}"',
+    # en contexte arithmétique, bash lit la variable SANS dollar
+    f"echo $(({_CLE14}))",
+    f": $((y = {_CLE14}))",
+])
+def test_regression_prompt_et_arithmetique(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # `-f` et `-F` portent sur les FONCTIONS : aucune valeur n'est listée.
+    "declare -pF",
+    "declare -F",
+    "declare -f ma_fonction",
+    # `\$` est un dollar LITTÉRAL : bash n'y voit aucune expansion. Le réduire
+    # à `$` faisait d'une regex citée une vraie indirection.
+    r"grep -E '\${!x}' /tmp/fichier.txt",
+    r"""echo 'coût : \$5'""",
+    # `${!arr[@]}` ne rend que des INDICES : le nom du tableau, même sensible,
+    # n'expose aucune valeur.
+    "echo ${!AWS_SECRET_TEST[@]}",
+    # une substitution en ÉCRITURE désigne une destination, pas un programme
+    "echo hi > >(cat)",
+    "npm test > >(tee /tmp/log.txt)",
+    # non-régressions du padding retiré
+    "SUFFIX=v$(git describe)-final",
+    "D=$(ls -dt /tmp | head -1)",
+    "echo $((COUNT + 1))",
+    "echo $((2 + 2))",
+    "declare -n ref=mon_tableau; echo $ref",
+])
+def test_le_durcissement_du_round14_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
