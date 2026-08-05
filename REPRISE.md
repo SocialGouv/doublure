@@ -66,26 +66,31 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
 **Toujours rejouer `phase3_e2e.sh` après une modification du walker, du moteur
 ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
 
-## 3. À FAIRE au round 11
+## 3. À FAIRE au round 15
 
-1. **Relire ce que le round 10 vient de réécrire** :
-   - walker : `signe_ici` / `signe_partout` — le drapeau est RECALCULÉ à chaque
-     niveau, jamais hérité, et l'asymétrie aller/retour est volontaire (au
-     retour, traverser un bloc signé casserait sa signature) ;
-   - hook : `_canonise_programme` et sa grammaire d'options (`-\w*`, tiret nu),
-     `_LANGAGES` vs shells, `_retire_definitions`, le retrait CONDITIONNEL des
-     accolades, `_NAMEREF_RE`, la double lecture de `-c` dans
-     `_est_deversement`, la réécriture `env -S`, `_expanser_accolades`.
-2. **Chercher ce qui n'a JAMAIS été modélisé, pas seulement les régressions.**
-   Le round 10 l'a montré : les correctifs du round 9 ont tous tenu, et les
-   dix contournements venaient de mécanismes absents du modèle. Pistes non
-   explorées : alias (`alias x=env`), `trap`, `PROMPT_COMMAND`, `.bashrc` via
-   `bash -l`, `coproc`, `mapfile -C`, `read -e`, complétion programmable.
-3. **Mesurer le COÛT, pas seulement la décision.** Deux des trois motifs à
-   l'origine du déni de service étaient là depuis le début et n'avaient jamais
-   été chronométrés. Tout motif dont la tête est une classe libre est un déni
-   de service en attente.
-4. Points **non corrigés**, à re-arbitrer :
+1. **Chercher la JUMELLE de chaque correctif.** C'est le motif des rounds 12 à
+   14, sans exception : je durcis une branche et laisse l'autre ouverte —
+   l'indirection sans l'alias, le premier niveau d'un `media_type` sans son
+   sous-type, `${!x}` sans `declare -n r=$1`. Poser la question directement
+   (« où est la jumelle ? ») a marché à chaque fois ; l'oublier a coûté un
+   round à chaque fois.
+2. **Vérifier les voisins, ne pas les supposer inoffensifs.** `@P` exécute ;
+   `@Q`, `@E`, `@A`, `@K`, `@L`, `@U` n'ont jamais été testés. Même chose pour
+   toute famille d'opérateurs dont un seul membre a été traité.
+3. **Chercher ce qui n'a JAMAIS été modélisé.** La moitié des findings des
+   rounds 11 à 13 venaient de mécanismes absents du modèle, pas de
+   régressions. Côté bash, restent non explorés : `select`, `exec` sur
+   descripteurs, `local -x`, tableaux, `GLOBIGNORE`, `CDPATH`, `wait`,
+   `builtin`, `shopt`, `complete -F`, `caller`, `hash`, `type -P`.
+4. **Mesurer le COÛT, pas seulement la décision.** Tout motif dont la tête est
+   une classe libre est un déni de service en attente.
+5. **Surfaces à faible couverture, à attaquer avant les autres** : le PROXY
+   lui-même (en-têtes, `Content-Length` après réécriture, annulation du client
+   en plein flux, requêtes concurrentes) et le SERVICE DE DÉTECTION — dont une
+   question jamais posée : que fait le proxy quand le détecteur est
+   INDISPONIBLE ? Si ce n'est pas fail-closed, une panne ouvre une fuite.
+   (Coffre et concurrence : attaqués au round 14, RAS — ne pas y revenir.)
+6. Points **non corrigés**, à re-arbitrer :
    - **M3 — fragmentation de spans** : un span URL tronqué qui chevauche un
      span HOSTNAME donne DEUX noms fictifs à une machine. Pas une fuite ; une
      régression du déterminisme (§9 du plan). Piste : fusionner les spans
@@ -102,7 +107,7 @@ ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
      point-virgule puis d'un interpréteur en ligne, reste un faux positif. Le
      point-virgule sépare des INSTRUCTIONS dans un programme en ligne : le
      traiter comme une frontière de commande casserait les one-liners.
-5. Backlog hors boucle : `corpus/real/` non annoté (matière de jo),
+7. Backlog hors boucle : `corpus/real/` non annoté (matière de jo),
    KMS/rotation/journal d'accès immuable (Phase 6, hors MVP).
 
 ## 4. Déjà corrigé — DONNER cette liste aux agents
