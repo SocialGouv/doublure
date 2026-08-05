@@ -172,6 +172,37 @@ voit moins / plus / autre chose). C'est ce qui a sorti le piège nº 1. Refaire
 cet A/B à chaque étape du remplacement, et ne swapper que quand chaque classe
 de divergence est expliquée.
 
+### Essai de branchement FAIT, puis REVERTÉ — et ce qu'il a spécifié
+Le découpage a été branché sur la grammaire (`tokenize` → `_commandes_ast`),
+la suite lancée, puis le tout revu en arrière : **15 tests rouges sur ~700**,
+et un contrôle de sécurité ne se laisse pas à moitié échangé. Ces 15 échecs
+ne sont PAS un revers, ce sont la spécification du reste, tirée de faits :
+
+1. **Un argument CITÉ est un seul nœud** — c'est le gain de la grammaire, et
+   c'est aussi ce qui casse. `bash -c 'f() { env; }; f'` rend un `raw_string`
+   que la grammaire n'ouvre pas. Avant, le quoting était détruit globalement
+   et l'intérieur devenait visible PAR ACCIDENT. Il faut désormais RÉ-ANALYSER
+   explicitement : valeur de `-c` d'un shell, argument de `trap`, valeur de
+   `mapfile -C`, valeur de `env -S`. C'est le travail principal — et c'est
+   exactement le gain recherché, mais il s'implémente, il ne s'hérite pas.
+2. **Le corps d'un heredoc est un `heredoc_body`**, enfant de
+   `heredoc_redirect` — donc écarté si l'on saute les redirections.
+   `bash <<'FIN'\nenv\nFIN` passait. Il doit être routé : corps livré à un
+   interpréteur = CODE.
+3. **`coproc { cmd; }`** : la grammaire ne connaît pas cette forme. Elle rend
+   `coproc` avec les mots `{` et `cmd`, puis une commande `}`. Le corps est
+   visible comme MOT, pas comme programme.
+4. **Noms de fonction à caractères étendus** (`a@b()`, `a%b()`) : à vérifier,
+   la grammaire ne les reconnaît probablement pas comme `function_definition`.
+5. **Nouveaux faux positifs à comprendre**, pas à faire taire :
+   `git commit -m 'handle case in parser(env)'`,
+   `python3 -c "env = 42; print(env)"`.
+
+Le patch complet de l'essai est reproductible : amorçage + `_reduire_token`
+(la réduction de `normalize` appliquée MOT À MOT) + `_commandes_ast` +
+`_reecritures_semantiques`. C'est la bonne architecture ; il lui manque la
+ré-analyse des sous-commandes.
+
 ### Reste à faire, dans l'ordre
 1. Extracteur AST rendant, par commande simple : le programme et ses arguments
    AVEC leur quoting, plus les corps de heredoc et les substitutions comme
