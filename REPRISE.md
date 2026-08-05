@@ -11,7 +11,7 @@
 > repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
 > finding high/critical (et qui soit non assumé) »
 
-**Rounds 3 à 14 traités. Round 15 à lancer.** jo a validé la poursuite deux
+**Rounds 3 à 15 traités. Round 16 à lancer.** jo a validé la poursuite deux
 fois (`::g`). Critère d'arrêt : plus aucun finding critique/haut hors §5.
 **Il n'est pas atteint : les dix rounds ont TOUS produit des findings hauts ou
 critiques.** Jusqu'au round 9 c'étaient surtout des régressions du round
@@ -66,7 +66,7 @@ Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
 **Toujours rejouer `phase3_e2e.sh` après une modification du walker, du moteur
 ou de l'allowlist.** Trois défauts n'ont été vus QUE par lui (§7).
 
-## 3. À FAIRE au round 15
+## 3. À FAIRE au round 16
 
 1. **Chercher la JUMELLE de chaque correctif.** C'est le motif des rounds 12 à
    14, sans exception : je durcis une branche et laisse l'autre ouverte —

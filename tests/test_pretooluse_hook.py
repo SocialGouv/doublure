@@ -1450,3 +1450,78 @@ def test_regression_prompt_et_arithmetique(command, audit_log):
 ])
 def test_le_durcissement_du_round14_n_ajoute_pas_de_faux_positifs(command, audit_log):
     assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# Round 15 — une variable LIÉE à l'exécution est aussi inconnue qu'une
+# indirection, et `${!X@}` n'est pas `${!X[@]}`
+#
+# Mon exemption des « indices de tableau » du round 14 confondait deux formes :
+# `${!arr[@]}` rend les INDICES d'un tableau, mais `${!PREFIX@}`, SANS
+# crochets, ÉNUMÈRE les noms de variables — c'est-à-dire la liste des secrets
+# présents dans l'environnement.
+# --------------------------------------------------------------------------- #
+
+_CLE15 = "AWS_" + "SECRET_ACCESS_KEY"
+
+
+@pytest.mark.parametrize("command", [
+    'A=x; for A in ${!AWS@}; do echo "$A=${!A}"; done',
+    'A=x; for A in ${!AWS*}; do echo "${!A}"; done',
+    "echo ${!ANTHROPIC@}",
+    "echo ${!AWS*}",
+])
+def test_regression_l_enumeration_de_noms_n_est_pas_un_indice_de_tableau(command,
+                                                                        audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # `for`, `select`, `while read … done <<< …`, `read -u FD`, `getopts` :
+    # chacun lie la variable À L'EXÉCUTION. Les énumérer était sans fin — la
+    # variable liée est marquée OPAQUE, et la preuve exigée échoue.
+    f"A=x; while read A; do :; done <<< {_CLE15}; echo ${{!A}}",
+    f"A=x; coproc {{ echo {_CLE15}; }}; read -u ${{COPROC[0]}} A; echo ${{!A}}",
+    "A=x; getopts abc A -- -a; echo ${!A}",
+    f"A=x; select A in {_CLE15}; do break; done < /dev/null; echo ${{!A}}",
+    f"A=x; for A in {_CLE15}; do echo ${{!A}}; done",
+])
+def test_regression_une_variable_liee_a_l_execution_est_opaque(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    # `readonly -p` imprime les valeurs, exactement comme `declare -p`.
+    f"readonly {_CLE15}; readonly -p",
+    f"readonly {_CLE15}; readonly",
+    "readonly -a",
+])
+def test_regression_readonly_est_un_deverseur(command, audit_log):
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+@pytest.mark.parametrize("command", [
+    "for i in ${!arr[@]}; do echo $i; done",
+    'echo "${!arr[*]}"',
+    "readonly TAG=v1.2.3",
+    "readonly -f ma_fonction",
+    "for f in *.py; do echo $f; done",
+    "while read l; do echo $l; done < /tmp/f.txt",
+    'select o in build test; do echo $o; break; done',
+    "ls fichier[0].txt",
+    "declare -f ma_fonction",
+    "export TAG=v1.2.3",
+])
+def test_le_durcissement_du_round15_n_ajoute_pas_de_faux_positifs(command, audit_log):
+    assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_l_expansion_d_accolades_est_bornee_en_TAILLE(audit_log):
+    """Le budget ne comptait que les ALTERNATIVES : onze sur cinquante groupes
+    y tenaient tout en produisant des mégaoctets, dont la relecture gelait
+    l'agent vingt secondes par appel."""
+    import time
+    mot = "y" + "".join("{" + ",".join("abcdefghijk") + "}" for _ in range(100))
+    debut = time.time()
+    run_hook("Bash", {"command": mot}, audit_log)
+    assert time.time() - debut < 3.0, "taille du texte expansé non bornée"

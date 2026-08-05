@@ -28,6 +28,8 @@ from ..vault import SurrogateConflict, Vault
 from .canonical import (
     INTERNAL_SUFFIXES_LONGEST_FIRST,
     REPO_HOSTS,
+    SCHEMAS_SANS_AUTORITE,
+
     Canonical,
     canonicalize,
     is_internal_host,
@@ -78,6 +80,7 @@ _IDENT_EN_NOM_RE = re.compile(r"[.@:]")
 
 class SurrogateCollisionError(RuntimeError):
     """Espace de substituts épuisé pour cette valeur : fail-closed (D5/D6)."""
+
 
 
 def _display_value(canon: Canonical, value: str) -> str:
@@ -411,6 +414,22 @@ class SurrogateEngine:
             self._REPO_ORG, org, lambda a: self._combo("repo-org", org, a, ORG_WORDS)
         )
 
+    def _fake_sans_autorite(self, schema: str, reste: str, attempt: int) -> str:
+        """Substitut d'un URI sans autorité, en gardant sa STRUCTURE."""
+        if schema == "mailto":
+            local, arobase, hote = reste.rpartition("@")
+            if arobase:
+                faux_hote, _ = self._fake_authority(hote, attempt)
+                local_faux = self._combo("mail-local", local, attempt, IDENTITY_WORDS)
+                return f"{local_faux}@{faux_hote}"
+        if schema == "data":
+            # `data:<media>;base64,<charge>` : le type de média est public, la
+            # charge est du contenu. On remplace la charge, on garde la forme.
+            entete, virgule, charge = reste.partition(",")
+            if virgule:
+                return f"{entete},{self._combo('data', charge, attempt, SERVICE_WORDS)}"
+        return self._combo("uri", reste, attempt, SERVICE_WORDS)
+
     def _fake_repo_name(self, name: str, attempt: int) -> str:
         word = self._combo("repo-name", name, attempt, SERVICE_WORDS)
         suffix = next((s for s in _REPO_SUFFIXES if name.endswith(s)), "")
@@ -534,7 +553,19 @@ class SurrogateEngine:
             word = self._combo("org", canon.key, attempt, ORG_WORDS)
             return word.capitalize() if v[:1].isupper() else word
 
-        if etype == "URL":  # URL non-dépôt : hôte ET chemin substitués
+        # Un schéma sans `//` ne porte pas d'AUTORITÉ : le passer au
+        # découpeur d'hôte rendait un nom d'hôte là où il y avait une adresse
+        # mail, et le modèle ne pouvait plus raisonner dessus (D1).
+        if etype == "URL":
+            schema, sep, reste = v.partition(":")
+            if sep and not reste.startswith("//") \
+                    and schema.lower() in SCHEMAS_SANS_AUTORITE:
+                return f"{schema}:{self._fake_sans_autorite(schema.lower(), reste, attempt)}"
+
+        # Un dépôt AUTO-HÉBERGÉ (`https://code.acme.internal/team/outil`) n'a
+        # pas d'hôte public reconnu : il retombait sur un simple MOT, que le
+        # modèle ne peut ni cloner ni lire comme une URL. Il garde sa forme.
+        if etype == "URL" or (etype == "REPO" and "://" in v):
             m = re.match(
                 r"^(?P<scheme>[a-z][a-z0-9+.-]*://)?(?P<host>[^/?#]+)"
                 r"(?P<path>[^?#]*)(?P<tail>[?#].*)?$", v, re.I,

@@ -23,6 +23,14 @@ class Allowlist:
 
     def __init__(self, exact: set[str], patterns: list[re.Pattern[str]]):
         self.exact = exact
+        # Une entrée écrite TOUT EN MINUSCULES désigne un identifiant
+        # insensible à la casse (nom d'hôte, chemin d'import, espace de noms) :
+        # `GitHub.com/spf13/cobra` et `LOCALHOST` sont les mêmes valeurs
+        # publiques, et les substituer privait le modèle de la référence sans
+        # rien protéger. Une entrée qui porte une majuscule l'a VOULUE —
+        # `Mail.Read` est une permission, pas un mot. La casse de l'entrée
+        # déclare elle-même si la casse compte.
+        self.insensibles = {e for e in exact if e == e.lower()}
         self.patterns = patterns
 
     @classmethod
@@ -46,7 +54,7 @@ class Allowlist:
         return cls(exact, patterns)
 
     def __call__(self, value: str) -> bool:
-        return value in self.exact or any(p.fullmatch(value) for p in self.patterns)
+        return self.is_exact(value) or any(p.fullmatch(value) for p in self.patterns)
 
     def is_exact(self, value: str) -> bool:
         """Prédicat pour une SOUS-PARTIE d'une valeur composite.
@@ -58,4 +66,4 @@ class Allowlist:
         un segment d'URL ni un tag d'image, où rien ne désambiguïse et où elle
         laissait sortir `tenant-acme-nda.md` ou `client-nda-2025.zip` verbatim.
         """
-        return value in self.exact
+        return value in self.exact or value.lower() in self.insensibles

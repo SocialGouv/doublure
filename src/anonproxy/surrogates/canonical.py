@@ -164,9 +164,20 @@ _SERVICE_PREFIXES = ("svc-", "sa-", "srv-", "service-", "system:", "bot-", "ci-"
 _SERVICE_SUFFIXES = ("-svc", "-sa", "-bot", "-agent", "-runner", "-job", "-operator")
 
 
+#: Schémas d'URI qui ne portent pas d'AUTORITÉ : ce qui suit le deux-points est
+#: une adresse, une charge ou une référence — pas un hôte, et l'arobase d'un
+#: `mailto:` sépare le local du domaine, ce n'est pas un userinfo.
+SCHEMAS_SANS_AUTORITE = frozenset({"mailto", "data", "tel", "urn", "sms"})
+
+
 def _strip_userinfo(url: str) -> str:
     """Retire `user:motdepasse@` d'une URL, en gardant le reste intact."""
     scheme, sep, rest = url.partition("://")
+    if not sep and url.partition(":")[0].lower() in SCHEMAS_SANS_AUTORITE:
+        # `mailto:alice@hôte` : l'arobase sépare le local du domaine. Le
+        # traiter comme un userinfo faisait disparaître le schéma ET le local,
+        # et la valeur devenait un simple nom d'hôte (D1).
+        return url
     if not sep:
         # Forme SSH `user:jeton@hôte:chemin`, sans schéma. Elle porte les mêmes
         # identifiants qu'une URL HTTPS et n'a pas plus à entrer dans la clé du

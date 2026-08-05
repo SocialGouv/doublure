@@ -879,6 +879,58 @@ après réouverture, fail-closed sur mauvaise clé, injectivité sur 50 fils et
 50 valeurs, déterminisme entre processus, 4000 valeurs sans épuisement. D1 et
 D6 tiennent — c'est la première fois qu'ils étaient attaqués sous cet angle.
 
+## Seizième revue adversariale (2026-08-05, round 15)
+
+**Première moitié à atteindre le critère d'arrêt.** L'agent walker/moteur
+déclare explicitement n'avoir trouvé AUCUN finding critique ni haut, après
+avoir attaqué le proxy, le service de détection, les surfaces exotiques de
+l'API et le moteur. Le hook, lui, en a rendu trois plus un déni de service.
+
+### Hook — mon exemption d'hier a ouvert une fuite
+`${!arr[@]}` rend les INDICES d'un tableau ; `${!PREFIX@}`, **sans crochets**,
+ÉNUMÈRE LES NOMS des variables commençant par PREFIX — c'est-à-dire la liste
+des secrets présents dans l'environnement. Ma normalisation réduisait `[@]` à
+`@` (règle anti-glob), les deux formes devenaient identiques, et j'avais élargi
+l'exemption pour rattraper le faux positif que cela créait. `A=x; for A in
+${!AWS@}; do echo ${!A}; done` déversait donc les clés AWS. Les crochets sont
+désormais préservés par la normalisation et EXIGÉS par l'exemption.
+
+**Une variable LIÉE à l'exécution est aussi inconnue qu'une indirection.**
+`for VAR in`, `select VAR in`, `while read VAR … done <<< …`, `read -u FD VAR`,
+`getopts SPEC VAR` : cinq mécanismes tombés l'un après l'autre. Plutôt que de
+continuer à les énumérer — la leçon du round 13 — la variable liée est marquée
+OPAQUE, et la preuve qu'exige l'indirection échoue d'elle-même.
+
+**`readonly -p` imprime les valeurs**, comme `declare -p`, et n'était pas dans
+la liste des déverseurs. La logique de ces builtins est reprise entière : une
+variable NOMMÉE fait décider par son nom, une AFFECTATION n'imprime rien, et
+sans argument nommé ils DÉVERSENT (`readonly -a` liste les tableaux avec leurs
+valeurs).
+
+**Déni de service** : mon budget d'expansion d'accolades comptait les
+ALTERNATIVES, pas la TAILLE du texte produit. Onze alternatives sur cent
+groupes y tenaient largement tout en produisant des mégaoctets, dont la
+relecture gelait l'agent **vingt secondes par appel d'outil**. Budget en
+caractères ajouté : 0,76 s.
+
+### Moteur — deux manquements à D1, sans effet sur la protection
+Aucune valeur réelle ne sortait ; le modèle recevait simplement une référence
+qu'il ne pouvait plus lire, ce qui est un manquement à D1 (« substituts
+plausibles »).
+- **L'allowlist était sensible à la casse.** `GitHub.com/spf13/cobra` et
+  `LOCALHOST` étaient substitués alors que `github.com/spf13/cobra` et
+  `localhost` sont publics : rien n'était protégé, et le modèle perdait la
+  référence. Une entrée écrite TOUT EN MINUSCULES désigne un identifiant
+  insensible à la casse ; une entrée qui porte une majuscule l'a VOULUE
+  (`Mail.Read` est une permission, pas un mot). La casse de l'entrée déclare
+  elle-même si la casse compte — rien à classifier à la main. Règle dupliquée
+  des deux côtés de la frontière D7, comme le parseur.
+- **Un schéma sans `//` ne porte pas d'autorité.** L'arobase d'un `mailto:`
+  sépare le local du domaine : le prendre pour un userinfo faisait disparaître
+  le schéma ET le local, et le modèle recevait un nom d'hôte là où il y avait
+  une adresse. Idem `data:`, et un dépôt AUTO-HÉBERGÉ retombait sur un simple
+  MOT, que le modèle ne peut ni cloner ni lire comme une URL.
+
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
 (le 4ᵉ vient de la revue adversariale) :

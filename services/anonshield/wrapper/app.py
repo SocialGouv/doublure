@@ -287,7 +287,11 @@ def _allowed(value: str, allow_exact: list[str],
     valeur sort en clair, sans entrée de coffre ni substitut non résolu).
     Elle est donc comptée.
     """
-    if value in allow_exact:
+    # Même règle que `Allowlist.is_exact` de l'autre côté de la frontière D7 :
+    # une entrée tout en minuscules désigne un identifiant insensible à la
+    # casse. Les deux parseurs sont dupliqués, la règle doit l'être aussi.
+    if value in allow_exact or value.lower() in {
+            e for e in allow_exact if e == e.lower()}:
         return "exact"
     for p in allow_patterns:
         if p.fullmatch(value):

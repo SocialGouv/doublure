@@ -832,3 +832,80 @@ def test_residu_un_identifiant_interne_sous_un_prefixe_tiers(valeur):
     est à nous et `streams` non — une question d'INVENTAIRE, pas de forme.
     """
     assert Allowlist.load()(valeur)
+
+
+# --------------------------------------------------------------------------- #
+# Round 15 — utilité et plausibilité (D1), sans effet sur la protection
+#
+# Ces deux défauts ne faisaient sortir aucune valeur réelle. Ils privaient le
+# modèle d'une référence qu'il sait lire, ce qui est un manquement à D1 :
+# un substitut doit être PLAUSIBLE, donc de même nature que l'original.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("valeur, variante", [
+    ("localhost", "Localhost"),
+    ("localhost", "LOCALHOST"),
+    ("github.com/spf13/cobra", "GitHub.com/spf13/cobra"),
+    ("sts.amazonaws.com", "STS.amazonaws.com"),
+    ("kube-system", "Kube-System"),
+])
+def test_une_entree_en_minuscules_est_insensible_a_la_casse(valeur, variante):
+    """Un nom d'hôte ou un chemin d'import ne dépend pas de la casse.
+
+    Substituer `GitHub.com/spf13/cobra` ne protégeait rien — Anthropic ne
+    voyait ni l'une ni l'autre forme — et privait le modèle de la référence.
+    """
+    from anonproxy.allowlist import Allowlist
+    liste = Allowlist.load()
+    assert liste(valeur) and liste(variante), variante
+
+
+def test_une_entree_avec_majuscule_reste_sensible_a_la_casse():
+    """`Mail.Read` est une permission Microsoft Graph, pas un mot : la casse de
+    l'entrée déclare elle-même si la casse compte."""
+    from anonproxy.allowlist import Allowlist
+    liste = Allowlist(exact={"Mail.Read", "localhost"}, patterns=[])
+    assert liste("Mail.Read") and not liste("mail.read")
+    assert liste("LOCALHOST")
+
+
+@pytest.mark.parametrize("typ, valeur, prefixe", [
+    # Un schéma sans `//` ne porte pas d'autorité : l'arobase d'un `mailto:`
+    # sépare le local du domaine, ce n'est pas un userinfo. Le traiter comme
+    # tel faisait disparaître le schéma ET le local, et le modèle recevait un
+    # nom d'hôte là où il y avait une adresse.
+    ("URL", "mailto:alice@acme.internal", "mailto:"),
+    ("URL", "data:text/plain;base64,SGVsbG8=", "data:text/plain;base64,"),
+])
+def test_un_uri_sans_autorite_garde_sa_structure(tmp_path, typ, valeur, prefixe):
+    from anonproxy.allowlist import Allowlist
+    eng = SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER),
+                          master_key=MASTER, scope_key="project:r15",
+                          is_public=Allowlist.load().is_exact)
+    rendu = eng.substitute_value(typ, valeur)
+    assert rendu.startswith(prefixe), rendu
+    assert "acme" not in rendu and "alice" not in rendu
+
+
+def test_un_depot_auto_heberge_garde_la_forme_d_une_url(tmp_path):
+    """Sans hôte public reconnu, un dépôt retombait sur un simple MOT — que le
+    modèle ne peut ni cloner ni lire comme une URL."""
+    from anonproxy.allowlist import Allowlist
+    eng = SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER),
+                          master_key=MASTER, scope_key="project:r15",
+                          is_public=Allowlist.load().is_exact)
+    rendu = eng.substitute_value("REPO", "https://code.acme.internal/team/outil")
+    assert rendu.startswith("https://") and rendu.count("/") >= 4, rendu
+    for fragment in ("acme", "team", "outil"):
+        assert fragment not in rendu, rendu
+
+
+def test_une_forme_ssh_garde_son_userinfo_retire(tmp_path):
+    """Contrôle D4 : l'exemption ne vaut QUE pour les schémas sans autorité."""
+    from anonproxy.allowlist import Allowlist
+    eng = SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER),
+                          master_key=MASTER, scope_key="project:r15",
+                          is_public=Allowlist.load().is_exact)
+    rendu = eng.substitute_value("URL", "https://oauth2:ghp_jeton@github.com/o/d")
+    assert "ghp_jeton" not in rendu and "oauth2" not in rendu, rendu

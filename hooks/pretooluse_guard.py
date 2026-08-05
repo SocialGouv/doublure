@@ -100,7 +100,8 @@ SENSITIVE_FILE_PATTERNS: tuple[str, ...] = (
 #: bloqués. Seule exception : `env VAR=x cmd`, qui est un préfixe
 #: d'exécution — reconnu par la présence d'un argument `NOM=valeur`.
 ENV_DUMP_PROGRAMS = frozenset(
-    {"env", "printenv", "set", "export", "declare", "typeset", "compgen"})
+    {"env", "printenv", "set", "export", "declare", "typeset", "readonly",
+     "compgen"})
 
 #: Interpréteurs et binaires capables d'ouvrir une socket : impossible de tous
 #: les énumérer, d'où le rappel que la réponse définitive est le pare-feu (D9).
@@ -334,9 +335,10 @@ _REF_INDIRECTE_RE = re.compile(
 
 #: `${!arr[@]}` et `${!arr[*]}` rendent les INDICES d'un tableau : aucune
 #: valeur de variable n'en sort. C'est la seule forme d'indirection inoffensive.
-#: La normalisation des classes de glob réduit `[@]` à `@` : les deux
-#: formes doivent être reconnues.
-_INDICES_TABLEAU_RE = re.compile(r"\$\{!\s*[A-Za-z_]\w*(?:\[[@*]\]|[@*])\}")
+#: Les CROCHETS sont exigés : `${!arr[@]}` rend les indices d'un tableau,
+#: mais `${!PREFIX@}` énumère les NOMS des variables commençant par PREFIX —
+#: c'est-à-dire la liste des secrets présents dans l'environnement.
+_INDICES_TABLEAU_RE = re.compile(r"\$\{!\s*[A-Za-z_]\w*\[[@*]\]\}")
 
 #: Référence par ALIAS : `declare -n r=AWS_SECRET_ACCESS_KEY; echo $r`. Même
 #: mécanisme que la référence indirecte, autre syntaxe — et `$r` ne porte
@@ -355,6 +357,23 @@ _NAMEREF_RE = re.compile(
 _AFFECTATION_RE = re.compile(r"\b([A-Za-z_]\w*)=([^\s|;&]*)")
 _PRINTF_V_RE = re.compile(r"\bprintf\b(?:\s+-\S+)*\s+-v\s+([A-Za-z_]\w*)\s+([^|;&\n]*)")
 _READ_RE = re.compile(r"\bread\b(?:\s+-\S+)*\s+([A-Za-z_]\w*)\s*<<<\s*([^|;&\n]*)")
+
+#: Constructions qui LIENT une variable à l'exécution : la valeur vient d'une
+#: liste, d'une entrée standard, d'un descripteur, d'une ligne d'options. Le
+#: nom qu'elle portera est donc aussi inconnu que celui d'une indirection.
+#: Énumérer ces mécanismes est sans fin — `for`, `select`, `while read … done
+#: <<< …`, `read -u`, `getopts` sont tombés l'un après l'autre — alors on
+#: marque la variable OPAQUE, et la preuve exigée par l'indirection échoue.
+_LIAISON_OPAQUE_RE = re.compile(
+    r"\bfor\s+([A-Za-z_]\w*)\s+in\b"
+    r"|\bselect\s+([A-Za-z_]\w*)\s+in\b"
+    r"|\bgetopts\s+\S+\s+([A-Za-z_]\w*)")
+
+#: `read` lie TOUS les noms qui la suivent, et ses options peuvent porter une
+#: valeur variable (`read -u $COPROC A`) : exiger le nom juste après les
+#: options ratait le descripteur intercalé.
+_LIAISON_READ_RE = re.compile(
+    r"\bread\b((?:\s+(?:-\S+|\$\S+|[A-Za-z_]\w*))*)")
 
 #: Membre droit dont la valeur n'est pas connue avant l'exécution.
 _VALEUR_OPAQUE_RE = re.compile(r"\$\(|`|" + _MARQUEUR_SUBSTITUTION)
@@ -410,6 +429,12 @@ def _variable_sensible(normalized: str) -> str | None:
     for motif in (_AFFECTATION_RE, _PRINTF_V_RE, _READ_RE):
         for nom, valeur in motif.findall(normalized):
             affectations.setdefault(nom, []).extend(valeur.split() or [""])
+    opaques = {nom for groupe in _LIAISON_OPAQUE_RE.findall(normalized)
+               for nom in groupe if nom}
+    for suite_read in _LIAISON_READ_RE.findall(normalized):
+        opaques.update(m for m in suite_read.split()
+                       if re.fullmatch(r"[A-Za-z_]\w*", m))
+
     def _prouve_inoffensif(depart: str, exige_une_affectation: bool) -> bool:
         """Suit la chaîne d'affectations et prouve que le nom lu est anodin."""
         vus: set[str] = set()
@@ -419,7 +444,7 @@ def _variable_sensible(normalized: str) -> str | None:
             if cible in vus:
                 continue
             vus.add(cible)
-            if _nom_sensible(cible):
+            if _nom_sensible(cible) or cible in opaques:
                 return False
             valeurs = affectations.get(cible)
             if not valeurs:
@@ -580,6 +605,11 @@ _ACCOLADES_RE = re.compile(r"\{(?P<alts>[^{}$\s]*,[^{}$\s]*)\}")
 #: agent sans écrire la moindre commande interdite.
 _BUDGET_ACCOLADES = 64
 
+#: Et la TAILLE du texte produit. Le seul compte des alternatives laissait
+#: `{a,…,k}` répété cinquante fois tenir dans le budget tout en produisant des
+#: mégaoctets : c'est leur RELECTURE qui coûtait, jusqu'au gel de l'agent.
+_BUDGET_CARACTERES = 16384
+
 
 def _expanser_mot(mot: str, profondeur: int = 0,
                   budget: list[int] | None = None) -> str:
@@ -589,12 +619,13 @@ def _expanser_mot(mot: str, profondeur: int = 0,
     donne `curl autrechose http://tiers/` — curl s'exécute bel et bien.
     """
     if budget is None:
-        budget = [_BUDGET_ACCOLADES]
+        budget = [_BUDGET_ACCOLADES, _BUDGET_CARACTERES]
     trouve = _ACCOLADES_RE.search(mot)
-    if not trouve or profondeur > 4 or budget[0] <= 0:
+    if not trouve or profondeur > 4 or budget[0] <= 0 or budget[1] <= 0:
         return mot
     alternatives = trouve.group("alts").split(",")
     budget[0] -= len(alternatives)
+    budget[1] -= len(mot) * len(alternatives)
     avant, apres = mot[:trouve.start()], mot[trouve.end():]
     return " ".join(
         _expanser_mot(avant + alt + apres, profondeur + 1, budget)
@@ -610,7 +641,7 @@ def _expanser_accolades(texte: str) -> str:
     long qui n'en contient aucune : vingt mille caractères coûtaient sept
     secondes, de quoi noyer un agent sans écrire une seule commande interdite.
     """
-    budget = [_BUDGET_ACCOLADES]
+    budget = [_BUDGET_ACCOLADES, _BUDGET_CARACTERES]
     morceaux = re.split(r"(\s+)", texte)
     return "".join(
         mot if i % 2 or "{" not in mot or "," not in mot
@@ -731,7 +762,10 @@ def normalize(command: str) -> str:
     # y compris sous forme indirecte (`e${!q}nv`).
     out = re.sub(r"(?<=\w)\$\{!?[A-Za-z_]\w*\}(?=\w)", "", out)
     out = out.replace("''", "").replace('""', "")
-    out = re.sub(r"\[([^\]/])\]", r"\1", out)     # glob [o] → o
+    # `[@]` et `[*]` sont des indices de TABLEAU, pas des classes de glob :
+    # les réduire confondait `${!arr[@]}` (les indices) avec `${!PREFIX@}`,
+    # qui ÉNUMÈRE les noms de variables commençant par PREFIX.
+    out = re.sub(r"\[([^\]/@*])\]", r"\1", out)   # glob [o] → o
     # `\$` est un dollar LITTÉRAL : bash n'y voit aucune expansion. Le
     # réduire à `$` transformait `grep '\${!x}'` en une vraie indirection.
     out = out.replace("\\$", "")
@@ -1047,16 +1081,26 @@ def _est_deversement(base: str, tokens: list[str], idx: int) -> bool:
     arguments = [t for t in suite if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", t)]
     if base == "set":
         return not options  # `set -e` : mode strict ; `set > f` : déversement
-    if base in ("declare", "typeset", "export"):
+    if base in ("declare", "typeset", "export", "readonly"):
+        nommes = [t for t in suite if not t.startswith(("-", "+"))]
+        # `readonly TAG=v1.2.3` AFFECTE, il n'imprime rien.
+        if any("=" in t for t in nommes):
+            return False
         # Les options courtes se COMBINENT : `-px` vaut `-p -x`, et l'égalité
         # stricte les ratait toutes.
         courtes = [t for t in options if not t.startswith("--")]
+        if nommes:
+            # Une variable est NOMMÉE : `declare -p AWS_…` l'imprime,
+            # `declare -a mon_tableau` la déclare. Seul son nom décide.
+            return any(_nom_sensible(t) for t in nommes) and any(
+                set(t.lstrip("-")) & {"p", "x", "a", "A"} for t in courtes)
         # `-f` et `-F` portent sur les FONCTIONS : `declare -pF` ne liste que
         # des noms de fonctions, aucune valeur.
         if any(set(t.lstrip("-")) & {"f", "F"} for t in courtes):
             return False
-        return not options or any(
-            set(t.lstrip("-")) & {"p", "x"} for t in courtes)
+        # Sans variable nommée, ces builtins DÉVERSENT : `readonly -a` liste
+        # les tableaux en lecture seule AVEC leurs valeurs, comme `declare -p`.
+        return True
     if _MARQUEUR_SUBSTITUTION in suite:
         # Le nom de la variable est produit à l'exécution : il peut être
         # n'importe lequel. Fail-closed.
