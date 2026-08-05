@@ -1567,3 +1567,71 @@ def test_regression_une_indirection_par_element_de_tableau_est_refusee(command,
 ])
 def test_le_durcissement_du_round16_n_ajoute_pas_de_faux_positifs(command, audit_log):
     assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# Le hook doit REFUSER quand il ne peut pas décider
+#
+# `main()` ne rattrapait que `JSONDecodeError` : toute autre exception faisait
+# sortir le hook en erreur SANS écrire de décision, et l'outil s'exécutait.
+# C'est le seul mode d'échec du hook qui OUVRE le canal au lieu de le fermer,
+# et seize rounds de revue adversariale ne l'ont pas vu — les agents testaient
+# des décisions, jamais des plantages.
+# --------------------------------------------------------------------------- #
+
+
+def _hook_sabote(tmp_path):
+    """Copie du hook dont l'analyse lève une exception."""
+    source = HOOK.read_text(encoding="utf-8")
+    ancre = "def check_bash(command: str, _profondeur: int = 0) -> str | None:"
+    assert ancre in source
+    sabote = tmp_path / "hook_sabote.py"
+    sabote.write_text(
+        source.replace(ancre, ancre + "\n    raise RuntimeError('panne')", 1),
+        encoding="utf-8")
+    return sabote
+
+
+def test_une_exception_dans_l_analyse_refuse_la_commande(tmp_path, audit_log):
+    sabote = _hook_sabote(tmp_path)
+    proc = subprocess.run(
+        [sys.executable, str(sabote)],
+        input=json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                          "tool_input": {"command": "ls -la"},
+                          "session_id": "test"}),
+        capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(audit_log.parent),
+             "ANONPROXY_AUDIT_LOG": str(audit_log)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip(), "aucune décision écrite : l'outil s'exécuterait"
+    assert is_denied(json.loads(proc.stdout))
+
+
+def test_un_evenement_illisible_refuse_la_commande(audit_log):
+    proc = subprocess.run(
+        [sys.executable, str(HOOK)], input="ceci n'est pas du JSON",
+        capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(audit_log.parent),
+             "ANONPROXY_AUDIT_LOG": str(audit_log)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip(), "aucune décision écrite : l'outil s'exécuterait"
+    assert is_denied(json.loads(proc.stdout))
+
+
+def test_un_refus_pour_panne_est_trace(tmp_path, audit_log):
+    """Une panne de l'analyse doit laisser une trace : sinon elle est muette."""
+    sabote = _hook_sabote(tmp_path)
+    subprocess.run(
+        [sys.executable, str(sabote)],
+        input=json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                          "tool_input": {"command": "ls -la"},
+                          "session_id": "test"}),
+        capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": str(audit_log.parent),
+             "ANONPROXY_AUDIT_LOG": str(audit_log)},
+    )
+    lignes = [json.loads(l) for l in audit_log.read_text().splitlines() if l.strip()]
+    assert any(e["decision"] == "deny" and "analyse impossible" in e["reason"]
+               for e in lignes), lignes

@@ -1482,11 +1482,36 @@ def evaluate(event: dict) -> tuple[dict, str | None]:
 def main() -> int:
     try:
         event = json.load(sys.stdin)
-    except json.JSONDecodeError as exc:
-        print(f"anonproxy: événement PreToolUse illisible : {exc}", file=sys.stderr)
-        return 1
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        # Un événement illisible n'est PAS une autorisation : sortir en erreur
+        # sans décision laissait l'outil s'exécuter.
+        json.dump(deny(f"événement PreToolUse illisible ({type(exc).__name__})"),
+                  sys.stdout)
+        return 0
 
-    decision, reason = evaluate(event)
+    try:
+        decision, reason = evaluate(event)
+    except Exception as exc:  # noqa: BLE001 — le refus prime sur le diagnostic
+        # FAIL-CLOSED. Une exception inattendue faisait sortir le hook en
+        # erreur SANS écrire de décision, et l'outil s'exécutait : le seul
+        # mode d'échec du hook qui ouvre le canal au lieu de le fermer.
+        # Quatorze rounds de revue adversariale ne l'ont pas vu — ils
+        # testaient des décisions, jamais des plantages.
+        print(f"anonproxy: analyse impossible ({type(exc).__name__}: {exc})",
+              file=sys.stderr)
+        decision = deny("l'analyse de sécurité a échoué : la commande est "
+                        "refusée en l'état")
+        reason = f"analyse impossible ({type(exc).__name__})"
+        try:
+            audit({"ts": round(time.time(), 3),
+                   "tool": event.get("tool_name", ""),
+                   "session": event.get("session_id", ""),
+                   "decision": "deny", "reason": reason,
+                   "input": event.get("tool_input", {}), "digest": None})
+        except Exception:  # noqa: BLE001 — journaliser ne doit pas rouvrir
+            pass
+        json.dump(decision, sys.stdout)
+        return 0
     payload = event.get("tool_input", {})
     audit({
         "ts": round(time.time(), 3),
