@@ -24,6 +24,7 @@ import unicodedata
 from typing import Any, Callable
 from urllib.parse import unquote_plus
 
+from ..policy import Decision, Policy
 from ..vault import SurrogateConflict, Vault
 from .canonical import (
     INTERNAL_SUFFIXES_LONGEST_FIRST,
@@ -104,9 +105,14 @@ class SurrogateEngine:
     """
 
     def __init__(self, vault: Vault, master_key: str, scope_key: str,
-                 is_public: Callable[[str], bool] | None = None):
+                 is_public: Callable[[str], bool] | None = None,
+                 policy: "Policy | None" = None):
         self.vault = vault
         self.scope_key = scope_key
+        #: Politique de confidentialité. Absente = tout est anonymisé, ce qui
+        #: est aussi le défaut quand elle est présente : elle ne peut
+        #: qu'OUVRIR, jamais fermer davantage.
+        self.policy = policy
         #: Prédicat « cette sous-partie est publique » — l'allowlist §6. Le
         #: détecteur l'applique aux entités entières ; il faut la consulter à
         #: nouveau ici, sur les COMPOSANTS d'une valeur composite (tag d'image,
@@ -163,6 +169,16 @@ class SurrogateEngine:
         key_type = f"canon:{canon.kind}:{etype}" if canon.kind == "generic" else f"canon:{canon.kind}"
         stored = _display_value(canon, value)
 
+        # POLITIQUE — le seul endroit d'où une valeur réelle peut ressortir.
+        # Consultée APRÈS la canonicalisation, pour qu'une décision prise sur
+        # `DB-01.acme.internal` vaille aussi pour `db-01.acme.internal`, et
+        # APRÈS la branche SECRET, qui n'est jamais révélable (D4).
+        source = None
+        if self.policy is not None:
+            decision, source = self.policy.decide(etype, klass.value, stored)
+            if decision is Decision.REVELER:
+                return value
+
         known = self.vault.get_surrogate(self.scope_key, key_type, stored)
         if known is not None:
             return known
@@ -172,9 +188,16 @@ class SurrogateEngine:
             if candidate == value or candidate == stored:
                 continue  # jamais l'identité : ce serait une fuite silencieuse
             try:
-                return self.vault.bind(self.scope_key, key_type, stored, candidate)
+                surrogate = self.vault.bind(self.scope_key, key_type, stored, candidate)
             except SurrogateConflict:
                 continue
+            if self.policy is not None and source is None:
+                # Aucune règle ne couvrait cette valeur : on a anonymisé (le
+                # défaut), et on consigne la question. Elle ne bloque rien —
+                # l'opérateur la tranchera quand il voudra, et sa réponse ne
+                # vaudra que pour la suite.
+                self.policy.en_attente(etype, klass.value, stored, surrogate)
+            return surrogate
         raise SurrogateCollisionError(
             f"aucun substitut libre après {MAX_ATTEMPTS} tentatives "
             f"(type={etype!r}, portée={self.scope_key!r})"

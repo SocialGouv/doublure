@@ -38,6 +38,7 @@ from ..allowlist import Allowlist  # noqa: E402
 from ..config import Settings, read_master_key  # noqa: E402
 from ..detect import DetectClient, DetectionUnavailable  # noqa: E402
 from ..pipeline import Pseudonymizer  # noqa: E402
+from ..policy import Policy  # noqa: E402
 from ..sse import (  # noqa: E402
     FluxSSEInvalide, encode_sse, iter_blocks, parse_sse_block,
 )
@@ -62,6 +63,10 @@ class ProxyState:
         # Lue une seule fois : elle scelle le coffre ET dérive les substituts.
         master = read_master_key(settings.master_key_file)
         self.vault = Vault(settings.vault_path, master_key=master)
+        self.policy = Policy(
+            racine=settings.policy_dir, master_key=master,
+            scope_key=settings.scope_key, session=settings.session_id,
+        )
         self.engine = SurrogateEngine(
             vault=self.vault,
             master_key=master,
@@ -69,6 +74,7 @@ class ProxyState:
             # `.is_exact` et non l'allowlist entière : une règle de FORME
             # n'a pas de sens sur une sous-partie (cf. allowlist.py).
             is_public=Allowlist.load(settings.allowlist_file).is_exact,
+            policy=self.policy,
         )
         self.detector = DetectClient(
             settings.detect_url, regex_threshold=settings.regex_threshold

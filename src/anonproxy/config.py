@@ -33,6 +33,11 @@ class Settings:
     ca_bundle: str | None
     #: Allowlist §6, partagée avec le service de détection.
     allowlist_file: Path
+    #: Racine des politiques de confidentialité (une par portée).
+    policy_dir: Path
+    #: Identifiant de session : la portée la plus proche, celle qui prime.
+    #: Absent = deux couches seulement (global → projet).
+    session_id: str | None
 
     @staticmethod
     def from_env() -> "Settings":
@@ -57,6 +62,8 @@ class Settings:
                 os.environ.get("ANON_ALLOWLIST_FILE",
                                Path(__file__).resolve().parents[2] / "config/allowlist.txt")
             ),
+            policy_dir=Path(os.environ.get("ANONPROXY_POLICY_DIR", STATE_DIR / "policy")),
+            session_id=os.environ.get("ANONPROXY_SESSION") or None,
         )
 
 
