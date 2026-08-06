@@ -54,7 +54,17 @@ tasks:
     desc: Build the Go binaries
     cmds:
       - go build -C {{.GO_DIR}} -o ../{{.BIN_DIR}}/anonproxy-control ./cmd/anonproxy-control
+      - go build -C {{.GO_DIR}} -o ../{{.BIN_DIR}}/anonproxy-guard ./cmd/anonproxy-guard
       - echo "built into {{.BIN_DIR}}/"
+
+  test:guard:
+    desc: Replay the hook suite against the Go guard binary
+    deps: [build]
+    cmds:
+      # The 734 tests are the deliverable of the port: they encode nineteen
+      # adversarial rounds and not one of them changes to accommodate Go.
+      - ANONPROXY_HOOK_BIN={{.ROOT_DIR}}/{{.BIN_DIR}}/anonproxy-guard
+        uv run pytest tests/test_pretooluse_hook.py -q
 
   fmt:
     desc: Format Go sources
