@@ -160,6 +160,14 @@ NETWORK_CAPABLE = frozenset({
 #: Chemins pseudo-fichiers ouvrant une socket dans le shell.
 _SHELL_SOCKET_RE = re.compile(r"/dev/(tcp|udp)/", re.I)
 
+#: Connexion à une SOCKET UNIX. L'URL qui l'accompagne est décorative : la
+#: destination est la socket, pas l'hôte. L'exemption « URL locale » — faite
+#: pour laisser l'agent joindre le détecteur du projet — n'a donc rien à
+#: exempter ici, et elle ouvrait l'accès à l'API d'arbitrage, qui rend les
+#: valeurs RÉELLES du coffre. C'est le motif de l'EXEMPTION QUI DÉBORDE :
+#: une garde écrite pour un usage en couvre un autre, non prévu.
+_SOCKET_UNIX_RE = re.compile(r"--(abstract-)?unix-socket(=|$)")
+
 #: Appels réseau embarqués dans un interpréteur (`python3 -c …`, `node -e …`).
 #: Lecture de l'environnement depuis un interpréteur : `env` est bloqué, mais
 #: `node -e process.env` ou `perl -e %ENV` faisaient exactement la même chose.
@@ -1622,7 +1630,8 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
                     return (f"`{base}` reçoit un argument produit par une "
                             "substitution : la destination n'est pas vérifiable (D9)")
                 urls = re.findall(r"[a-z]+://[^\s'\"]+", " ".join(tokens), re.I)
-                if urls and all(_is_local_url(u) for u in urls):
+                if urls and all(_is_local_url(u) for u in urls) \
+                        and not any(_SOCKET_UNIX_RE.match(t) for t in tokens):
                     continue  # services locaux du projet
                 return f"`{base}` peut sortir sur le réseau sans passer par le proxy (D9)"
     return None

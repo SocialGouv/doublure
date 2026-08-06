@@ -121,7 +121,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**2743 tests verts** (2725 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**2767 tests verts** (2749 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -1126,6 +1126,33 @@ qu'apprendre au modèle à composer avec l'artefact — ce qu'on a mesuré comme
 défaillant. Et faire dépendre la protection de la coopération du modèle est
 l'anti-patron §7. L'annonce, elle, est du prompt engineering embarqué assumé :
 elle INFORME, elle ne protège pas — et c'est elle qui a trouvé deux des trois.
+
+## Round 19 (2026-08-06) — API d'arbitrage, et l'exemption qui débordait
+`src/anonproxy/policy_api.py` sert l'interface (extension VSCode/VSCodium dans
+`extension/`, JavaScript simple, sans étape de compilation). **Surface de
+contrôle, jamais point d'application** : désinstaller l'interface ne doit rien
+ouvrir — c'est le test de conception à repasser à chaque ajout, sinon on
+réintroduit l'anti-patron §7 en costume d'IDE.
+
+**Socket UNIX, jamais un port.** L'API affiche les valeurs RÉELLES — c'est sa
+raison d'être. Or l'agent tourne sur la même machine et le hook laisse passer
+le loopback : un port aurait rouvert la mitigation du gap §3.5, l'agent lisant
+le coffre par HTTP au lieu du fichier. Prix assumé : un navigateur ne parle pas
+aux sockets Unix, donc l'idée d'une page locale ouverte dans l'IDE tombe —
+l'interface doit être un vrai client (Node le fait nativement).
+
+**CONTOURNEMENT que j'allais livrer, trouvé en me méfiant d'un test qui
+PASSAIT.** L'E2E refusait bien la socket, mais au titre de la « sortie
+réseau » : un refus obtenu par accident se contourne. Avec
+`curl --unix-socket … http://localhost/questions`, l'exemption « URL locale »
+— écrite pour que l'agent joigne le détecteur du projet — s'appliquait, et
+l'agent lisait le coffre. Trois formes passaient, dont
+`--abstract-unix-socket`. Avec un drapeau de socket, l'URL est DÉCORATIVE : la
+destination est la socket. C'est le motif de **l'EXEMPTION QUI DÉBORDE**, le
+même qu'au round 15.
+
+Leçon à garder : **un refus obtenu pour la mauvaise raison n'est pas un
+refus.** Vérifier POURQUOI un test passe, pas seulement qu'il passe.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales

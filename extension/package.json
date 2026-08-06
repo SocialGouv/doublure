@@ -1,0 +1,41 @@
+{
+  "name": "anonproxy-arbitrage",
+  "displayName": "anonproxy — arbitrage de confidentialité",
+  "description": "Voir ce que le proxy a anonymisé, et trancher. Surface de contrôle uniquement : la protection reste dans le proxy.",
+  "version": "0.1.0",
+  "publisher": "anonproxy",
+  "license": "GPL-3.0-or-later",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      {
+        "command": "anonproxy.arbitrer",
+        "title": "anonproxy : arbitrer les valeurs anonymisées",
+        "category": "anonproxy"
+      },
+      {
+        "command": "anonproxy.mode",
+        "title": "anonproxy : changer de mode",
+        "category": "anonproxy"
+      }
+    ],
+    "configuration": {
+      "title": "anonproxy",
+      "properties": {
+        "anonproxy.socket": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Chemin de la socket d'arbitrage. Vide = celui du répertoire d'état, que le lanceur imprime au démarrage.\n\nC'est une **socket Unix** et non un port : un port local serait joignable par l'agent lui-même, et cette API affiche les valeurs réelles."
+        },
+        "anonproxy.intervalleSondage": {
+          "type": "number",
+          "default": 3,
+          "description": "Secondes entre deux relevés. L'API n'a pas de canal de notification : l'extension interroge."
+        }
+      }
+    }
+  }
+}

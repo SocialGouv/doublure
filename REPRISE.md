@@ -86,16 +86,17 @@ en §3 ; les listes à donner aux agents sont en §4 et §5.
 
 ## 2. Où en est le code
 
-**2743 tests verts** (2725 unitaires + 18 egress). Les six phases ont leur
+**2767 tests verts** (2749 unitaires + 18 egress). Les six phases ont leur
 critère de sortie prouvé (détail : `CLAUDE.md`).
 
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 2725
+uv run pytest tests/ --ignore=tests/egress   # 2749
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session RÉELLE + capture
 bash tests/phase4_e2e.sh                     # commande interdite bloquée
 bash tests/policy_e2e.sh                     # politique, modes, arbitrage
+bash tests/api_e2e.sh                        # API d'arbitrage sur socket Unix
 uv run python tests/detect_latency.py        # P95 < 150 ms
 ```
 Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
