@@ -171,13 +171,30 @@ coffre) : `docs/d9-blocage-reseau.md`.
 **Tant que ce n'est pas déployé ainsi, D9 n'est pas tenue** : le harnais
 d'egress détecte, il n'empêche pas. À énoncer tel quel au DPO.
 
-## Comment lancer (ordre)
+## Outillage — `devbox install && task`
 ```bash
-services/anonshield/wrapper/install-cuda.sh   # après tout uv sync dans upstream/
-services/anonshield/wrapper/run.sh            # détecteur :9000 (GPU)
-scripts/run-proxy.sh                          # proxy :8090
-ANTHROPIC_BASE_URL=http://127.0.0.1:8090 claude
+devbox install        # chaîne d'outils épinglée : uv, go, node, task, curl, jq
+devbox shell          # ou `devbox run -- task …` sans entrer dans le shell
+task                  # liste TOUT ce qu'on peut lancer
 ```
+
+**`Taskfile.yml` est la référence des commandes.** Ne pas recopier ici une
+invocation qu'il contient : c'est précisément ce qui avait divergé — l'ordre de
+lancement documenté ne correspondait plus aux scripts. Ce fichier dit le
+POURQUOI et l'état ; le Taskfile dit le COMMENT.
+
+Ordre de lancement : `task detector` (le laisser tourner) → `task proxy` →
+`task session`. Arbitrage : `task control` puis l'extension, ou `task policy --
+questions`.
+
+**Deux choses volontairement HORS de devbox**, parce qu'elles dépendent du
+matériel ou d'un lock étranger :
+- le **détecteur** (pilote NVIDIA + torch CUDA) vit dans son propre venv ;
+  relancer `services/anonshield/wrapper/install-cuda.sh` après TOUT
+  `uv sync`/`uv run` dans `upstream/` (le piège uv, cf. plus bas) ;
+- **Python** appartient à `uv`, pas à devbox. Les deux se disputaient le
+  `.venv` à chaque entrée dans le shell : deux gestionnaires pour une même
+  chose, aucun ne gagne.
 
 ## Quatrième revue adversariale (2026-08-03, round 3 — 3 agents opus effort max)
 Deux fuites SORTANTES et deux fuites du hook, toutes corrigées avec

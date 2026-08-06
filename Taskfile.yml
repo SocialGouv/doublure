@@ -1,0 +1,151 @@
+# Every command this project needs, in one place.
+#
+# Before this file the same invocations lived in shell scripts, in CLAUDE.md
+# and in my head, and they had already drifted apart — the documented launch
+# order no longer matched the scripts. A task that is run is a task that stays
+# true.
+#
+#   task            list everything
+#   task test       the unit suites
+#   task proofs     the end-to-end proofs (need the detector)
+#
+# The DETECTOR is deliberately absent from devbox: it needs the NVIDIA driver
+# and a CUDA build of torch, which a Nix shell cannot pin here. It runs from
+# its own virtualenv — see `task detector`.
+version: "3"
+
+silent: true
+
+vars:
+  GO_DIR: go
+  BIN_DIR: go/bin
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  # ---------------------------------------------------------------- services
+
+  detector:
+    desc: Detection service (AnonShield, GPU) — port 9000, keep it running
+    cmds:
+      - services/anonshield/wrapper/run.sh
+
+  proxy:
+    desc: Pseudonymisation proxy — port 8090, needs the detector
+    cmds:
+      - scripts/run-proxy.sh
+
+  control:
+    desc: Control service (Go) — arbitration API on a Unix socket
+    cmds:
+      - scripts/run-control.sh
+
+  session:
+    desc: Start a Claude Code session through the proxy
+    cmds:
+      - ANTHROPIC_BASE_URL=http://127.0.0.1:8090 claude
+
+  # ------------------------------------------------------------------- build
+
+  build:
+    desc: Build the Go binaries
+    cmds:
+      - go build -C {{.GO_DIR}} -o ../{{.BIN_DIR}}/anonproxy-control ./cmd/anonproxy-control
+      - echo "built into {{.BIN_DIR}}/"
+
+  fmt:
+    desc: Format Go sources
+    cmds:
+      - gofmt -w {{.GO_DIR}}
+
+  # ------------------------------------------------------------------- tests
+
+  test:
+    desc: Unit suites (Python and Go)
+    deps: [test:py, test:go]
+
+  test:py:
+    desc: Python unit suite
+    cmds:
+      - uv run pytest tests/ --ignore=tests/egress
+
+  test:go:
+    desc: Go vet, formatting check and tests
+    cmds:
+      - go vet -C {{.GO_DIR}} ./...
+      - test -z "$(gofmt -l {{.GO_DIR}})" || { gofmt -l {{.GO_DIR}}; exit 1; }
+      - go test -C {{.GO_DIR}} ./...
+
+  test:egress:
+    desc: Egress harness unit tests
+    cmds:
+      - uv run pytest tests/egress/test_report.py
+
+  # ------------------------------------------------------------------ proofs
+  #
+  # These are the exit criteria. They start real processes and, for two of
+  # them, a real Claude Code session — three defects were only ever found by
+  # them, never by the unit suites.
+
+  proofs:
+    desc: All end-to-end proofs (detector must be running)
+    cmds:
+      - task: proof:policy
+      - task: proof:control
+      - task: proof:phase4
+      - task: proof:phase3
+
+  proof:policy:
+    desc: Policy, modes and arbitration
+    cmds:
+      - bash tests/policy_e2e.sh
+
+  proof:control:
+    desc: Go control service, socket and event stream
+    cmds:
+      - bash tests/control_e2e.sh
+
+  proof:phase3:
+    desc: Real session — no real value in the captured egress
+    cmds:
+      - bash tests/phase3_e2e.sh
+
+  proof:phase4:
+    desc: Real session — a forbidden command is blocked before it runs
+    cmds:
+      - bash tests/phase4_e2e.sh
+
+  # ------------------------------------------------------------- measurement
+
+  bench:corpus:
+    desc: Golden-corpus evaluation (leak, recall, false positives, variance)
+    cmds:
+      - uv run python tests/corpus_eval.py
+
+  bench:latency:
+    desc: Detection latency, P95 against the 150 ms budget
+    cmds:
+      - uv run python tests/detect_latency.py
+
+  bench:parser:
+    desc: Inputs the bash grammar still refuses
+    cmds:
+      - uv run python tests/ab_decoupage.py
+
+  # -------------------------------------------------------------------- demo
+
+  demo:
+    desc: Sandbox for a real session (own vault, own key)
+    cmds:
+      - '{{.DEMO_DIR}}/start.sh {{.CLI_ARGS}}'
+    vars:
+      DEMO_DIR:
+        sh: echo "${ANONPROXY_DEMO:-$HOME/lab/ai/anonproxy-demo}"
+
+  policy:
+    desc: 'Policy manager — e.g. task policy -- questions'
+    cmds:
+      - uv run python scripts/anonproxy_policy.py {{.CLI_ARGS}}

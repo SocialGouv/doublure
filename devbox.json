@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.5/.schema/devbox.schema.json",
+  "packages": {
+    "uv": "latest",
+    "go": "latest",
+    "nodejs": "24",
+    "go-task": "latest",
+    "curl": "latest",
+    "openssl": "latest",
+    "jq": "latest"
+  },
+  "shell": {
+    "init_hook": [
+      "echo 'anonproxy \u2014 run `task` to list what you can do.'",
+      "echo 'The detector needs the NVIDIA driver and lives outside this shell (see CLAUDE.md).'"
+    ],
+    "scripts": {
+      "test": [
+        "task test"
+      ],
+      "proofs": [
+        "task proofs"
+      ]
+    }
+  }
+}

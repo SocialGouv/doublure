@@ -15,3 +15,6 @@ __pycache__/
 
 # Venv jetable des essais de modèles (transformers >= 5, hors du lock projet)
 .venv-pf/
+
+# devbox — environnement local (nix), jamais committé
+.devbox/
