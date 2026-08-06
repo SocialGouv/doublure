@@ -86,11 +86,11 @@ en §3 ; les listes à donner aux agents sont en §4 et §5.
 
 ## 2. Où en est le code
 
-**1273 tests verts** (1255 unitaires + 18 egress). Les six phases ont leur
+**2727 tests verts** (2709 unitaires + 18 egress). Les six phases ont leur
 critère de sortie prouvé (détail : `CLAUDE.md`).
 
 ```bash
-uv run pytest tests/ --ignore=tests/egress   # 1255
+uv run pytest tests/ --ignore=tests/egress   # 2709
 uv run pytest tests/egress/test_report.py    # 18
 uv run python tests/corpus_eval.py           # 6 critères durs
 bash tests/phase3_e2e.sh                     # session RÉELLE + capture

@@ -4,6 +4,39 @@ Proxy bidirectionnel : identifiants sensibles → substituts plausibles en sorti
 restauration transparente au retour. L'opérateur voit le réel ; Anthropic n'en
 voit rien.
 
+## Philosophie (énoncée par jo le 2026-08-06) — elle prime sur l'opportunisme
+**Le plus confidentiel possible PAR DÉFAUT, et une ouverture configurable
+intelligemment, progressivement et interactivement.**
+
+Ce n'est pas un slogan : c'est le critère qui tranche les arbitrages, et il se
+décline en quatre conséquences opérationnelles.
+
+1. **Fermé par défaut, toujours.** Tout ce qui est détecté est substitué. Aucun
+   défaut n'ouvre : ni un seuil, ni une heuristique, ni un modèle, ni une
+   indisponibilité. En cas de doute, on ferme (D5).
+2. **Seul l'opérateur ouvre.** Jamais le modèle, jamais une IA, jamais une
+   règle de forme laissée à elle-même. Une IA peut PROPOSER (router un doute,
+   suggérer une entrée d'inventaire) ; elle ne décide pas. Faire dépendre la
+   protection de la coopération du modèle est l'anti-patron §7.
+3. **L'ouverture est PROGRESSIVE.** Deux axes, du plus étroit au plus large :
+   granularité (valeur → type → classe) et portée (session → projet → global).
+   La plus précise et la plus proche l'emportent. C'est ce qui rend le système
+   utilisable : une décision de classe transforme trente questions en une.
+4. **L'ouverture est INTERACTIVE et jamais bloquante.** Le système anonymise,
+   consigne la question, et continue. L'opérateur répond quand il veut ; sa
+   réponse est persistée et ne vaut que pour la SUITE. Il peut aussi ne rien
+   révéler et expliquer au modèle comment faire sans — c'est lui qui tranche.
+
+**L'asymétrie est le cœur de tout.** « Anonymiser » est gratuit, réversible et
+son erreur est VISIBLE (l'agent bute, on le voit). « Révéler » est la seule
+décision qui fasse sortir une valeur, son erreur est SILENCIEUSE, et la
+révoquer ne rappelle pas ce qui est parti. Donc : révéler s'écrit, se trace et
+ne s'hérite jamais d'un défaut.
+
+**Corollaire de conception** : un résidu assumé doit être COMPTÉ, jamais
+silencieux (`public_by_shape`, file d'arbitrage, constats écrits à l'envers
+dans les E2E). Ce qui échoue doit échouer bruyamment.
+
 ## Documents d'autorité — ordre de préséance
 1. `PLAN-proxy-pseudonymisation.md` — spec complète. **NE JAMAIS LE MODIFIER.**
    S'il est faux ou incomplet : le signaler à jo et ATTENDRE.
@@ -70,7 +103,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**1273 tests verts** (1255 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**2727 tests verts** (2709 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |
@@ -1028,6 +1061,53 @@ Preuves : 1255 tests unitaires, `tests/phase4_e2e.sh` **PASS** en session
 réelle (refus avant exécution, tracé, raison exacte citée par le modèle),
 `tests/phase3_e2e.sh` **PASS** (0 valeur réelle sur 393,6 Ko, restauration
 3/3). Disponibilité : 0,003 s sur une commande réaliste, 0,42 s sur 500 Ko.
+
+## Round 18 (2026-08-06) — trois défauts trouvés EN SESSION, dont deux par le modèle
+La couche de politique et l'annonce sont livrées (`src/anonproxy/policy.py`,
+`annonce.py`, `scripts/anonproxy_policy.py`, `tests/policy_e2e.sh`). Bac à
+sable pour session réelle : `~/lab/ai/anonproxy-demo/` (coffre et clé propres).
+
+**Ce que la session a trouvé et que seize rounds de revue n'avaient pas vu.**
+`10.1.2.0/24` n'est pas une adresse : `ip_address` échouait, la valeur tombait
+dans le générique et sortait sous un MOT (`glacier-vault10`). Le modèle voyait
+des hôtes dans un réseau fictif et une déclaration de sous-réseau qui n'en
+était pas une — il a signalé l'inventaire comme contradictoire · les plages de
+DOCUMENTATION sont `is_private` en Python bien qu'elles tiennent la place
+d'adresses routables, donc une passerelle publique recevait un substitut en
+`10.x`, et le générateur IPv6 rendait une ULA quoi qu'il arrive : l'attribut
+« interne vs externe » (§3.4) ne tenait ni pour ces plages ni en v6 · **le
+pire** : faire varier le troisième octet d'un /24 de documentation pour obtenir
+plusieurs réseaux SORT du réservé et tombe sur de l'espace alloué et routé —
+`198.51.32.0/24` appartient à quelqu'un. Un substitut ne doit jamais désigner
+la machine d'un tiers, sinon une commande proposée par le modèle part chez lui.
+Corrigé par RFC 2544 (`198.18.0.0/15`), réservé aux bancs d'essai.
+
+**Un test existant figeait la confusion** : il vérifiait `is_private` là où
+l'attribut préservé est « interne ». `est_privee` dit désormais ce qu'on veut
+vraiment dire.
+
+**L'invariant qui ferme la CLASSE** (`tests/test_invariant_substituts.py`) :
+*un substitut doit être indiscernable EN NATURE de ce qu'il remplace, et ne
+jamais désigner une entité du MONDE RÉEL.* Formulé une fois — le `kind` de la
+forme canonique du substitut doit égaler celui du réel — il couvre les trois et
+les suivants. Vérifié NON complaisant : les trois défauts rejoués le font
+tomber. Les trois n'étaient pas des oublis d'implémentation mais un invariant
+jamais énoncé.
+
+**Résidu MESURÉ, arbitrage à rendre** : un hôte externe fictif combine un mot
+de société fictive et un TLD RÉEL — `alpine-relecloud.net` peut appartenir à
+quelqu'un. Même famille que le défaut routable, surface plus large, et
+invérifiable sans requête DNS (donc sans violer D9). L'alternative RFC 2606
+(`.example`, `.invalid`, `.test`) est prouvablement à personne mais se lit
+comme fictive, ce qui abîme D1. **40/40 hôtes externes concernés**, compté par
+le test, pas affirmé.
+
+**Pas de skill pour ça (tranché le 2026-08-06)** : un skill agit sur le
+CONSOMMATEUR, ces défauts sont chez le PRODUCTEUR. Un skill ne pourrait
+qu'apprendre au modèle à composer avec l'artefact — ce qu'on a mesuré comme
+défaillant. Et faire dépendre la protection de la coopération du modèle est
+l'anti-patron §7. L'annonce, elle, est du prompt engineering embarqué assumé :
+elle INFORME, elle ne protège pas — et c'est elle qui a trouvé deux des trois.
 
 ## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
 `tests/test_walker_defects.py` prouve les quatre, corrections minimales
