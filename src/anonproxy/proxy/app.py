@@ -37,6 +37,7 @@ from anthropic_walker import SSERewriter, Substituter, walk_request, walk_respon
 from ..allowlist import Allowlist  # noqa: E402
 from ..config import Settings, read_master_key  # noqa: E402
 from ..detect import DetectClient, DetectionUnavailable  # noqa: E402
+from ..annonce import injecter  # noqa: E402
 from ..pipeline import Pseudonymizer  # noqa: E402
 from ..policy import Policy  # noqa: E402
 from ..sse import (  # noqa: E402
@@ -189,7 +190,9 @@ async def _pseudonymize(state: ProxyState, request: Request):
     except (VaultUnavailableError, SurrogateCollisionError, ValueError) as exc:
         return None, None, _fail(
             503, "api_error", f"substitution impossible, requête refusée : {exc}")
-    return body, safe_body, None
+    # L'annonce est ajoutée APRÈS la substitution : c'est notre texte, il
+    # n'a pas à traverser le détecteur, qui y verrait des entités.
+    return body, injecter(safe_body, state.settings.annonce), None
 
 
 @app.post("/v1/messages")

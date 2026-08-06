@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import re
 import unicodedata
 from typing import Any, Callable
@@ -256,6 +257,8 @@ class SurrogateEngine:
         tweak = "" if attempt == 0 else f"#{attempt}"
         if canon.kind == "ip":
             return self._fake_ip(canon, tweak)
+        if canon.kind == "cidr":
+            return self._fake_cidr(canon)
         if canon.kind == "host":
             return self._fake_host(canon, value, attempt)
         if canon.kind == "email":
@@ -337,20 +340,48 @@ class SurrogateEngine:
             return f"{a}-{b}"
         return f"{a}-{b}{self._idx(f'{ns}-n', key, str(attempt)) % 900 + 100}"
 
+    def _fake_cidr(self, canon: Canonical) -> str:
+        """Réseau fictif — le MÊME que celui des adresses qu'il contient.
+
+        La co-appartenance /24 est un attribut préservé (réponse §3.4) : le
+        sous-réseau fictif est déjà alloué et partagé par les hôtes du réseau
+        réel. Le rendre ici, plutôt que d'en tirer un nouveau, est ce qui rend
+        la notation LISIBLE — sans quoi le modèle voit des adresses dans un
+        réseau et une déclaration de réseau qui ne les contient pas.
+        """
+        subnet, prefixlen = canon.attrs["subnet"], canon.attrs["prefixlen"]
+        faux = self._fake_ip(
+            Canonical(key=f"ip:{subnet}", kind="ip", normalized=subnet,
+                      attrs={"subnet": subnet, "private": canon.attrs["private"],
+                             "v": canon.attrs["v"]}),
+            "")
+        if canon.attrs["v"] == "6":
+            reseau = ipaddress.ip_network(f"{faux}/{prefixlen}", strict=False)
+        else:
+            a, b, c, _ = faux.split(".")
+            reseau = ipaddress.ip_network(f"{a}.{b}.{c}.0/{prefixlen}", strict=False)
+        return str(reseau)
+
     def _fake_ip(self, canon: Canonical, tweak: str) -> str:
         subnet = canon.attrs["subnet"]
+
+        private = canon.attrs["private"] == "True"
 
         if canon.attrs["v"] == "6":
             def gen6(t: int) -> str:
                 h = self._digest("ipv6-net", subnet, str(t)).hex()
-                return f"fd{h[:2]}:{h[2:6]}:{h[6:10]}:{h[10:14]}"
+                if private:
+                    return f"fd{h[:2]}:{h[2:6]}:{h[6:10]}:{h[10:14]}"
+                # Une adresse PUBLIQUE devenait une ULA `fd…` : l'attribut
+                # « interne vs externe » (§3.4) ne survivait pas en IPv6, alors
+                # qu'il tenait en IPv4. Espace de documentation, comme son
+                # équivalent v4 — plausible et non routé.
+                return f"2001:db8:{h[:4]}:{h[4:8]}"
             prefix = self._alloc_shared(self._SUBNET6, subnet, gen6)
             # 64 bits d'hôte (4 groupes) : un /64 dense épuiserait un espace
             # de 16 bits par collisions bien avant MAX_ATTEMPTS.
             h = self._digest("ipv6-host", canon.key, tweak).hex()
             return f"{prefix}:{h[:4]}:{h[4:8]}:{h[8:12]}:{h[12:16]}"
-
-        private = canon.attrs["private"] == "True"
 
         def gen4(t: int) -> str:
             n = self._idx("ipv4-net", subnet, str(t))
@@ -358,9 +389,19 @@ class SurrogateEngine:
                 if n % 2:
                     return f"10.{n % 256}.{(n >> 8) % 256}.0"
                 return f"172.{16 + (n % 16)}.{(n >> 8) % 256}.0"
-            # espace public : blocs de documentation (plausibles, non routés)
-            a, b, c = ((198, 51, 100), (203, 0, 113), (192, 0, 2))[n % 3]
-            return f"{a}.{b}.{(c + (n >> 4)) % 256}.0"
+            # Espace public FICTIF. Les blocs de documentation ne font qu'UN
+            # /24 chacun : faire varier leur troisième octet pour obtenir
+            # plusieurs réseaux SORTAIT de la plage réservée et tombait sur de
+            # l'espace réellement alloué et routable — `198.51.32.0/24`
+            # appartient à quelqu'un. Un substitut ne doit jamais désigner la
+            # machine d'un tiers : si le modèle propose une commande qui le
+            # vise, elle part chez lui.
+            # Trouvé par le MODÈLE en session, l'annonce activée.
+            #
+            # RFC 2544 (`198.18.0.0/15`) est réservé aux bancs d'essai : jamais
+            # routé, jamais alloué, et il offre 512 réseaux /24 — de quoi tenir
+            # la co-appartenance sans jamais sortir du réservé.
+            return f"198.{18 + ((n >> 8) % 2)}.{n % 256}.0"
 
         net = self._alloc_shared(self._SUBNET4, subnet, gen4)
         host_idx = self._idx("ipv4-host", canon.key, tweak) % 254 + 1

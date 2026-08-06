@@ -91,6 +91,49 @@ def split_host(host: str) -> tuple[str, str]:
     return short, zone
 
 
+#: Plages de DOCUMENTATION (RFC 5737 et 3849). `ipaddress` les classe
+#: `is_private`, alors qu'elles tiennent la place d'adresses PUBLIQUES : elles
+#: sont faites pour illustrer un réseau routable dans un document.
+#:
+#: Sans cette exception, une passerelle publique écrite `198.51.100.42`
+#: recevait un substitut en `10.x`, et l'attribut « interne vs externe »
+#: — préservé par décision (§3.4) — s'inversait. C'est le modèle lui-même qui
+#: l'a signalé en session, l'annonce activée : il voyait une « passerelle
+#: publique » adressée en RFC 1918 et a refusé de trancher seul.
+#:
+#: Ce sont aussi les plages que le moteur ÉMET comme espace public fictif :
+#: les traiter comme publiques rend donc la substitution cohérente avec
+#: elle-même.
+PLAGES_DOCUMENTATION = (
+    ipaddress.ip_network("192.0.2.0/24"),      # TEST-NET-1
+    ipaddress.ip_network("198.51.100.0/24"),   # TEST-NET-2
+    ipaddress.ip_network("203.0.113.0/24"),    # TEST-NET-3
+    ipaddress.ip_network("2001:db8::/32"),     # documentation IPv6
+    # RFC 2544, bancs d'essai : c'est l'espace public FICTIF qu'émet le moteur.
+    # L'y inclure garde la substitution cohérente avec elle-même — un substitut
+    # public doit se relire comme public.
+    ipaddress.ip_network("198.18.0.0/15"),
+)
+
+
+def est_privee(adresse) -> bool:
+    """« Cette adresse est-elle sur un réseau INTERNE ? »
+
+    Prend une adresse ou un réseau. Ni `is_private` ni `is_global` ne répondent
+    seuls : la première range les plages de documentation avec le RFC 1918, la
+    seconde exclut aussi le loopback et le lien-local, qui sont bien internes.
+    """
+    for plage in PLAGES_DOCUMENTATION:
+        if adresse.version != plage.version:
+            continue
+        reseau = adresse if isinstance(adresse, (ipaddress.IPv4Network,
+                                                 ipaddress.IPv6Network)) \
+            else ipaddress.ip_network(f"{adresse}/{adresse.max_prefixlen}")
+        if reseau.subnet_of(plage):
+            return False
+    return adresse.is_private
+
+
 def canonicalize(etype: str, value: str) -> Canonical:
     # NFC : « café » composé et décomposé désignent la même entité et doivent
     # produire le même substitut, sinon deux identités fictives coexistent.
@@ -122,11 +165,27 @@ def canonicalize(etype: str, value: str) -> Canonical:
         try:
             ip = ipaddress.ip_address(v)
         except ValueError:
+            # Une notation CIDR (`10.1.2.0/24`) n'est pas une adresse, et elle
+            # tombait donc dans le générique : elle sortait sous un MOT
+            # (`glacier-vault10`), ni adresse ni réseau. Le modèle voyait alors
+            # des hôtes dans un réseau fictif et un « sous-réseau » qui n'en
+            # était pas un — et concluait, à juste titre, à une incohérence.
+            # Trouvé en session réelle, pas par une revue.
+            if "/" in v:
+                try:
+                    reseau = ipaddress.ip_network(v, strict=False)
+                except ValueError:
+                    return canon(f"generic:{low}", "generic")
+                return canon(f"cidr:{reseau}", "cidr",
+                             subnet=str(reseau.network_address),
+                             prefixlen=str(reseau.prefixlen),
+                             private=str(est_privee(reseau)),
+                             v=str(reseau.version))
             return canon(f"generic:{low}", "generic")
         prefixe = 24 if ip.version == 4 else 64
         subnet = str(ipaddress.ip_network(f"{ip}/{prefixe}", strict=False).network_address)
         return canon(f"ip:{ip}", "ip", subnet=subnet,
-                     private=str(ip.is_private), v=str(ip.version))
+                     private=str(est_privee(ip)), v=str(ip.version))
 
     if etype == "EMAIL_ADDRESS" and "@" in v:
         local, _, domain = v.partition("@")

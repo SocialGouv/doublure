@@ -151,11 +151,21 @@ def test_attribut_co_appartenance_24(runs):
 
 
 def test_attribut_prive_reste_prive(runs):
+    """L'attribut préservé est « INTERNE vs externe » (§3.4), pas `is_private`.
+
+    Les deux ne coïncident pas : `ipaddress` range avec le RFC 1918 les plages
+    de DOCUMENTATION et de BANC D'ESSAI, qui tiennent la place d'adresses
+    routables — et c'est justement dans le banc d'essai que le moteur émet son
+    espace public fictif, faute de pouvoir émettre chez un tiers. Ce test
+    portait sur `is_private` et figeait donc l'ancienne confusion.
+    """
+    from anonproxy.surrogates.canonical import est_privee
+
     for t, v, s in runs[0]:
         if t != "IP_ADDRESS":
             continue
-        assert ipaddress.ip_address(v).is_private == ipaddress.ip_address(s).is_private, \
-            f"classe privé/public non conservée : {v} → {s}"
+        assert est_privee(ipaddress.ip_address(v)) == est_privee(ipaddress.ip_address(s)), \
+            f"classe interne/externe non conservée : {v} → {s}"
 
 
 def test_attribut_interne_conserve(runs):

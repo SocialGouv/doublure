@@ -7,6 +7,7 @@ Données synthétiques uniquement.
 from __future__ import annotations
 
 
+import ipaddress
 import pytest
 
 
@@ -939,3 +940,121 @@ def test_un_prefixe_hors_registre_n_est_jamais_conserve(tmp_path, prefixe):
     eng = engine(tmp_path)
     rendu = eng.substitute_value("HASH", f"{prefixe}:a3f1b2c4d5e6")
     assert prefixe not in rendu, rendu
+
+
+# --------------------------------------------------------------------------- #
+# Notation CIDR — trouvé en SESSION RÉELLE, pas par une revue.
+#
+# `10.1.2.0/24` n'est pas une adresse : `ip_address` échouait, la valeur
+# tombait dans le générique et sortait sous un MOT (`glacier-vault10`). Le
+# modèle voyait alors des hôtes dans un réseau fictif et une déclaration de
+# sous-réseau qui n'en était pas un — il a signalé une « incohérence » dans
+# l'inventaire, à juste titre. Manquement à D1 : le substitut doit rester
+# plausible POUR SON TYPE.
+# --------------------------------------------------------------------------- #
+def test_un_cidr_reste_un_cidr(tmp_path):
+    moteur = SurrogateEngine(
+        vault=Vault(tmp_path / "cidr.db", master_key=MASTER),
+        master_key=MASTER, scope_key="project:cidr")
+    faux = moteur.substitute_value("IP_ADDRESS", "10.1.2.0/24")
+    assert "/" in faux, faux
+    reseau = ipaddress.ip_network(faux, strict=False)   # doit parser
+    assert reseau.prefixlen == 24
+    assert faux != "10.1.2.0/24"
+
+
+def test_le_reseau_fictif_contient_ses_hotes_fictifs(tmp_path):
+    """La co-appartenance /24 est un attribut PRÉSERVÉ (réponse §3.4).
+
+    Sans ça, le modèle reçoit des adresses et un sous-réseau qui ne les
+    contient pas — et raisonne sur une contradiction inexistante.
+    """
+    moteur = SurrogateEngine(
+        vault=Vault(tmp_path / "coherence.db", master_key=MASTER),
+        master_key=MASTER, scope_key="project:cidr")
+    h1 = moteur.substitute_value("IP_ADDRESS", "10.1.2.3")
+    h2 = moteur.substitute_value("IP_ADDRESS", "10.1.2.4")
+    reseau = ipaddress.ip_network(
+        moteur.substitute_value("IP_ADDRESS", "10.1.2.0/24"), strict=False)
+    assert ipaddress.ip_address(h1) in reseau, (h1, reseau)
+    assert ipaddress.ip_address(h2) in reseau, (h2, reseau)
+
+
+def test_un_cidr_v6_reste_un_cidr_v6(tmp_path):
+    moteur = SurrogateEngine(
+        vault=Vault(tmp_path / "v6.db", master_key=MASTER),
+        master_key=MASTER, scope_key="project:cidr")
+    hote = moteur.substitute_value("IP_ADDRESS", "2001:db8:1:2::5")
+    reseau = ipaddress.ip_network(
+        moteur.substitute_value("IP_ADDRESS", "2001:db8:1:2::/64"), strict=False)
+    assert reseau.version == 6 and reseau.prefixlen == 64
+    assert ipaddress.ip_address(hote) in reseau
+
+
+def test_une_barre_oblique_qui_n_est_pas_un_reseau_reste_generique(tmp_path):
+    """`10.1.2.0/abc` n'est pas un réseau : pas de plantage, substitution."""
+    moteur = SurrogateEngine(
+        vault=Vault(tmp_path / "pasreseau.db", master_key=MASTER),
+        master_key=MASTER, scope_key="project:cidr")
+    for bizarre in ("10.1.2.0/abc", "10.1.2.0/", "10.1.2.0/99", "/24"):
+        faux = moteur.substitute_value("IP_ADDRESS", bizarre)
+        assert faux != bizarre, bizarre
+
+
+# --------------------------------------------------------------------------- #
+# « interne vs externe » — attribut PRÉSERVÉ (§3.4), et il ne l'était pas.
+#
+# Trouvé par le MODÈLE lui-même, en session réelle, l'annonce activée : il
+# voyait une « passerelle publique » adressée en RFC 1918 et a refusé de
+# trancher entre « artefact de substitution » et « document ambigu ».
+#
+# Deux causes : `ipaddress` classe les plages de DOCUMENTATION (192.0.2.0/24,
+# 198.51.100.0/24, 203.0.113.0/24) en `is_private`, alors qu'elles tiennent la
+# place d'adresses routables ; et le générateur IPv6 rendait une ULA `fd…`
+# quelle que soit la nature de l'adresse réelle.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("reelle", [
+    "10.1.2.3", "172.16.5.9", "192.168.1.1", "fd00::1",          # internes
+    "8.8.8.8", "51.15.20.30", "2001:db8::1",                      # publiques
+    "198.51.100.42", "192.0.2.5", "203.0.113.9",                  # documentation
+    "198.51.100.0/24", "10.1.2.0/24",
+])
+def test_interne_ou_externe_survit_a_la_substitution(tmp_path, reelle):
+    from anonproxy.surrogates.canonical import est_privee
+
+    moteur = SurrogateEngine(
+        vault=Vault(tmp_path / "attr.db", master_key=MASTER),
+        master_key=MASTER, scope_key="project:attr")
+    faux = moteur.substitute_value("IP_ADDRESS", reelle)
+    avant = ipaddress.ip_network(reelle, strict=False)
+    apres = ipaddress.ip_network(faux, strict=False)
+    assert est_privee(avant) == est_privee(apres), (reelle, faux)
+
+
+def test_une_plage_de_documentation_n_est_pas_un_reseau_interne():
+    """C'est la distinction qui manquait : `is_private` ne suffit pas."""
+    from anonproxy.surrogates.canonical import est_privee
+
+    assert est_privee(ipaddress.ip_address("10.1.2.3"))
+    assert not est_privee(ipaddress.ip_address("198.51.100.42"))
+    assert not est_privee(ipaddress.ip_address("2001:db8::1"))
+    assert est_privee(ipaddress.ip_address("fd00::1"))
+
+
+def test_aucun_substitut_ne_designe_la_machine_d_un_tiers(tmp_path):
+    """Invariant : un substitut ne doit JAMAIS être une adresse routable.
+
+    Le générateur faisait varier le troisième octet des blocs de documentation
+    pour obtenir plusieurs réseaux, et sortait ainsi du réservé :
+    `198.51.32.0/24` est alloué et routé. Si le modèle propose une commande
+    visant un substitut, elle part chez son propriétaire réel.
+    """
+    moteur = SurrogateEngine(
+        vault=Vault(tmp_path / "routable.db", master_key=MASTER),
+        master_key=MASTER, scope_key="project:routable")
+    for i in range(400):
+        for reelle in (f"51.{i % 256}.{(i * 7) % 256}.10",   # publiques réelles
+                       f"10.{i % 256}.{(i * 3) % 256}.5"):   # internes
+            faux = ipaddress.ip_network(
+                moteur.substitute_value("IP_ADDRESS", reelle), strict=False)
+            assert not faux.is_global, (reelle, str(faux))

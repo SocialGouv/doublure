@@ -9,6 +9,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .annonce import MODES, SILENCIEUX
+
 STATE_DIR = Path(os.environ.get("ANONPROXY_STATE_DIR", Path.home() / ".local/state/anonproxy"))
 
 
@@ -38,12 +40,21 @@ class Settings:
     #: Identifiant de session : la portée la plus proche, celle qui prime.
     #: Absent = deux couches seulement (global → projet).
     session_id: str | None
+    #: Annoncer la couche au modèle ? `silencieux` (défaut) | `annonce`.
+    #: Annoncer révèle à l'amont qu'une couche existe — jamais une valeur.
+    annonce: str
 
     @staticmethod
     def from_env() -> "Settings":
         scope = os.environ.get("ANONPROXY_SCOPE")
         if not scope:
             scope = f"project:{Path.cwd().name}"
+        annonce = (os.environ.get("ANONPROXY_ANNONCE") or SILENCIEUX).lower()
+        if annonce not in MODES:
+            # Un mode mal orthographié retomberait en silence sur le défaut :
+            # l'opérateur croirait avoir annoncé la couche alors que non.
+            raise RuntimeError(
+                f"ANONPROXY_ANNONCE={annonce!r} inconnu — attendu {' ou '.join(MODES)}")
         return Settings(
             scope_key=scope,
             upstream_base=os.environ.get("ANONPROXY_UPSTREAM", "https://api.anthropic.com"),
@@ -64,6 +75,7 @@ class Settings:
             ),
             policy_dir=Path(os.environ.get("ANONPROXY_POLICY_DIR", STATE_DIR / "policy")),
             session_id=os.environ.get("ANONPROXY_SESSION") or None,
+            annonce=annonce,
         )
 
 

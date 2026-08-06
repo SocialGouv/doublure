@@ -244,3 +244,52 @@ def test_sans_politique_le_moteur_anonymise_comme_avant(tmp_path):
     moteur = SurrogateEngine(vault=Vault(tmp_path / "n.db", master_key=MASTER),
                              master_key=MASTER, scope_key=SCOPE)
     assert moteur.substitute_value("HOSTNAME", HOTE) != HOTE
+
+
+# --------------------------------------------------------------------------- #
+# Annoncer, ou non, la couche au modèle
+# --------------------------------------------------------------------------- #
+from anonproxy.annonce import ANNONCE, MARQUEUR, SILENCIEUX, TEXTE, injecter  # noqa: E402
+
+
+def test_silencieux_ne_touche_a_rien():
+    corps = {"system": "tu es utile", "messages": []}
+    assert injecter(dict(corps), SILENCIEUX) == corps
+
+
+@pytest.mark.parametrize("systeme,verifie", [
+    (None, lambda c: c["system"][-1]["text"] == TEXTE),
+    ("consigne", lambda c: c["system"].startswith("consigne") and TEXTE in c["system"]),
+    ([{"type": "text", "text": "consigne"}],
+     lambda c: len(c["system"]) == 2 and c["system"][0]["text"] == "consigne"),
+])
+def test_l_annonce_s_ajoute_sans_ecraser(systeme, verifie):
+    """Le `system` du client a trois formes possibles : aucune ne se perd."""
+    corps = {"messages": []}
+    if systeme is not None:
+        corps["system"] = systeme
+    assert verifie(injecter(corps, ANNONCE))
+
+
+def test_l_annonce_ne_pose_pas_de_point_de_cache():
+    """Le bloc ajouté ne doit pas déplacer les césures posées par le client."""
+    corps = injecter({"system": [{"type": "text", "text": "x",
+                                  "cache_control": {"type": "ephemeral"}}]},
+                     ANNONCE)
+    assert corps["system"][0].get("cache_control")
+    assert "cache_control" not in corps["system"][1]
+
+
+def test_l_annonce_dit_au_modele_de_ne_pas_deviner():
+    """Le contenu est la fonctionnalité : ces trois consignes sont le contrat."""
+    assert MARQUEUR in TEXTE
+    assert "n'invente" in TEXTE and "Ne la résous pas toi-même" in TEXTE
+    assert "c'est lui qui décide" in TEXTE
+
+
+def test_un_mode_inconnu_est_refuse(monkeypatch):
+    """Une faute de frappe retomberait en silence sur le défaut : refus."""
+    from anonproxy.config import Settings
+    monkeypatch.setenv("ANONPROXY_ANNONCE", "anonce")
+    with pytest.raises(RuntimeError, match="ANONPROXY_ANNONCE"):
+        Settings.from_env()
