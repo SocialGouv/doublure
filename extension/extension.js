@@ -1,214 +1,238 @@
 /**
- * anonproxy — arbitrage de confidentialité, dans l'IDE.
+ * anonproxy — confidentiality arbitration, inside the IDE.
  *
- * CETTE EXTENSION NE PROTÈGE RIEN. Elle affiche ce que le proxy a anonymisé et
- * transmet les décisions de l'opérateur à l'API locale. La protection vit dans
- * le proxy : **la désinstaller ne doit rien ouvrir**. C'est le test de
- * conception à repasser à chaque ajout — si une fonctionnalité d'ici devenait
- * nécessaire à la confidentialité, ce serait le défaut, pas la fonctionnalité.
+ * THIS EXTENSION PROTECTS NOTHING. It shows what the proxy anonymised and
+ * carries the operator's decisions to the local control service. Protection
+ * lives in the proxy: **uninstalling this must open nothing**. That is the
+ * design test to repeat at every addition — if a feature here ever became
+ * necessary to confidentiality, that would be the defect, not the feature.
  *
- * Elle parle à une SOCKET UNIX, jamais à un port : un port local serait
- * joignable par l'agent lui-même, et cette API rend les valeurs réelles.
+ * It talks to a UNIX SOCKET, never a port: a local port would be reachable by
+ * the agent itself, and this API returns real values.
  *
- * JavaScript simple, sans étape de compilation : une extension mince ne mérite
- * pas une chaîne de build, et ce qui n'est pas compilé se relit tel qu'il
- * s'exécute.
+ * State arrives by SERVER PUSH (SSE), not polling. That matters in exactly one
+ * case, and it is the case that motivated the mode: in `consciencieux` the
+ * request WAITS, so learning three seconds late that something is stuck on you
+ * is three seconds of an agent doing nothing.
+ *
+ * Plain JavaScript, no build step: a thin extension does not deserve a
+ * toolchain, and what is not compiled reads the way it runs.
  */
 const http = require("http");
 const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
 
-/** Chemin par défaut de la socket — le même que celui calculé côté Python. */
-function socketParDefaut() {
-  const configure = vscode.workspace.getConfiguration("anonproxy").get("socket");
-  if (configure) return configure;
-  const etat = process.env.ANONPROXY_STATE_DIR
+function socketPath() {
+  const configured = vscode.workspace.getConfiguration("anonproxy").get("socket");
+  if (configured) return configured;
+  const state = process.env.ANONPROXY_STATE_DIR
     || path.join(os.homedir(), ".local", "state", "anonproxy");
-  return path.join(etat, "arbitrage.sock");
+  return path.join(state, "control.sock");
 }
 
-/** Appel HTTP sur la socket Unix. Rend `null` si l'API n'écoute pas. */
-function appel(methode, chemin, corps) {
-  return new Promise((resoudre) => {
-    const charge = corps ? JSON.stringify(corps) : null;
+/** One-shot request. Resolves to null when the service is not listening. */
+function call(method, route, body) {
+  return new Promise((resolve) => {
+    const payload = body ? JSON.stringify(body) : null;
     const req = http.request(
-      {
-        socketPath: socketParDefaut(),
-        path: chemin,
-        method: methode,
-        headers: charge
-          ? { "Content-Type": "application/json",
-              "Content-Length": Buffer.byteLength(charge) }
-          : {},
-      },
+      { socketPath: socketPath(), path: route, method,
+        headers: payload ? { "Content-Type": "application/json",
+                             "Content-Length": Buffer.byteLength(payload) } : {} },
       (res) => {
-        let brut = "";
-        res.on("data", (c) => (brut += c));
+        let raw = "";
+        res.on("data", (c) => (raw += c));
         res.on("end", () => {
-          try {
-            resoudre({ statut: res.statusCode, corps: JSON.parse(brut) });
-          } catch (_) {
-            resoudre({ statut: res.statusCode, corps: null });
-          }
+          try { resolve({ status: res.statusCode, body: JSON.parse(raw) }); }
+          catch (_) { resolve({ status: res.statusCode, body: null }); }
         });
-      }
-    );
-    // API absente = on n'affiche rien de rassurant : l'état devient « inconnu ».
-    req.on("error", () => resoudre(null));
-    if (charge) req.write(charge);
+      });
+    // Service absent: we surface "unknown", never something reassuring.
+    req.on("error", () => resolve(null));
+    if (payload) req.write(payload);
     req.end();
   });
 }
 
-/** Ce que l'opérateur peut répondre. « Révéler » n'est jamais présélectionné. */
-const REPONSES = [
-  { label: "$(eye-closed) Laisser anonymisé", granularite: null },
-  { label: "$(eye) Révéler CETTE valeur", granularite: "valeur", decision: "reveler" },
-  { label: "$(eye) Révéler tout ce TYPE", granularite: "type", decision: "reveler" },
-  { label: "$(shield) Ne plus demander pour ce TYPE",
-    granularite: "type", decision: "anonymiser" },
-  { label: "$(shield) Ne plus demander pour cette CLASSE",
-    granularite: "classe", decision: "anonymiser" },
+/** What the operator may answer. "Reveal" is never preselected. */
+const ANSWERS = [
+  { label: "$(eye-closed) Keep anonymised", granularity: null },
+  { label: "$(eye) Reveal THIS value", granularity: "valeur", decision: "reveler" },
+  { label: "$(eye) Reveal this whole TYPE", granularity: "type", decision: "reveler" },
+  { label: "$(shield) Stop asking for this TYPE",
+    granularity: "type", decision: "anonymiser" },
+  { label: "$(shield) Stop asking for this CLASS",
+    granularity: "classe", decision: "anonymiser" },
 ];
 
-const PORTEES = [
-  { label: "projet", description: "vaut pour ce projet (défaut)" },
-  { label: "session", description: "vaut pour cette session seulement" },
-  { label: "global", description: "vaut partout — sert de défaut aux projets" },
+const SCOPES = [
+  { label: "projet", description: "applies to this project (default)" },
+  { label: "session", description: "applies to this session only" },
+  { label: "global", description: "applies everywhere — the default for projects" },
 ];
 
-async function arbitrer() {
-  const reponse = await appel("GET", "/questions");
-  if (!reponse) {
-    vscode.window.showWarningMessage(
-      "anonproxy : l'API d'arbitrage n'écoute pas (scripts/run-policy-api.sh)."
-    );
-    return;
-  }
-  const questions = (reponse.corps && reponse.corps.questions) || [];
-  if (questions.length === 0) {
-    vscode.window.showInformationMessage("anonproxy : aucune question en attente.");
-    return;
-  }
+let latest = { settings: null, questions: [] };
 
+async function arbitrate() {
+  const questions = latest.questions;
+  if (!questions.length) {
+    vscode.window.showInformationMessage("anonproxy: nothing waiting.");
+    return;
+  }
   for (const q of questions) {
-    const choix = await vscode.window.showQuickPick(
-      REPONSES.map((r) => ({ ...r, detail: undefined })),
-      {
-        title: `anonproxy — ${q.classe} · ${q.type}`,
-        placeHolder: `${q.valeur}  →  envoyé sous  ${q.substitut}`,
-        ignoreFocusOut: true,
-      }
-    );
-    if (!choix) return;                    // échappement : on ne décide rien
-    if (!choix.granularite) continue;      // reste anonymisé, sera reproposé
-
-    const portee = await vscode.window.showQuickPick(PORTEES, {
-      title: "Portée de la décision",
+    const choice = await vscode.window.showQuickPick(ANSWERS, {
+      title: `anonproxy — ${q.class} · ${q.type}`,
+      placeHolder: `${q.value}  →  sent as  ${q.surrogate}`,
       ignoreFocusOut: true,
     });
-    if (!portee) continue;
+    if (!choice) return;                   // escaped: nothing is decided
+    if (!choice.granularity) continue;     // stays anonymised, asked again later
 
-    const cle = { valeur: q.empreinte, type: q.type, classe: q.classe }[choix.granularite];
-    const res = await appel("POST", "/arbitrer", {
-      granularite: choix.granularite,
-      cle,
-      decision: choix.decision,
-      portee: portee.label,
-    });
-    if (!res || res.statut >= 400) {
-      const detail = res && res.corps ? res.corps.detail : "API injoignable";
-      vscode.window.showErrorMessage(`anonproxy : refusé — ${detail}`);
+    const scope = await vscode.window.showQuickPick(SCOPES, {
+      title: "Scope of the decision", ignoreFocusOut: true });
+    if (!scope) continue;
+
+    const target = { valeur: q.fingerprint, type: q.type, class: q.class,
+                     classe: q.class }[choice.granularity];
+    const res = await call("POST", "/decide", {
+      granularity: choice.granularity, target,
+      decision: choice.decision, scope: scope.label });
+    if (!res || res.status >= 400) {
+      const detail = res && res.body ? res.body.detail : "service unreachable";
+      vscode.window.showErrorMessage(`anonproxy: refused — ${detail}`);
       continue;
     }
-    if (res.corps.avertissement) {
-      // Une révélation est irréversible dans ses effets : elle se dit.
-      vscode.window.showWarningMessage(`anonproxy : ${res.corps.avertissement}`);
+    if (res.body.warning) {
+      // Revealing is irreversible in effect: it gets said.
+      vscode.window.showWarningMessage(`anonproxy: ${res.body.warning}`);
     }
   }
 }
 
-async function changerDeMode() {
-  const sante = await appel("GET", "/sante");
-  if (!sante || !sante.corps) {
-    vscode.window.showWarningMessage("anonproxy : l'API d'arbitrage n'écoute pas.");
+async function chooseMode() {
+  const health = await call("GET", "/health");
+  if (!health || !health.body) {
+    vscode.window.showWarningMessage("anonproxy: the control service is not listening.");
     return;
   }
-  const modes = sante.corps.modes || {};
-  const courant = sante.corps.reglages && sante.corps.reglages.mode;
-  const choix = await vscode.window.showQuickPick(
-    Object.keys(modes).sort().map((nom) => ({
-      label: nom + (nom === courant ? "  $(check)" : ""),
-      nom,
-      detail: Object.entries(modes[nom]).map(([k, v]) => `${k}=${v}`).join(" · "),
+  const modes = health.body.modes || {};
+  const current = health.body.settings && health.body.settings.mode;
+  const choice = await vscode.window.showQuickPick(
+    Object.keys(modes).sort().map((name) => ({
+      label: name + (name === current ? "  $(check)" : ""),
+      name,
+      detail: Object.entries(modes[name]).map(([k, v]) => `${k}=${v}`).join(" · "),
     })),
-    { title: "anonproxy — mode (un mode n'est qu'un jeu de réglages)" }
-  );
-  if (!choix) return;
-  const portee = await vscode.window.showQuickPick(PORTEES, { title: "Portée" });
-  if (!portee) return;
-  const res = await appel("POST", "/reglages",
-                          { nom: "mode", valeur: choix.nom, portee: portee.label });
-  if (!res || res.statut >= 400) {
-    vscode.window.showErrorMessage("anonproxy : le changement de mode a échoué.");
+    { title: "anonproxy — mode (a mode is only a set of settings)" });
+  if (!choice) return;
+  const scope = await vscode.window.showQuickPick(SCOPES, { title: "Scope" });
+  if (!scope) return;
+  const res = await call("POST", "/settings",
+                         { name: "mode", value: choice.name, scope: scope.label });
+  if (!res || res.status >= 400) {
+    vscode.window.showErrorMessage("anonproxy: could not change the mode.");
     return;
   }
-  vscode.window.showInformationMessage(`anonproxy : mode ${choix.nom} (${portee.label}).`);
+  vscode.window.showInformationMessage(`anonproxy: mode ${choice.name} (${scope.label}).`);
 }
 
-function activate(contexte) {
-  const barre = vscode.window.createStatusBarItem(
-    vscode.StatusBarAlignment.Right, 100);
-  barre.command = "anonproxy.arbitrer";
-  contexte.subscriptions.push(barre);
+/** Server-push stream, with reconnection. */
+function connect(onState, onDown) {
+  let stopped = false;
+  let request = null;
 
-  let dejaSignalees = 0;
-  async function releve() {
-    const sante = await appel("GET", "/sante");
-    if (!sante || !sante.corps) {
-      // Ne JAMAIS afficher un état rassurant qu'on n'a pas constaté.
-      barre.text = "$(question) anonproxy : ?";
-      barre.tooltip = "API d'arbitrage injoignable — l'état réel est inconnu.";
-      barre.show();
-      dejaSignalees = 0;
+  function open() {
+    if (stopped) return;
+    request = http.request(
+      { socketPath: socketPath(), path: "/events", method: "GET" },
+      (res) => {
+        if (res.statusCode !== 200) { res.resume(); return retry(); }
+        let buffer = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          buffer += chunk;
+          let cut;
+          while ((cut = buffer.indexOf("\n\n")) >= 0) {
+            const frame = buffer.slice(0, cut);
+            buffer = buffer.slice(cut + 2);
+            if (frame.startsWith(":")) continue;        // keep-alive
+            const name = (frame.match(/^event: (.*)$/m) || [])[1];
+            const data = (frame.match(/^data: (.*)$/m) || [])[1];
+            if (name === "state" && data) {
+              try { onState(JSON.parse(data)); } catch (_) { /* next frame */ }
+            }
+          }
+        });
+        res.on("end", retry);
+        res.on("error", retry);
+      });
+    request.on("error", retry);
+    request.end();
+  }
+
+  function retry() {
+    if (stopped) return;
+    onDown();
+    // Fixed delay rather than backoff: the service is local, it either runs or
+    // it does not, and a growing delay would only lengthen the blind window.
+    setTimeout(open, 2000);
+  }
+
+  open();
+  return () => { stopped = true; if (request) request.destroy(); };
+}
+
+function activate(context) {
+  const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  item.command = "anonproxy.arbitrate";
+  item.show();
+  context.subscriptions.push(item);
+
+  let announced = 0;
+
+  function render() {
+    const { settings, questions } = latest;
+    if (!settings) {
+      item.text = "$(question) anonproxy: ?";
+      item.tooltip = "Control service unreachable — the real state is unknown.";
       return;
     }
-    const { reglages, questions } = sante.corps;
-    barre.text = questions > 0
-      ? `$(shield) anonproxy ${reglages.mode} · ${questions}`
-      : `$(shield) anonproxy ${reglages.mode}`;
-    barre.tooltip = new vscode.MarkdownString(
-      [`**mode** : ${reglages.mode}`,
-       ...Object.entries(reglages).filter(([k]) => k !== "mode")
-         .map(([k, v]) => `**${k}** : ${v}`),
+    item.text = questions.length
+      ? `$(shield) anonproxy ${settings.mode} · ${questions.length}`
+      : `$(shield) anonproxy ${settings.mode}`;
+    item.tooltip = new vscode.MarkdownString(
+      [`**mode**: ${settings.mode}`,
+       ...Object.entries(settings).filter(([k]) => k !== "mode")
+         .map(([k, v]) => `**${k}**: ${v}`),
        "",
-       `${questions} valeur(s) anonymisée(s) sans règle explicite.`,
+       `${questions.length} value(s) anonymised without an explicit rule.`,
        "",
-       "_L'extension n'applique rien : la protection est dans le proxy._"].join("\n\n"));
-    barre.show();
-
-    // Le mode bloquant fait ATTENDRE la requête : sans alerte, l'opérateur ne
-    // sait pas qu'on l'attend. C'est le seul manque vraiment structurel que
-    // cette extension comble.
-    if (questions > dejaSignalees && reglages.arbitrage === "bloquant") {
-      const action = await vscode.window.showWarningMessage(
-        `anonproxy : ${questions} valeur(s) attendent ton arbitrage — la requête est en attente.`,
-        "Arbitrer");
-      if (action === "Arbitrer") arbitrer();
-    }
-    dejaSignalees = questions;
+       "_This extension enforces nothing: protection is in the proxy._"].join("\n\n"));
   }
 
-  const secondes = vscode.workspace.getConfiguration("anonproxy")
-    .get("intervalleSondage") || 3;
-  const minuteur = setInterval(releve, secondes * 1000);
-  contexte.subscriptions.push({ dispose: () => clearInterval(minuteur) });
-  releve();
+  const disconnect = connect(
+    async (state) => {
+      latest = { settings: state.settings, questions: state.questions || [] };
+      render();
+      // Blocking mode makes the request WAIT. Without an alert the operator
+      // does not know they are being waited on — the one gap this extension
+      // genuinely closes.
+      if (latest.questions.length > announced
+          && latest.settings.arbitrage === "bloquant") {
+        const action = await vscode.window.showWarningMessage(
+          `anonproxy: ${latest.questions.length} value(s) awaiting your decision`
+          + " — the request is on hold.", "Arbitrate");
+        if (action === "Arbitrate") arbitrate();
+      }
+      announced = latest.questions.length;
+    },
+    () => { latest = { settings: null, questions: [] }; render(); announced = 0; });
 
-  contexte.subscriptions.push(
-    vscode.commands.registerCommand("anonproxy.arbitrer", arbitrer),
-    vscode.commands.registerCommand("anonproxy.mode", changerDeMode));
+  context.subscriptions.push({ dispose: disconnect });
+  context.subscriptions.push(
+    vscode.commands.registerCommand("anonproxy.arbitrate", arbitrate),
+    vscode.commands.registerCommand("anonproxy.mode", chooseMode));
+  render();
 }
 
 module.exports = { activate, deactivate() {} };
