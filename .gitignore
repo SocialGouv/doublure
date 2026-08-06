@@ -12,3 +12,6 @@ corpus/real/
 __pycache__/
 *.pyc
 .venv/
+
+# Venv jetable des essais de modèles (transformers >= 5, hors du lock projet)
+.venv-pf/

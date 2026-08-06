@@ -1,0 +1,21 @@
+# Domaines que l'OPÉRATEUR a explicitement ouverts à la lecture directe.
+#
+# D9 dit que le proxy est le seul chemin réseau, et le hook refuse donc toute
+# sortie directe. Mais son message de refus promettait « demande-moi d'ouvrir
+# le domaine explicitement » sans qu'aucun mécanisme ne le permette : une
+# affordance annoncée et absente. Ce fichier est ce mécanisme.
+#
+# Portée STRICTE : cela n'autorise QUE la lecture d'une URL sur ces domaines.
+# La charge envoyée reste soumise aux contrôles coffre et fichiers sensibles —
+# ouvrir un domaine n'ouvre pas un canal d'exfiltration, seulement une lecture.
+#
+# Le domaine est comparé comme un HÔTE, jamais comme une sous-chaîne : une
+# entrée `exemple.test` autorise `exemple.test` et `docs.exemple.test`, jamais
+# `exemple.test.attaquant.test` ni `notexemple.test`. C'est la leçon du
+# round 3, où un test de préfixe laissait passer `127.evil.test`.
+#
+# Chaque ligne est une décision de jo, datée en commentaire. Retirer une ligne
+# referme le domaine immédiatement.
+
+# 2026-08-06 — lecture de fiches de modèles (piste « IA de classification »)
+huggingface.co

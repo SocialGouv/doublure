@@ -1652,6 +1652,38 @@ def _is_local_url(url: str) -> bool:
     return adresse.is_loopback or adresse.is_unspecified
 
 
+#: Domaines que l'opérateur a explicitement ouverts à la lecture directe.
+#: Le message de refus promettait cette possibilité sans qu'elle existe.
+_DOMAINES_OUVERTS = _RACINE / "config" / "domaines_ouverts.txt"
+
+
+def _domaines_ouverts() -> set[str]:
+    """Lu à chaque appel : retirer une ligne referme le domaine tout de suite."""
+    try:
+        lignes = _DOMAINES_OUVERTS.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return set()  # pas de fichier = rien d'ouvert
+    return {l.strip().lower() for l in lignes
+            if l.strip() and not l.startswith("#")}
+
+
+def _hote_ouvert(url: str) -> bool:
+    """L'HÔTE de cette URL a-t-il été ouvert par l'opérateur ?
+
+    Comparé comme un hôte, jamais comme une sous-chaîne : une entrée
+    `exemple.test` couvre `docs.exemple.test` mais pas
+    `exemple.test.attaquant.test`, dont le propriétaire n'est pas le même.
+    C'est la leçon du round 3 — un test de préfixe acceptait `127.evil.test`.
+    """
+    try:
+        hote = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    if not hote:
+        return False
+    return any(hote == d or hote.endswith("." + d) for d in _domaines_ouverts())
+
+
 def _payload_text(payload: dict) -> str:
     """Aplatit la charge d'un outil : un champ peut arriver en liste ou en
     dict selon l'outil, et `str(liste)` ne matche aucun motif."""
@@ -1688,10 +1720,13 @@ def evaluate(event: dict) -> tuple[dict, str | None]:
         reason = check_vault_access(text) or check_sensitive_files(text)
         if reason is None:
             url = str(payload.get("url", ""))
-            if url and not _is_local_url(url):
+            # Un domaine OUVERT par l'opérateur reste soumis aux contrôles
+            # ci-dessus : on autorise une LECTURE, pas un canal de sortie.
+            if url and not _is_local_url(url) and not _hote_ouvert(url):
                 reason = ("sortie réseau directe hors du proxy (D9) — "
                           "aucune pseudonymisation n'est possible sur ce chemin")
-        hint = "Passe par le proxy, ou demande-moi d'ouvrir le domaine explicitement."
+        hint = ("Passe par le proxy, ou demande-moi d'ouvrir le domaine — "
+                "je l'ajoute à config/domaines_ouverts.txt.")
     else:
         # Tout autre outil (Task, MCP…). Un serveur MCP expose couramment un
         # champ qui EST une commande : l'inspecter comme telle, sinon
