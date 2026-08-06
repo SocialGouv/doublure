@@ -1,165 +1,167 @@
-# Le découpage du hook repose sur une GRAMMAIRE
+# The hook tokenization relies on a GRAMMAR
 
-Fait le 2026-08-05 (round 17). Ce document dit ce que la grammaire apporte, ce
-qu'elle n'apporte pas, et les quatre pièges qui ont coûté une itération chacun —
-pour qu'ils ne soient pas re-découverts.
+Done on 2026-08-05 (round 17). This document states what the grammar brings,
+what it does not bring, and the four traps that each cost one iteration — so
+that they are not re-discovered.
 
-Arbitrage de jo, 2026-08-05 : arrêter la boucle adversariale sur le hook,
-attaquer le parseur. Raison énoncée : les findings du hook sont gratuits avec
-un AST.
+jo's arbitration, 2026-08-05: stop the adversarial loop on the hook, attack
+the parser. Stated reason: hook findings are free with an AST.
 
-## Pourquoi
+## Why
 
-Seize rounds de revue adversariale sur `hooks/pretooluse_guard.py`. Le moteur
-s'est stabilisé (deux rounds sans finding) ; le hook produisait environ un
-contournement par round, et **chacun venait d'un mécanisme de bash jamais
-modélisé ou du trou laissé entre deux gardes voisines** : `trap`, `case`,
-`coproc`, `mapfile -C`, les noms de fonction à caractères étendus, le
-commentaire pris pour un programme, l'indirection par élément de tableau.
+Sixteen rounds of adversarial review on `hooks/pretooluse_guard.py`. The
+engine stabilized (two rounds with no finding); the hook produced roughly one
+bypass per round, and **each one came from a bash mechanism never modelled or
+from the gap left between two neighbouring guards**: `trap`, `case`, `coproc`,
+`mapfile -C`, function names with extended characters, a comment taken for a
+program, indirection by an array element.
 
-Tous sont gratuits avec un arbre syntaxique. Une denylist qui approxime la
-grammaire de bash ne converge pas vers zéro par la seule méthode adversariale.
+All are free with a syntax tree. A denylist that approximates the grammar of
+bash does not converge to zero via the adversarial method alone.
 
-## Ce que la grammaire apporte — et ce qu'elle n'apporte PAS
+## What the grammar brings — and what it does NOT bring
 
-Elle donne la **structure** : `case`, définitions de fonction, groupes,
-heredocs, commentaires, substitutions, concaténations. Tout ce que quatorze
-rounds d'heuristiques approximaient.
+It gives the **structure**: `case`, function definitions, groups, heredocs,
+comments, substitutions, concatenations. Everything that fourteen rounds of
+heuristics were approximating.
 
-Elle **n'évalue pas**. `e${IFS//?/}nv` reste un seul nœud, `${!m[k1]}` reste une
-expansion. La logique d'expansion, d'enveloppe et d'indirection reste
-NÉCESSAIRE — c'est de la sémantique de bash, pas de la syntaxe. Elle vit dans
-`_reduire_token` (mot à mot) et dans `_reecritures_semantiques`.
+It **does not evaluate**. `e${IFS//?/}nv` remains a single node, `${!m[k1]}`
+remains an expansion. The expansion, wrapper and indirection logic remains
+NECESSARY — it is bash semantics, not syntax. It lives in `_reduire_token`
+(word by word) and in `_reecritures_semantiques`.
 
-Le vrai gain : les arguments arrivent **avec leur quoting intact**. Toute la
-difficulté « le quoting est déjà retiré, on ne sait pas où la sous-commande
-s'arrête » — qui imposait des doubles lectures pour `trap`, `mapfile -C` et
-`bash -c` — disparaît.
+The real gain: arguments arrive **with their quoting intact**. All the
+difficulty of "the quoting has already been stripped, we do not know where the
+sub-command ends" — which forced double reads for `trap`, `mapfile -C` and
+`bash -c` — disappears.
 
-## L'ordre des passes, qui est tout le sujet
+## The order of the passes, which is the whole subject
 
 ```
-commande BRUTE
+RAW command
   │
-  ├─► normalize()          quoting/globs détruits  ──► contrôles par REGEX
-  │                                                    (coffre, fichiers,
+  ├─► normalize()          quoting/globs destroyed  ──► REGEX checks
+  │                                                    (vault, files,
   │                                                     DENY_COMMAND_PATTERNS,
-  │                                                     variables sensibles)
+  │                                                     sensitive variables)
   │
-  └─► _NESTED_RE / _REF_SIMPLE_RE (marqueurs)
-        └─► tokenize()  =  _reecritures_semantiques  ──►  grammaire
+  └─► _NESTED_RE / _REF_SIMPLE_RE (markers)
+        └─► tokenize()  =  _reecritures_semantiques  ──►  grammar
                                                             └─► _reduire_token
 ```
 
-**Le découpage travaille sur la commande BRUTE.** Normaliser d'abord faisait
-RENAÎTRE une structure que les guillemets avaient supprimée : `git commit -m
-'handle case in parser(env)'` redevenait un sous-shell exécutant `env`. Les
-neuf faux positifs du premier branchement venaient tous de là, et ils
-ressuscitaient exactement le défaut que les rounds 5, 8 et 9 avaient éliminé.
+**The tokenization works on the RAW command.** Normalizing first made a
+structure that quotes had suppressed RE-EMERGE: `git commit -m 'handle case in
+parser(env)'` became a sub-shell executing `env` again. The nine false
+positives of the first branching all came from this, and they resurrected
+exactly the defect that rounds 5, 8 and 9 had eliminated.
 
-Les contrôles par regex, eux, gardent le texte normalisé : c'est là que
-l'obfuscation (`an[o]nproxy`, `an''onproxy`) se neutralise.
+The regex checks, however, keep the normalized text: it is there that
+obfuscation (`an[o]nproxy`, `an''onproxy`) is neutralized.
 
-## Les quatre pièges, chacun payé une fois
+## The four traps, each paid once
 
-### 1. Une expansion d'accolades doit précéder la grammaire
-`{env,}` n'est pas du bash valide tant que l'expansion n'a pas eu lieu :
-l'arbre part en `ERROR`, et le mot reconstruit (`env`) n'apparaît nulle part.
-L'expansion se fait donc AVANT l'analyse — mais seulement **hors guillemets**
-(`_expanse_hors_quotes`), sinon un corps JSON (`'{"a":1,"b":2}'`) est expansé
-et l'appariement des guillemets, dont la grammaire dépend, est rompu.
+### 1. Brace expansion must precede the grammar
+`{env,}` is not valid bash until expansion has taken place: the tree ends in
+`ERROR`, and the reconstructed word (`env`) appears nowhere. Expansion is
+therefore done BEFORE analysis — but only **outside quotes**
+(`_expanse_hors_quotes`), otherwise a JSON body (`'{"a":1,"b":2}'`) is
+expanded and the quote pairing, on which the grammar depends, is broken.
 
-Corollaire trouvé en corrigeant : `${IFS,,}` n'est PAS une alternative, c'est
-un opérateur de casse. Sans le `(?<!\$)` de `_ACCOLADES_RE`,
-`env${IFS,,}> /tmp/dump.txt` était réécrit en `env$IFS> env$> env$>`.
+Corollary found while fixing: `${IFS,,}` is NOT an alternative, it is a case
+operator. Without the `(?<!\$)` in `_ACCOLADES_RE`, `env${IFS,,}> /tmp/dump.txt`
+was rewritten as `env$IFS> env$> env$>`.
 
-### 2. La grammaire refuse des noms de fonction que bash accepte
-`my.fn()` passe, `a@b()`, `a%b()`, `1fn()` non : l'arbre part en `ERROR` et le
-CORPS disparaît — or c'est lui qui porte les programmes. Seul le NOM est
-remplacé par un identifiant neutre (`_canonise_noms_de_fonction`), la structure
-redevient lisible. Le nom est délimité en remontant depuis la parenthèse,
-jamais par une regex qui le chercherait à gauche : une classe libre en tête
-rétro-traque à chaque position d'un mot long (quinze secondes sur vingt mille
-caractères, round 10).
+### 2. The grammar refuses function names that bash accepts
+`my.fn()` passes, `a@b()`, `a%b()`, `1fn()` do not: the tree ends in `ERROR`
+and the BODY disappears — yet it is the body that carries the programs. Only
+the NAME is replaced by a neutral identifier (`_canonise_noms_de_fonction`),
+the structure becomes readable again. The name is delimited by walking back
+from the parenthesis, never by a regex that would search for it to the left:
+a free class at the head backtracks at every position of a long word (fifteen
+seconds on twenty thousand characters, round 10).
 
-### 3. Un argument CITÉ ne se lit plus par accident
-C'est le gain, et c'est ce qui casse si on ne fait rien : `bash -c 'f() { env;
-}; f'` rend un `raw_string` que la grammaire n'ouvre pas. Il faut ré-analyser
-EXPLICITEMENT (`_sous_scripts`) : la valeur de `-c` d'une enveloppe SHELL,
-l'argument de `trap` (moins les spécifications de signal), la valeur de
-`mapfile -C` / `readarray -C`, la valeur de `env -S`, et le corps d'un heredoc
-(qui pend sous `heredoc_redirect`, donc hors des mots de la commande).
+### 3. A QUOTED argument is no longer read by accident
+This is the gain, and it is what breaks if nothing is done: `bash -c 'f() {
+env; }; f'` returns a `raw_string` that the grammar does not open. It must be
+re-analyzed EXPLICITLY (`_sous_scripts`): the value of `-c` for a SHELL
+wrapper, the argument of `trap` (minus the signal specifications), the value
+of `mapfile -C` / `readarray -C`, the value of `env -S`, and the body of a
+heredoc (which hangs under `heredoc_redirect`, so outside the words of the
+command).
 
-Chaque niveau repasse par `_reecritures_semantiques` : un script imbriqué peut
-lui aussi porter un `coproc`, un alias ou une accolade.
+Each level goes back through `_reecritures_semantiques`: a nested script can
+itself carry a `coproc`, an alias or a brace.
 
-### 4. La grammaire concatène, comme bash — la lecture des options aussi
-`bash -c"env"` donne un nœud `concatenation` (`word` + `string`), réduit en
-`-cenv`. Ni la règle `-c` ni la ré-analyse ne le voyaient : **contournement
-introduit par mon propre correctif**, trouvé en attaquant le code neuf. Le
-découper au tokeniseur serait faux (bash produit bien UN mot, et
-`/usr/"bin"/env` doit rester `/usr/bin/env`) : c'est à la couche qui lit les
-options de séparer `-c` de sa valeur attachée (`_OPT_C_ATTACHEE_RE`).
+### 4. The grammar concatenates, like bash — the option reader too
+`bash -c"env"` produces a `concatenation` node (`word` + `string`), reduced to
+`-cenv`. Neither the `-c` rule nor the re-analysis saw it: **bypass
+introduced by my own fix**, found by attacking the new code. Splitting it at
+the tokenizer would be wrong (bash does produce ONE word, and `/usr/"bin"/env`
+must remain `/usr/bin/env`): it is up to the layer that reads options to
+separate `-c` from its attached value (`_OPT_C_ATTACHEE_RE`).
 
-## Faits de grammaire, vérifiés
+## Grammar facts, verified
 
 ```
-export -p          → declaration_command      (PAS command)
+export -p          → declaration_command      (NOT command)
 readonly -p        → declaration_command
 local -n r=X       → declaration_command
 unset FOO          → unset_command
 env                → command
 bash <<'FIN'…      → heredoc_redirect → heredoc_start, heredoc_body, heredoc_end
-bash -c 'f() {…}'  → command_name, word(-c), raw_string      (non ouvert)
+bash -c 'f() {…}'  → command_name, word(-c), raw_string      (not opened)
 bash -c"env"       → command_name, concatenation(word(-c), string)
-coproc { ls; }     → coproc/{/ls en MOTS, puis une commande `}`
-                     (la grammaire ne connaît PAS cette forme)
+coproc { ls; }     → coproc/{/ls as WORDS, then a `}` command
+                     (the grammar does NOT know this form)
 ```
 
-`find … -exec env \;` : le terminateur arrive comme un mot ordinaire, et
-l'échappement qui le distinguait tombe à la réduction — le garder faisait
-passer `env` pour un préfixe exécutant `;`.
+`find … -exec env \;`: the terminator arrives as an ordinary word, and the
+escape that distinguished it drops on reduction — keeping it made `env` pass
+for a prefix executing `;`.
 
-## Amorçage
+## Bootstrap
 
-Claude Code lance le hook comme un exécutable, donc sous le python SYSTÈME, qui
-n'a pas la grammaire. `_relance_sous_interpreteur_du_projet` le rejoue sous
-`.venv/bin/python` ; `os.execv` PRÉSERVE stdin, l'événement reste lisible.
+Claude Code launches the hook as an executable, so under the SYSTEM python,
+which does not have the grammar. `_relance_sous_interpreteur_du_projet`
+replays it under `.venv/bin/python`; `os.execv` PRESERVES stdin, the event
+remains readable.
 
-La relance a lieu depuis `main`, **jamais à l'import** : une suite de tests
-lancée sans la grammaire verrait sinon son propre processus remplacé. Un
-marqueur d'environnement empêche la boucle si le second interpréteur ne l'a pas
-non plus.
+The re-launch happens from `main`, **never on import**: a test suite launched
+without the grammar would otherwise see its own process replaced. An
+environment marker prevents the loop if the second interpreter does not have
+it either.
 
 ## Invariant
 
-Le hook est **fail-closed** depuis `f1e00f8`. La grammaire est devenue un
-prérequis de l'analyse : sans elle, `tokenize` lève `GrammaireIndisponible`,
-`main` écrit un REFUS. Un hook qui plante n'écrit aucune décision, et l'outil
-s'exécute — c'est le seul mode d'échec qui ouvre le canal au lieu de le fermer.
-Figé par `test_sans_grammaire_le_hook_refuse`.
+The hook is **fail-closed** since `f1e00f8`. The grammar has become a
+prerequisite of the analysis: without it, `tokenize` raises
+`GrammaireIndisponible`, `main` writes a REFUSAL. A hook that crashes writes
+no decision, and the tool executes — that is the only failure mode that opens
+the channel instead of closing it. Frozen by
+`test_sans_grammaire_le_hook_refuse`.
 
-## Outil de diagnostic
+## Diagnostic tool
 
-`uv run python tests/ab_decoupage.py` — liste les commandes du corpus de tests
-que la grammaire refuse encore (`ERROR`) ou réduit à rien. Un nœud `ERROR`
-signifie que le sous-arbre est plat, donc qu'un programme peut y disparaître :
-c'est ainsi que `{env,}` et `a@b()` ont été trouvés.
+`uv run python tests/ab_decoupage.py` — lists the commands from the test
+corpus that the grammar still refuses (`ERROR`) or reduces to nothing. An
+`ERROR` node means that the sub-tree is flat, therefore that a program can
+disappear in it: this is how `{env,}` and `a@b()` were found.
 
-Il a d'abord servi de différentiel entre les heuristiques et la grammaire, le
-temps du remplacement — c'est lui qui a montré le piège des
-`declaration_command` AVANT le remplacement, ce qui aurait sinon rouvert d'un
-coup toute la famille des déverseurs durcie au round 15.
+It first served as a differential between the heuristics and the grammar, for
+the duration of the replacement — it is what showed the `declaration_command`
+trap BEFORE the replacement, which would otherwise have re-opened at a stroke
+the whole family of dumpers hardened in round 15.
 
-## Mesures (2026-08-05)
+## Measurements (2026-08-05)
 
 | | |
 |---|---|
-| commande réaliste | 0,003 s |
-| mot de 20 000 caractères | 0,016 s |
-| 500 Ko de texte | 0,42 s |
-| 100 groupes d'accolades | 0,010 s |
-| 5 000 `declare -n` | 0,47 s |
-| 1 000 lignes | 0,08 s |
-| relance sous l'interpréteur du projet | +30 ms |
-| timeout du hook (`.claude/settings.json`) | 10 s |
+| realistic command | 0.003 s |
+| 20,000-character word | 0.016 s |
+| 500 KB of text | 0.42 s |
+| 100 brace groups | 0.010 s |
+| 5,000 `declare -n` | 0.47 s |
+| 1,000 lines | 0.08 s |
+| re-launch under project interpreter | +30 ms |
+| hook timeout (`.claude/settings.json`) | 10 s |

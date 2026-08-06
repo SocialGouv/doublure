@@ -1,421 +1,422 @@
-# Reprise de session — état au 2026-08-05
+# Session resume — state at 2026-08-05
 
-> Ce fichier complète `CLAUDE.md` (qui porte l'état des phases et les décisions
-> verrouillées). Ici : **le travail EN COURS**, ce qui reste à faire, les
-> pièges déjà payés, et ce que seize rounds de revue ont appris.
-> Ordre de lecture à la reprise : `CLAUDE.md` → ce fichier → `git log`.
+> This file complements `CLAUDE.md` (which carries the state of the phases
+> and the locked decisions). Here: **the work IN PROGRESS**, what remains to
+> do, the traps already paid for, and what sixteen rounds of review taught.
+> Reading order on resume: `CLAUDE.md` → this file → `git log`.
 
-## 0. À FAIRE EN PREMIER, à la reprise
+## 0. TO DO FIRST, on resume
 
-**Le parseur (§3 bis) est FAIT et prouvé le 2026-08-05. La boucle adversariale
-reste CLOSE — jo l'a arrêtée pour cette raison précise. Il n'y a pas de
-chantier ouvert : demander à jo ce qu'il veut attaquer.**
+**The parser (§3 bis) is DONE and proven on 2026-08-05. The adversarial loop
+remains CLOSED — jo stopped it for that precise reason. There is no open
+project: ask jo what he wants to attack.**
 
-1. Vérifier l'état RÉEL avant d'agir :
+1. Check the REAL state before acting:
    ```bash
    git log --oneline -5 && git status --short
-   uv run pytest tests/ --ignore=tests/egress -q      # doit être vert
-   ss -lntp | grep 9000                               # détecteur en écoute ?
+   uv run pytest tests/ --ignore=tests/egress -q      # must be green
+   ss -lntp | grep 9000                               # detector listening?
    ```
-2. Si le sujet touche au hook : lire `docs/parseur-hook.md` AVANT tout — il
-   porte l'ordre des passes (qui est tout le sujet) et les quatre pièges déjà
-   payés. Ne pas les re-dériver.
-3. Ce qui reste ouvert est en §6 bis, et la piste « IA locale + inventaire »
-   en §6. Rien n'y est engagé.
+2. If the subject touches the hook: read `docs/hook-parser.md` FIRST — it
+   carries the order of passes (which is the whole subject) and the four
+   traps already paid for. Do not re-derive them.
+3. What remains open is in §6 bis, and the "local AI + inventory" track in
+   §6. Nothing is committed there.
 
-Rien n'est poussé sur un remote — le dépôt est local, tout est committé.
+Nothing is pushed to a remote — the repo is local, everything is committed.
 
-## 1. Les deux consignes, toutes deux CLOSES
+## 1. The two instructions, both CLOSED
 
-### Close : le parseur (§3 bis) — FAIT le 2026-08-05
-Arbitrage de jo, 2026-08-05, sur trois options que je lui ai posées :
-**« arrêter la boucle et attaquer le parseur bash »**. Raison énoncée : les
-findings du hook des cinq derniers rounds (`trap`, `case`, `coproc`,
-`mapfile -C`, l'indirection par tableau, les liaisons de variables) sont tous
-GRATUITS avec un AST, et une denylist sur un langage aussi vaste que bash ne
-converge pas vers zéro par la seule méthode adversariale.
+### Closed: the parser (§3 bis) — DONE on 2026-08-05
+jo's arbitration, 2026-08-05, on three options I put to him:
+**"stop the loop and attack the bash parser"**. Stated reason: the hook
+findings of the last five rounds (`trap`, `case`, `coproc`, `mapfile -C`,
+indirection by array, variable bindings) are all FREE with an AST, and a
+denylist on a language as wide as bash does not converge to zero by the
+adversarial method alone.
 
-Livré : `tokenize` s'appuie sur `tree-sitter-bash`, la grammaire est un
-PRÉREQUIS (sans elle le hook refuse), et le hook se relance sous
-l'interpréteur du projet. Preuves : 1255 tests unitaires, `phase4_e2e.sh` et
-`phase3_e2e.sh` verts en session réelle. **Tout est dans
-`docs/parseur-hook.md`** — surtout l'ordre des passes et les quatre pièges.
+Delivered: `tokenize` relies on `tree-sitter-bash`, the grammar is a
+PREREQUISITE (without it the hook refuses), and the hook is relaunched under
+the project interpreter. Proofs: 1255 unit tests, `phase4_e2e.sh` and
+`phase3_e2e.sh` green in a real session. **Everything is in
+`docs/hook-parser.md`** — above all the order of passes and the four traps.
 
-### Close : la boucle adversariale
-> « Relance une revue adversariale agent opus 5 effort max sur l'ensemble du
-> repo et traite les findings, recommence jusqu'à ce qu'il n'y ait plus aucun
-> finding high/critical (et qui soit non assumé) »
+### Closed: the adversarial loop
+> "Relaunch an adversarial review with an agent opus 5 max effort on the
+> whole repo and process the findings, restart until there is no high/critical
+> finding left (and one that is not assumed)"
 
-**Rounds 3 à 16 traités.** État à l'arrêt :
-- **Moteur / walker / proxy / détecteur : critère d'arrêt ATTEINT.** Rounds 15
-  ET 16 sans aucun finding critique ni haut, sur des périmètres différents.
-- **Hook : environ un contournement par round**, jusqu'au dernier inclus. Deux
-  motifs se répètent et méritent d'être cherchés explicitement si la boucle
-  reprend : **la JUMELLE** (une branche durcie, sa sœur laissée ouverte) et
-  **l'EXEMPTION QUI DÉBORDE** (une garde ajoutée contre un faux positif finit
-  par couvrir un cas dangereux — c'est ainsi que `${!PREFIX@}` est passé).
+**Rounds 3 to 16 processed.** State at stop:
+- **Engine / walker / proxy / detector: stop criterion REACHED.** Rounds 15
+  AND 16 without any critical or high finding, on different perimeters.
+- **Hook: about one bypass per round**, up to and including the last. Two
+  patterns repeat and deserve to be searched for explicitly if the loop
+  resumes: **the TWIN** (one branch hardened, its sister left open) and
+  **the EXEMPTION THAT OVERFLOWS** (a guard added against a false positive
+  ends up covering a dangerous case — this is how `${!PREFIX@}` got through).
 
-Si la boucle reprend un jour, le protocole et les prompts qui marchent sont
-en §3 ; les listes à donner aux agents sont en §4 et §5.
-### Protocole appliqué à chaque round
-1. Deux agents `general-purpose`, `model: opus`, en parallèle : un sur le hook,
-   un sur walker + moteur + proxy.
-2. Leur DONNER §4 (déjà corrigé) et §5 (assumé), sinon ils repassent leur temps
-   sur du déjà-traité.
-3. Exiger : preuve EXÉCUTÉE, gravité, correctif minimal, et « dis-le
-   explicitement si tu ne trouves rien de haut/critique ».
-4. Vérifier chaque finding MOI-MÊME avant de corriger — plusieurs se sont
-   révélés faux ou non reproductibles (cf. §8).
-5. Corriger, une non-régression par finding, revalider E2E, committer.
+If the loop resumes one day, the protocol and the prompts that work are in
+§3; the lists to give to the agents are in §4 and §5.
+### Protocol applied on each round
+1. Two `general-purpose` agents, `model: opus`, in parallel: one on the hook,
+   one on walker + engine + proxy.
+2. GIVE them §4 (already fixed) and §5 (assumed), otherwise they spend their
+   time on what has already been handled.
+3. Require: EXECUTED proof, severity, minimal fix, and "say it explicitly if
+   you find nothing high/critical".
+4. Verify each finding MYSELF before fixing — several turned out to be false
+   or non reproducible (cf. §8).
+5. Fix, one non-regression per finding, revalidate E2E, commit.
 
-### Contraintes de rédaction des prompts d'agent (apprises à la dure)
-- Ne pas écrire le chemin du coffre en toutes lettres : **mon propre hook
-  refuse alors le lancement de l'agent**. Dire « le répertoire d'état de
-  l'utilisateur ».
-- Éviter les backticks autour de code contenant une substitution : même effet.
-- Demander à l'agent d'écrire ses scripts avec l'outil Write, **pas** par
-  heredoc (le hook analyse le corps d'un heredoc alimentant un interpréteur).
-- **Imposer un rendu par LOTS.** Demander « un rapport partiel tôt » ne suffit
-  pas : au round 13, les DEUX agents sont morts d'un « stream idle timeout »
-  sans rien rendre du tout. La consigne qui marche est explicite — un script
-  par lot, une synthèse écrite après CHAQUE lot, six lots maximum, puis rendu
-  final même incomplet. Découper le prompt en lots numérotés donne à l'agent
-  la structure qui l'empêche d'explorer en silence.
-- Un agent mort ne rend RIEN d'exploitable : relancer, ne pas essayer de
-  récupérer sa trace (le fichier de transcription déborde le contexte).
+### Constraints on writing agent prompts (learned the hard way)
+- Do not write the vault path in full: **my own hook then refuses the launch
+  of the agent**. Say "the user's state directory".
+- Avoid backticks around code containing a substitution: same effect.
+- Ask the agent to write its scripts with the Write tool, **not** by heredoc
+  (the hook analyzes the body of a heredoc feeding an interpreter).
+- **Impose delivery in BATCHES.** Asking for "an early partial report" is not
+  enough: at round 13, BOTH agents died of a "stream idle timeout" without
+  delivering anything at all. The instruction that works is explicit — one
+  script per batch, a synthesis written after EACH batch, six batches
+  maximum, then a final delivery even if incomplete. Splitting the prompt
+  into numbered batches gives the agent the structure that prevents it from
+  exploring in silence.
+- A dead agent returns NOTHING usable: relaunch, do not try to recover its
+  trace (the transcript file overflows the context).
 
-## 2. Où en est le code
+## 2. Where the code stands
 
-**2767 tests verts** (2749 unitaires + 18 egress). Les six phases ont leur
-critère de sortie prouvé (détail : `CLAUDE.md`).
+**2767 tests green** (2749 unit + 18 egress). The six phases each have their
+proven exit criterion (detail: `CLAUDE.md`).
 
 ```bash
 uv run pytest tests/ --ignore=tests/egress   # 2749
 uv run pytest tests/egress/test_report.py    # 18
-uv run python tests/corpus_eval.py           # 6 critères durs
-bash tests/phase3_e2e.sh                     # session RÉELLE + capture
-bash tests/phase4_e2e.sh                     # commande interdite bloquée
-bash tests/policy_e2e.sh                     # politique, modes, arbitrage
-bash tests/api_e2e.sh                        # API d'arbitrage sur socket Unix
+uv run python tests/corpus_eval.py           # 6 hard criteria
+bash tests/phase3_e2e.sh                     # REAL session + capture
+bash tests/phase4_e2e.sh                     # forbidden command blocked
+bash tests/policy_e2e.sh                     # policy, modes, arbitration
+bash tests/api_e2e.sh                        # arbitration API on Unix socket
 uv run python tests/detect_latency.py        # P95 < 150 ms
 ```
-Prérequis : le détecteur doit tourner (`services/anonshield/wrapper/run.sh`).
+Prerequisite: the detector must be running (`services/anonshield/wrapper/run.sh`).
 
-**Toujours rejouer `phase3_e2e.sh` après une modification du walker, du moteur
-ou de l'allowlist**, et `phase4_e2e.sh` après une modification du hook. Trois
-défauts n'ont été vus QUE par eux (§7).
+**Always replay `phase3_e2e.sh` after a modification of the walker, the
+engine or the allowlist**, and `phase4_e2e.sh` after a modification of the
+hook. Three defects were seen ONLY by them (§7).
 
-Les scripts de vérification des rounds 10 à 17 vivaient dans `/tmp` et NE
-SURVIVENT PAS à un redémarrage. Leur contenu est figé dans
-`tests/test_pretooluse_hook.py` et `tests/test_review_regressions.py`, qui sont
-la vraie non-régression. Ne pas les recréer : lancer la suite.
+The verification scripts for rounds 10 to 17 lived in `/tmp` and DO NOT
+SURVIVE a reboot. Their content is frozen in
+`tests/test_pretooluse_hook.py` and `tests/test_review_regressions.py`, which
+are the real non-regression. Do not recreate them: run the suite.
 
-Diagnostic du parseur : `uv run python tests/ab_decoupage.py` — il liste les
-commandes que la grammaire refuse (`ERROR`) ou réduit à rien. Un nœud `ERROR`
-veut dire que le sous-arbre est plat, donc qu'un programme peut y disparaître :
-c'est ainsi que `{env,}` et `a@b()` ont été trouvés.
+Parser diagnostic: `uv run python tests/ab_decoupage.py` — it lists the
+commands the grammar refuses (`ERROR`) or reduces to nothing. An `ERROR`
+node means the sub-tree is flat, therefore that a program can disappear in
+it: this is how `{env,}` and `a@b()` were found.
 
-## 3. SI la boucle adversariale reprend un jour
+## 3. IF the adversarial loop ever resumes
 
-1. **Chercher la JUMELLE de chaque correctif.** C'est le motif des rounds 12 à
-   14, sans exception : je durcis une branche et laisse l'autre ouverte —
-   l'indirection sans l'alias, le premier niveau d'un `media_type` sans son
-   sous-type, `${!x}` sans `declare -n r=$1`. Poser la question directement
-   (« où est la jumelle ? ») a marché à chaque fois ; l'oublier a coûté un
-   round à chaque fois.
-2. **Vérifier les voisins, ne pas les supposer inoffensifs.** `@P` exécute ;
-   `@Q`, `@E`, `@A`, `@K`, `@L`, `@U` n'ont jamais été testés. Même chose pour
-   toute famille d'opérateurs dont un seul membre a été traité.
-3. **Chercher ce qui n'a JAMAIS été modélisé.** La moitié des findings des
-   rounds 11 à 13 venaient de mécanismes absents du modèle, pas de
-   régressions. Côté bash, restent non explorés : `select`, `exec` sur
-   descripteurs, `local -x`, tableaux, `GLOBIGNORE`, `CDPATH`, `wait`,
-   `builtin`, `shopt`, `complete -F`, `caller`, `hash`, `type -P`.
-4. **Mesurer le COÛT, pas seulement la décision.** Tout motif dont la tête est
-   une classe libre est un déni de service en attente.
-5. **Surfaces à faible couverture, à attaquer avant les autres** : le PROXY
-   lui-même (en-têtes, `Content-Length` après réécriture, annulation du client
-   en plein flux, requêtes concurrentes) et le SERVICE DE DÉTECTION — dont une
-   question jamais posée : que fait le proxy quand le détecteur est
-   INDISPONIBLE ? Si ce n'est pas fail-closed, une panne ouvre une fuite.
-   (Coffre et concurrence : attaqués au round 14, RAS — ne pas y revenir.)
-6. Points **non corrigés**, à re-arbitrer :
-   - **M3 — fragmentation de spans** : un span URL tronqué qui chevauche un
-     span HOSTNAME donne DEUX noms fictifs à une machine. Pas une fuite ; une
-     régression du déterminisme (§9 du plan). Piste : fusionner les spans
-     chevauchants avant substitution.
-   - **`container` / `stop_sequences`** : traversés, mais le détecteur ne
-     classe pas une valeur comme `INTERNAL_STOP_TOKEN_acme`. Documenter ou
-     ajouter un custom pattern.
-   - **Test d'entropie du coffre** : ne détecte pas seul un XOR dérivé du
-     nonce ; ce sont les tests voisins qui rattrapent.
-   - **`test_la_liste_suit_le_detecteur`** *skipped* sans le service : figer
-     aussi le CARDINAL attendu.
-   - **`sensitive_from_fixture`** ne reconnaît que quelques TLD.
-   - **Résidu connu** : un message de commit citant une primitive, suivi d'un
-     point-virgule puis d'un interpréteur en ligne, reste un faux positif. Le
-     point-virgule sépare des INSTRUCTIONS dans un programme en ligne : le
-     traiter comme une frontière de commande casserait les one-liners.
-7. Backlog hors boucle : `corpus/real/` non annoté (matière de jo),
-   KMS/rotation/journal d'accès immuable (Phase 6, hors MVP).
+1. **Look for the TWIN of each fix.** It is the pattern of rounds 12 to 14,
+   without exception: I harden one branch and leave the other open — the
+   indirection without the alias, the first level of a `media_type` without
+   its subtype, `${!x}` without `declare -n r=$1`. Asking the question
+   directly ("where is the twin?") has worked every time; forgetting it
+   costs a round every time.
+2. **Check the neighbours, do not assume them harmless.** `@P` executes;
+   `@Q`, `@E`, `@A`, `@K`, `@L`, `@U` have never been tested. Same for any
+   family of operators of which only one member has been handled.
+3. **Look for what has NEVER been modelled.** Half the findings of rounds 11
+   to 13 came from mechanisms absent from the model, not from regressions.
+   On the bash side, still unexplored: `select`, `exec` on descriptors,
+   `local -x`, arrays, `GLOBIGNORE`, `CDPATH`, `wait`, `builtin`, `shopt`,
+   `complete -F`, `caller`, `hash`, `type -P`.
+4. **Measure the COST, not just the decision.** Any pattern whose head is a
+   free class is a pending denial of service.
+5. **Surfaces with low coverage, to attack before the others**: the PROXY
+   itself (headers, `Content-Length` after rewrite, client cancellation
+   mid-stream, concurrent requests) and the DETECTION SERVICE — including a
+   question never asked: what does the proxy do when the detector is
+   UNAVAILABLE? If that is not fail-closed, an outage opens a leak.
+   (Vault and concurrency: attacked at round 14, all clear — do not go back.)
+6. Points **not fixed**, to re-arbitrate:
+   - **M3 — span fragmentation**: a truncated URL span that overlaps a
+     HOSTNAME span gives TWO fictitious names to one machine. Not a leak; a
+     determinism regression (plan §9). Track: merge overlapping spans before
+     substitution.
+   - **`container` / `stop_sequences`**: traversed, but the detector does not
+     classify a value like `INTERNAL_STOP_TOKEN_acme`. Document or add a
+     custom pattern.
+   - **Vault entropy test**: does not on its own detect an XOR derived from
+     the nonce; it is the neighbouring tests that catch it.
+   - **`test_la_liste_suit_le_detecteur`** *skipped* without the service:
+     freeze the expected CARDINAL as well.
+   - **`sensitive_from_fixture`** only recognizes a few TLDs.
+   - **Known residue**: a commit message quoting a primitive, followed by a
+     semicolon then an inline interpreter, remains a false positive. The
+     semicolon separates INSTRUCTIONS in an inline program: treating it as a
+     command boundary would break one-liners.
+7. Backlog outside the loop: `corpus/real/` not annotated (jo's material),
+   KMS/rotation/immutable access log (Phase 6, outside MVP).
 
-## 3 bis. Le découpage du hook par GRAMMAIRE — FAIT le 2026-08-05
+## 3 bis. The hook tokenization by GRAMMAR — DONE on 2026-08-05
 
-**→ `docs/parseur-hook.md` fait foi.** Il porte l'ordre des passes, les quatre
-pièges payés, les faits de grammaire vérifiés et les mesures. Le lire avant
-toute modification du hook. Ce qui suit n'en est que le repère.
+**→ `docs/hook-parser.md` is authoritative.** It carries the order of the
+passes, the four traps paid, the verified grammar facts and the measurements.
+Read it before any modification of the hook. What follows is only a signpost.
 
-Arbitrage de jo (2026-08-05) : arrêter la boucle adversariale sur le hook et
-attaquer le parseur. Le moteur, lui, était déjà stable — rounds 15 et 16 sans
-aucun finding critique ni haut.
+jo's arbitration (2026-08-05): stop the adversarial loop on the hook and
+attack the parser. The engine, itself, was already stable — rounds 15 and 16
+without any critical or high finding.
 
-### Livré
-- `tokenize` s'appuie sur `tree-sitter-bash`. Les béquilles de quatorze rounds
-  ont disparu : retrait des commentaires, suppression des en-têtes de fonction,
-  accolades conditionnelles, découpage `case`, double lecture des
-  sous-commandes. La structure vient de la grammaire.
-- Ce qu'elle n'apporte pas reste écrit à la main : expansions, enveloppes,
-  indirections — c'est de la sémantique de bash, pas de la syntaxe.
-- **La grammaire est un PRÉREQUIS** : sans elle, `tokenize` lève
-  `GrammaireIndisponible` et le hook REFUSE. Le hook se relance sous
-  `.venv/bin/python` (`os.execv` préserve stdin), depuis `main` et jamais à
-  l'import — sinon une suite de tests sans grammaire verrait son propre
-  processus remplacé.
+### Delivered
+- `tokenize` relies on `tree-sitter-bash`. The crutches of fourteen rounds
+  have disappeared: comment stripping, removal of function headers,
+  conditional braces, `case` tokenization, double reads of sub-commands. The
+  structure comes from the grammar.
+- What it does not bring stays written by hand: expansions, wrappers,
+  indirections — this is bash semantics, not syntax.
+- **The grammar is a PREREQUISITE**: without it, `tokenize` raises
+  `GrammaireIndisponible` and the hook REFUSES. The hook relaunches itself
+  under `.venv/bin/python` (`os.execv` preserves stdin), from `main` and
+  never on import — otherwise a test suite without the grammar would see its
+  own process replaced.
 
-### Preuves
-- **1255 tests unitaires** verts (28 ajoutés pour ce round).
-- `bash tests/phase4_e2e.sh` → **PASS** en session Claude Code réelle : commande
-  interdite bloquée avant exécution, tracée, raison exacte citée par le modèle.
-- `bash tests/phase3_e2e.sh` → **PASS** : 0 valeur réelle sur 393,6 Ko capturés,
-  restauration 3/3 côté opérateur.
-- Disponibilité : 0,003 s sur une commande réaliste, 0,42 s sur 500 Ko,
-  0,47 s sur 5 000 `declare -n`.
+### Proofs
+- **1255 unit tests** green (28 added for this round).
+- `bash tests/phase4_e2e.sh` → **PASS** in a real Claude Code session:
+  forbidden command blocked before execution, traced, exact reason cited by
+  the model.
+- `bash tests/phase3_e2e.sh` → **PASS**: 0 real value over 393.6 KB captured,
+  restoration 3/3 on the operator side.
+- Availability: 0.003 s on a realistic command, 0.42 s on 500 KB, 0.47 s on
+  5,000 `declare -n`.
 
-### Ce que ce round a appris, et qui vaut au-delà du parseur
-1. **L'ordre des passes était tout le sujet.** Le découpage travaille sur la
-   commande BRUTE ; seuls les contrôles par regex gardent le texte normalisé.
-   Normaliser avant de parser faisait RENAÎTRE une structure que les guillemets
-   avaient supprimée, et les neuf faux positifs du premier branchement venaient
-   tous de là — ils ressuscitaient d'un coup le défaut que les rounds 5, 8 et 9
-   avaient éliminé.
-2. **Un outil exact ne remplace pas une approximation sans travail.** Le gain
-   (« les arguments arrivent avec leur quoting ») ne s'hérite pas : il oblige à
-   ré-analyser EXPLICITEMENT ce qui était visible par accident.
-3. **Le code neuf est la surface la plus fraîche.** Le seul contournement
-   restant du round a été trouvé en attaquant mes propres correctifs, pas
-   l'ancien code : `bash -c"env"` arrive concaténé. Même motif que la JUMELLE —
-   la forme séparée durcie, la forme collée laissée ouverte.
-4. **Un nœud `ERROR` est un angle mort**, pas un détail : le sous-arbre devient
-   plat et un programme peut y disparaître. `tests/ab_decoupage.py` les liste.
+### What this round taught, and that holds beyond the parser
+1. **The order of passes was the whole subject.** The tokenization works on
+   the RAW command; only the regex controls keep the normalized text.
+   Normalizing before parsing made a structure that quotes had suppressed
+   RE-EMERGE, and the nine false positives of the first branching all came
+   from there — they resurrected at a stroke the defect that rounds 5, 8 and
+   9 had eliminated.
+2. **An exact tool does not replace an approximation without work.** The
+   gain ("arguments arrive with their quoting") is not inherited: it forces
+   one to re-analyze EXPLICITLY what was visible by accident.
+3. **New code is the freshest surface.** The only remaining bypass of the
+   round was found by attacking my own fixes, not the old code:
+   `bash -c"env"` arrives concatenated. Same pattern as the TWIN — the
+   separated form hardened, the attached form left open.
+4. **An `ERROR` node is a blind spot**, not a detail: the sub-tree becomes
+   flat and a program can disappear in it. `tests/ab_decoupage.py` lists
+   them.
 
-## 4. Déjà corrigé — DONNER cette liste aux agents
+## 4. Already fixed — GIVE this list to the agents
 
-**Proxy / walker** : passthrough sur chemin non modélisé · surfaces sortantes
-énumérées · seuil de longueur · mode regex sur gros volumes · chemin et query
-d'URL · cache non porté par la portée · écho de séquence d'arrêt · source de
-document en texte · blocs PEM · type non hachable · branche `properties` morte
-· mots-clés de schéma (motif de validation, format, type en union, ancres,
-références dynamiques, dépendances) · clés de propriétés à motif · sous-arbre
-non scalaire sous une clé ignorée · scalaire arbitraire sous les betas ·
-contrôle de cache et son vocabulaire · bloc de démarrage non restauré · delta
-de citations · corps d'erreur streamé · séparateurs SSE et formes mixtes ·
-delta orphelin · clés ignorées dans les arguments d'outil et les métadonnées ·
-opacité forgeable · nom de ressource MCP · types de média `x-` et `vnd.` ·
-événements mal typés · delta signé futur · corps non-objet (requête et
-réponse) · démarrage de message · conteneur scalaire · tampon SSE non borné ·
-heuristique de schéma d'entrée · liste d'outils autorisés · exemples de schéma ·
-émission après la fin du message · **opacité forgeable hors des données
-utilisateur** (message utilisateur, sortie d'outil relayée, prompt système,
-définition d'outil).
+**Proxy / walker**: passthrough on unmodelled path · outbound surfaces
+enumerated · length threshold · regex mode on large volumes · URL path and
+query · cache not carried by scope · echo of stop sequence · text document
+source · PEM blocks · non-hashable type · dead `properties` branch · schema
+keywords (validation pattern, format, type in union, anchors, dynamic
+references, dependencies) · pattern-property keys · non-scalar sub-tree
+under an ignored key · arbitrary scalar under betas · cache control and its
+vocabulary · non-restored start block · citations delta · streamed error
+body · SSE separators and mixed forms · orphan delta · ignored keys in tool
+arguments and metadata · forgeable opacity · MCP resource name · media
+types `x-` and `vnd.` · malformed events · future signed delta · non-object
+body (request and response) · message start · scalar container · unbounded
+SSE buffer · input-schema heuristic · list of authorized tools · schema
+examples · emission after message end · **forgeable opacity outside user
+data** (user message, relayed tool output, system prompt, tool definition).
 
-**Moteur / coffre** : attribut partagé se substituant à lui-même · spans
-invalides ou mal formés · recouvrement partiel · tag d'image · type interne
-forgeable · identités multiples par type ou casse · mot du lexique reprenant le
-réel · chemin dégénéré · plausibilité (UUID, MAC, préfixe de hash, personne,
-IPv6) · identifiants d'URL (forme web ET forme secure shell) · fragment ·
-IPv6 sans crochets · hôte nu · Unicode NFC · chiffrement au repos, AAD,
-rembourrage, unicité par portée · classification des types de secret · span
-PUBLIC masquant une classe substituable · nom de paramètre de requête (vide,
-encodé) · libellé de mot de passe · extraction de dépôt (casse mixte, hôte
-hostile, port) · hôte nu avec barre oblique finale · préfixe de hachage sans
-corps · **radical de l'allowlist acceptant les points** · **règle de forme
-appliquée aux sous-parties**.
+**Engine / vault**: shared attribute substituting itself · invalid or
+malformed spans · partial overlap · image tag · forgeable internal type ·
+multiple identities per type or case · lexicon word matching the real ·
+degenerate path · plausibility (UUID, MAC, hash prefix, person, IPv6) · URL
+identifiers (web form AND secure shell form) · fragment · IPv6 without
+brackets · bare host · Unicode NFC · encryption at rest, AAD, padding,
+uniqueness per scope · classification of secret types · PUBLIC span masking
+a substitutable class · request parameter name (empty, encoded) · password
+label · repository extraction (mixed case, hostile host, port) · bare host
+with trailing slash · hash prefix without body · **allowlist radical
+accepting dots** · **shape rule applied to sub-parts**.
 
-**Hook** : quoting, globs, backslashes · décodage puis shell · `ps auxe` ·
-répertoire ssh · outils MCP · substitution de processus · backticks ·
-`busybox` · `terraform show` · `port-forward` · `gh api` · `docker run` avec
-montage · socket du shell · `kubectl exec` · `helm get values` · tfstate ·
-jetons cloud · domaine commençant par `127.` · `perl -e system` avec et sans
-parenthèses · `qx`, `%x` · tuple `subprocess` · accès à l'environnement par
-crochets · import de la table d'environnement · `ENV` de Ruby · IFS sous toutes
-ses formes, y compris la forme `plus` · variable commençant par IFS ·
-référence indirecte · `find -exec` y compris derrière une enveloppe · `strace` ·
-substitution dont la sortie devient un argument · variables de base de données
-et de session · expansion perdant le nom de variable · repli exécuté · repli
-cassant les motifs de refus · repli imbriqué · nom d'expansion positionnel ·
-accolade en plusieurs mots · `env` avec découpage de chaîne · préfixe
-d'affectation vide ou concaténé · heredoc au pipe collé ou consommé par un
-pipeline · famille `exec` et `spawn` · options d'enveloppe par programme ·
-champs d'outil non énumérés · `openssl` en liste noire · options d'aide seules ·
-programme désigné par une variable · expansion d'accolades non bornée ·
-**programme livré hors ligne** (here-string, heredoc, tiret nu, substitution de
-processus, heredoc consommé par un pipe) · **corps d'une fonction et d'un
-groupe de commandes** · **alias `declare -n`** · **affectation qui fait
-exécuter** (`BASH_ENV`, `LD_PRELOAD`, `ENV` de chemin, `NODE_OPTIONS
---require`) · **valeur de `-c` prise pour un préfixe d'exécution**
-(`bash -c env _`) · **forme longue collée de `env -S`** · **motifs dont la tête
-est une classe libre** (déni de service, sept secondes sur un mot long).
+**Hook**: quoting, globs, backslashes · decoding then shell · `ps auxe` ·
+ssh directory · MCP tools · process substitution · backticks · `busybox` ·
+`terraform show` · `port-forward` · `gh api` · `docker run` with mount ·
+shell socket · `kubectl exec` · `helm get values` · tfstate · cloud tokens ·
+domain starting with `127.` · `perl -e system` with and without parentheses
+· `qx`, `%x` · `subprocess` tuple · environment access by brackets ·
+import of the environment table · Ruby's `ENV` · IFS under all its forms,
+including the `plus` form · variable starting with IFS · indirect reference
+· `find -exec` including behind a wrapper · `strace` · substitution whose
+output becomes an argument · database and session variables · expansion
+losing the variable name · executed fallback · fallback breaking refusal
+patterns · nested fallback · positional expansion name · brace in multiple
+words · `env` with string splitting · empty or concatenated assignment
+prefix · heredoc with attached pipe or consumed by a pipeline · `exec` and
+`spawn` family · wrapper options per program · unenumerated tool fields ·
+`openssl` in the blacklist · lone help options · program designated by a
+variable · unbounded brace expansion · **program delivered outside the
+line** (here-string, heredoc, bare dash, process substitution, heredoc
+consumed by a pipe) · **body of a function and of a command group** ·
+**`declare -n` alias** · **assignment that makes execute**
+(`BASH_ENV`, `LD_PRELOAD`, `ENV` of path, `NODE_OPTIONS --require`) ·
+**value of `-c` taken for an execution prefix** (`bash -c env _`) ·
+**attached long form of `env -S`** · **patterns whose head is a free class**
+(denial of service, seven seconds on a long word).
 
-**Faux positifs corrigés** (un agent bloqué est aussi cassé qu'un agent qui
-fuit) : `set +e` · `env -i` et `-u` · `command -v` · `compgen -A function` ·
-substitution dans un `echo` · variable de configuration Anthropic · `printenv`
-d'une région AWS · listage du répertoire ssh · `grep -r curl src/` · `openssl
-rand|dgst|passwd|help|ciphers` · `ssh -V` · `wget --help` · `python3 -m venv
-env` · prose citant un binaire réseau · message de commit citant une primitive
-ou un one-liner · prompt de sous-agent avec backticks · heredoc cité écrivant
-un fichier · code JavaScript cherché par `grep` · `nice -n 10` · affectation
-depuis une substitution · accolade qui n'exécute rien · nom de fichier Markdown
-pris pour un domaine.
+**False positives fixed** (a blocked agent is as broken as an agent that
+leaks): `set +e` · `env -i` and `-u` · `command -v` · `compgen -A function`
+· substitution in an `echo` · Anthropic configuration variable · `printenv`
+of an AWS region · listing of the ssh directory · `grep -r curl src/` ·
+`openssl rand|dgst|passwd|help|ciphers` · `ssh -V` · `wget --help` ·
+`python3 -m venv env` · prose citing a network binary · commit message
+citing a primitive or a one-liner · sub-agent prompt with backticks · quoted
+heredoc writing a file · JavaScript code searched by `grep` · `nice -n 10` ·
+assignment from a substitution · brace that executes nothing · Markdown
+file name taken for a domain.
 
-## 5. Assumé et documenté — ce ne sont PAS des findings
+## 5. Assumed and documented — these are NOT findings
 
-- Coffre local, même utilisateur (réponse §3.5) — fermé par la conteneurisation.
-- **D9 non tenue sur un poste** : arbitrage jo du 2026-08-02, pas de pare-feu
-  local. Voir `docs/d9-blocage-reseau.md`.
-- Les QUATRE attributs préservés (environnement, /24, humain/service,
-  interne/externe) sont des fuites volontaires (réponse §3.4).
-- Hook en **denylist**, et « rideau, pas mur » : écrire-puis-exécuter, script
-  par chemin, gestionnaires de paquets, clone vers un remote arbitraire,
-  `docker pull/push`, `helm pull`. **Ne pas empiler des motifs pour ceux-là.**
-- Écrire dans le fichier des clés autorisées n'est pas couvert : le hook vise
-  l'exfiltration, pas la persistance.
-- Dépendance à l'ordre d'insertion bornée à ~4 % (test dédié).
-- `SERVICE` classé PUBLIC (faux positifs sur de la prose technique).
-- Les noms d'outils, de serveurs MCP, de choix d'outil et la liste d'outils
-  autorisés restent verbatim : ce sont des clés de ROUTAGE, les substituer
-  casserait l'outil en silence.
-- Une valeur de contrôle en forme de jeton nu n'est pas traversée.
-- Une zone nue ne rejoint pas la zone fictive de ses hôtes : corriger en ferait
-  un attribut PARTAGÉ, donc non restaurable.
-- Un nom de paramètre de requête court, sans point ni arobase, n'est pas
-  substitué : indiscernable d'un nom d'API.
-- **Un domaine externe d'un SEUL label sur un ccTLD qui est aussi une extension
-  de fichier** (`partenaire.md`, `billing.py`) reste public. Le type du span ne
-  distingue pas un fichier d'un hôte — mesuré. Prix payé pour que `main.py`,
-  `lib.rs` et `README.md` restent lisibles par l'agent. Les hôtes internes,
-  multi-labels, restent couverts. Arbitrage de jo du 2026-08-04 : `.pl` et
-  `.ml` RETIRÉS (vrai volume de domaines, valeur d'extension nulle ici) ;
-  la liste se rejuge extension par extension, pas en bloc. Le résidu n'est
-  plus silencieux : `/detect` renvoie `public_by_shape`. Trois tests figent
-  les trois côtés (résidu, ccTLD retirés, hôtes multi-labels).
-- Les clés de définitions restent verbatim ; un substitut peut théoriquement
-  déséquilibrer une expression de validation.
-- Une coupure de chunk peut laisser un saut de ligne en tête d'un bloc SSE.
-- Corpus réel non annoté ; télémétrie coupée par les réglages de jo.
+- Vault local, same user (answer §3.5) — closed by containerization.
+- **D9 not held on a workstation**: jo's arbitration of 2026-08-02, no local
+  firewall. See `docs/d9-network-isolation.md`.
+- The FOUR preserved attributes (environment, /24, human/service,
+  internal/external) are deliberate leaks (answer §3.4).
+- Hook in **denylist**, and "curtain, not wall": write-then-execute, script
+  by path, package managers, clone to an arbitrary remote, `docker
+  pull/push`, `helm pull`. **Do not pile on patterns for those.**
+- Writing to the authorized-keys file is not covered: the hook aims at
+  exfiltration, not persistence.
+- Dependence on insertion order bounded to ~4% (dedicated test).
+- `SERVICE` classified PUBLIC (false positives on technical prose).
+- Tool names, MCP server names, tool choice, and the list of authorized
+  tools stay verbatim: they are ROUTING keys, substituting them would break
+  the tool silently.
+- A control value in the form of a bare token is not traversed.
+- A bare zone does not join the fictitious zone of its hosts: fixing it
+  would make it a SHARED attribute, therefore non-restorable.
+- A short query parameter name, without a dot or an at sign, is not
+  substituted: indistinguishable from an API name.
+- **A single-label external domain on a ccTLD that is also a file
+  extension** (`partenaire.md`, `billing.py`) stays public. The span type
+  does not distinguish a file from a host — measured. Price paid so that
+  `main.py`, `lib.rs` and `README.md` stay readable by the agent. Internal
+  hosts, multi-label, remain covered. jo's arbitration of 2026-08-04: `.pl`
+  and `.ml` REMOVED (real volume of domains, extension value null here);
+  the list is re-judged extension by extension, not in bulk. The residue is
+  no longer silent: `/detect` returns `public_by_shape`. Three tests freeze
+  the three sides (residue, removed ccTLDs, multi-label hosts).
+- Definition keys stay verbatim; a substitute can theoretically unbalance a
+  validation expression.
+- A chunk cut may leave a line break at the head of an SSE block.
+- Real corpus not annotated; telemetry cut by jo's settings.
 
-## 6. Arbitrages RENDUS par jo — ne pas les re-litiger
+## 6. Arbitrations HANDED DOWN by jo — do not re-litigate them
 
-- **2026-08-05, boucle adversariale** : arrêtée au profit du parseur (§3 bis).
-  Trois options posées, jo a choisi le parseur. Raison : les findings du hook
-  sont gratuits avec un AST.
-- **2026-08-04, `.pl` et `.ml` retirés** de la règle d'extensions : ce sont les
-  deux ccTLD de la liste à porter un vrai volume de domaines, et leur valeur
-  comme extension de fichier est nulle ici (zéro fichier Perl ou OCaml).
-  Principe énoncé : **la liste se rejuge extension par extension, pas en bloc.**
-- **2026-08-04, `public_by_shape`** : le détecteur COMPTE ce qu'une règle de
-  FORME rend public. jo a demandé que le résidu cesse d'être silencieux.
-- **2026-08-05, paquets Java/Kotlin** : gardés « à moins que cela n'expose pas
-  une lib tierce mais quelque chose de spécifique au repo ». Appliqué en
-  épinglant le second niveau de `javax.` — la seule règle qui n'en épinglait
-  aucun.
-- **2026-08-02, D9** : pas de pare-feu local, ça se traite au déploiement.
-- **IA locale + inventaire** : piste discutée avec jo, PAS encore engagée.
-  L'inventaire des noms propres au dépôt fermerait la plupart des résidus de
-  §5 ; il se construit avec la même matière que le corpus doré (Phase 5). Le
-  troisième étage (« demander à l'humain en cas de doute ») exige : défaut =
-  SUBSTITUER pendant l'attente, réponse PERSISTÉE et monotone, et un taux
-  d'escalade bas — sinon l'agent est inutilisable.
+- **2026-08-05, adversarial loop**: stopped in favour of the parser
+  (§3 bis). Three options put, jo chose the parser. Reason: hook findings
+  are free with an AST.
+- **2026-08-04, `.pl` and `.ml` removed** from the extensions rule: these
+  are the two ccTLDs of the list to carry a real volume of domains, and
+  their value as a file extension is null here (zero Perl or OCaml file).
+  Stated principle: **the list is re-judged extension by extension, not in
+  bulk.**
+- **2026-08-04, `public_by_shape`**: the detector COUNTS what a SHAPE rule
+  renders public. jo asked that the residue stop being silent.
+- **2026-08-05, Java/Kotlin packages**: kept "unless this does not expose a
+  third-party lib but something specific to the repo". Applied by pinning
+  the second level of `javax.` — the only rule that pinned none.
+- **2026-08-02, D9**: no local firewall, this is handled at deployment.
+- **Local AI + inventory**: track discussed with jo, NOT yet engaged. The
+  inventory of names specific to the repo would close most of the residues
+  of §5; it is built with the same material as the golden corpus (Phase 5).
+  The third floor ("ask the human in case of doubt") requires: default =
+  SUBSTITUTE while waiting, answer PERSISTED and monotonic, and a low
+  escalation rate — otherwise the agent is unusable.
 
-## 6 bis. Déviations encore à faire valider par jo
-- **Allowlist cloud resserrée** à `<service>[.<région>].<cloud>` (le littéral
-  couvrant tout le domaine laissait fuir un endpoint de ressource).
-- **Règle d'extensions de fichiers** dans `config/allowlist.txt` : rend publics
-  les noms de fichiers d'un SEUL label. `.io`, `.ai`, `.dev`, `.app`, `.co` et
-  `.sh` en sont volontairement ABSENTS — ce sont des domaines réels.
-- **`SERVICE` classé PUBLIC**, à réévaluer sur le corpus réel.
-- **Attributs partagés exclus de la vue de restauration.**
+## 6 bis. Deviations still to be validated by jo
+- **Cloud allowlist tightened** to `<service>[.<region>].<cloud>` (the
+  literal covering the whole domain let a resource endpoint leak).
+- **File extensions rule** in `config/allowlist.txt`: makes SINGLE-label
+  file names public. `.io`, `.ai`, `.dev`, `.app`, `.co` and `.sh` are
+  deliberately ABSENT — they are real domains.
+- **`SERVICE` classified PUBLIC**, to re-evaluate on the real corpus.
+- **Shared attributes excluded from the restoration view.**
 
-## 7. Pièges qui ont coûté du temps
+## 7. Traps that cost time
 
-- **`uv run` re-synchronise le venv** de `services/anonshield/upstream` sur le
-  lock (torch CPU) et retire fastapi. Relancer `wrapper/install-cuda.sh`, et
-  lancer le service par `.venv/bin/python` (ce que fait `run.sh`).
-- **Le détecteur doit être REDÉMARRÉ** après toute modification de
-  `config/allowlist.txt` ou `config/custom_patterns.json`. Un `pkill` sur le
-  nom du module NE L'ATTRAPE PAS (il tourne sous `uvicorn`) : identifier le PID
-  par le port 9000 (`ss -lptn | grep 9000`) puis `kill`. Redémarrage ~2 min.
-- **`phase3_e2e.sh` a trouvé trois défauts que rien d'autre ne voyait** : un
-  schéma invalide (API 400), une collision de substitut (503), et un faux
-  positif du hook qui faisait atteindre la limite de tours SANS erreur ni test
-  rouge. Le harnais est borné à 6 tours et la session en consomme 6 : elle est
-  à la limite, donc parfois instable. Vérifier le nombre de requêtes dans
-  `captures/*/bodies/` avant de conclure à une régression.
-- **Le hook s'applique à MOI.** Blocages rencontrés en travaillant : prompt de
-  sous-agent citant le chemin du coffre ; fichier de test ou de documentation
-  dont le CONTENU cite un chemin sensible — les composer par concaténation ;
-  heredoc alimentant `python3` dont le corps lit l'environnement (blocage
-  CORRECT). Écrire les fichiers par l'outil Write.
-- `_SCHEMA` n'est pas une chaîne brute : y écrire un échappement simple donne
-  un échappement VIDE. Doubler le backslash.
-- Ne jamais lire ni afficher le répertoire d'état du coffre (règle secrets).
+- **`uv run` re-synchronizes the venv** of `services/anonshield/upstream`
+  on the lock (torch CPU) and removes fastapi. Relaunch
+  `wrapper/install-cuda.sh`, and launch the service via `.venv/bin/python`
+  (which is what `run.sh` does).
+- **The detector must be RESTARTED** after any modification of
+  `config/allowlist.txt` or `config/custom_patterns.json`. A `pkill` on the
+  module name DOES NOT CATCH IT (it runs under `uvicorn`): identify the PID
+  by port 9000 (`ss -lptn | grep 9000`) then `kill`. Restart ~2 min.
+- **`phase3_e2e.sh` found three defects that nothing else saw**: an
+  invalid schema (API 400), a substitute collision (503), and a hook false
+  positive that made the turn limit be reached WITHOUT error or red test.
+  The harness is bounded to 6 turns and the session consumes 6: it is at
+  the limit, therefore sometimes unstable. Check the number of requests in
+  `captures/*/bodies/` before concluding a regression.
+- **The hook applies to ME.** Blocks encountered while working: sub-agent
+  prompt citing the vault path; test or documentation file whose CONTENT
+  cites a sensitive path — compose them by concatenation; heredoc feeding
+  `python3` whose body reads the environment (CORRECT block). Write the
+  files with the Write tool.
+- `_SCHEMA` is not a raw string: writing a single escape in it gives an
+  EMPTY escape. Double the backslash.
+- Never read or display the vault state directory (secrets rule).
 
-## 8. Ce que seize rounds ont appris
+## 8. What sixteen rounds taught
 
-1. **Une approximation à UNE valeur est un contournement en attente.** Chaque
-   fois que j'ai modélisé un mécanisme de bash par une seule valeur (une
-   alternative d'accolade, une branche d'expansion, un token sauté, la première
-   occurrence d'un programme), le round suivant a trouvé le cas où bash en
-   produit plusieurs. Émettre TOUTES les possibilités coûte un faux positif
-   visible ; en émettre une seule coûte un contournement silencieux.
-2. **Énumérer, c'est reporter le défaut.** Les correctifs qui ont tenu sont
-   ceux qui changent la STRUCTURE de l'analyse : région imbriquée traitée comme
-   une commande, positions de programme au lieu de noms, table d'options PAR
-   enveloppe, périmètre des données utilisateur, drapeau hérité. Les listes
-   (de motifs, de mots, d'options) ont toutes fini par être prises en défaut.
-3. **Une règle qui rend des valeurs PUBLIQUES est la seule dont l'échec soit
-   silencieux.** Tout le reste échoue bruyamment (400, 500, 503, commande
-   refusée). Une telle règle doit naître avec son test, et son périmètre doit
-   être explicite : une entrée EXACTE vaut partout, une règle de FORME suppose
-   un contexte.
-4. **Un faux positif est aussi grave qu'une fuite.** Un agent qui ne peut plus
-   écrire un script, lire un fichier ou committer est cassé. Un faux positif a
-   déjà fait échouer une session réelle sans produire ni erreur ni test rouge.
-5. **Vérifier les findings soi-même.** Plusieurs rapports contenaient des cas
-   faux (une obfuscation citée qui ne reconstruit pas le binaire annoncé) ou
-   non reproductibles (moteur construit sans l'allowlist). Corriger sur une
-   preuve fausse aurait introduit un vrai défaut.
-6. **Les tests aussi peuvent avoir tort**, et les rapports d'agent aussi.
-   Trois de mes assertions étaient fausses (une accolade qui n'exécute rien ;
-   deux deltas de texte qui sont le tampon de queue, pas un doublon ;
-   `printenv HOME`, donné comme contournement, qui n'expose rien). Corriger
-   dans le sens du comportement RÉEL, pas dans celui qui arrange — et vérifier
-   un « contournement » sur une charge NOCIVE, pas sur l'exemple bénin du
-   rapport.
-7. **Chercher aussi ce qui n'a jamais été modélisé.** Neuf rounds durant, les
-   findings étaient des régressions du round précédent ; au dixième, tous les
-   correctifs ont tenu et les dix contournements venaient de mécanismes absents
-   du modèle. Relire ses propres correctifs ne suffit plus : il faut relire la
-   SPEC de l'objet analysé (ici bash) et cocher ce qu'on n'a jamais traité.
-8. **Un motif dont la tête est une classe libre est un déni de service en
-   attente.** `\S*\{`, `[\w-]*\.env`, `[\w./-]*secrets?` rétro-traquent à
-   chaque position d'un mot long : sept secondes pour vingt mille caractères,
-   de quoi noyer un agent sans écrire une commande interdite. Deux des trois
-   étaient là depuis le début, jamais chronométrés. Ancrer sur le littéral, et
-   MESURER le coût, pas seulement la décision.
+1. **A one-value approximation is a pending bypass.** Every time I modelled
+   a bash mechanism by a single value (one brace alternative, one expansion
+   branch, one skipped token, the first occurrence of a program), the
+   following round found the case where bash produces several. Emitting ALL
+   possibilities costs a visible false positive; emitting only one costs a
+   silent bypass.
+2. **Enumerating is deferring the defect.** The fixes that held are the
+   ones that change the STRUCTURE of the analysis: nested region treated as
+   a command, program positions instead of names, options table PER
+   wrapper, user data perimeter, inherited flag. Lists (of patterns, of
+   words, of options) have all ended up being defeated.
+3. **A rule that makes values PUBLIC is the only one whose failure is
+   silent.** Everything else fails noisily (400, 500, 503, refused
+   command). Such a rule must be born with its test, and its perimeter must
+   be explicit: an EXACT entry holds everywhere, a SHAPE rule assumes a
+   context.
+4. **A false positive is as serious as a leak.** An agent that can no
+   longer write a script, read a file or commit is broken. A false
+   positive has already made a real session fail without producing an
+   error or a red test.
+5. **Verify the findings yourself.** Several reports contained false cases
+   (a cited obfuscation that does not reconstruct the announced binary) or
+   non-reproducible ones (engine built without the allowlist). Fixing on a
+   false proof would have introduced a real defect.
+6. **The tests can also be wrong**, and the agent reports too. Three of my
+   assertions were false (a brace that executes nothing; two text deltas
+   that are the tail buffer, not a duplicate; `printenv HOME`, given as a
+   bypass, that exposes nothing). Fix in the direction of the REAL
+   behaviour, not in the direction that suits — and verify a "bypass" on a
+   NOXIOUS load, not on the benign example from the report.
+7. **Also look for what has never been modelled.** For nine rounds, the
+   findings were regressions of the previous round; at the tenth, all the
+   fixes held and the ten bypasses came from mechanisms absent from the
+   model. Re-reading one's own fixes is no longer enough: one must re-read
+   the SPEC of the analyzed object (here bash) and tick off what has never
+   been handled.
+8. **A pattern whose head is a free class is a pending denial of service.**
+   `\S*\{`, `[\w-]*\.env`, `[\w./-]*secrets?` backtrack at every position
+   of a long word: seven seconds for twenty thousand characters, enough to
+   drown an agent without writing a forbidden command. Two of the three
+   were there from the beginning, never timed. Anchor on the literal, and
+   MEASURE the cost, not just the decision.
 
-## 9. Repères
-- Commits : uniquement sur demande de jo, conventional commits, en anglais.
-- `PLAN-proxy-pseudonymisation.md` : **jamais modifié**.
-- `anthropic_walker.py` : fourni par jo ; seize défauts corrigés, chacun prouvé
-  par un test écrit AVANT (`tests/test_walker_defects.py`).
-- Données synthétiques uniquement.
+## 9. Landmarks
+- Commits: only on jo's request, conventional commits, in English.
+- `PLAN-proxy-pseudonymisation.md`: **never modified**.
+- `anthropic_walker.py`: provided by jo; sixteen defects fixed, each proven
+  by a test written BEFORE (`tests/test_walker_defects.py`).
+- Synthetic data only.
