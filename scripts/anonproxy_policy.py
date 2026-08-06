@@ -24,12 +24,16 @@ Non interactif (pour scripter ou tester) :
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from anonproxy.config import Settings, read_master_key  # noqa: E402
+from anonproxy.modes import (  # noqa: E402
+    ENV, MODES, REGLAGES, ReglageInvalide, defauts_du_mode,
+)
 from anonproxy.policy import (  # noqa: E402
     GRANULARITES, PORTEES, Decision, PolitiqueInvalide, Policy,
 )
@@ -68,6 +72,44 @@ def cmd_etat(args) -> int:
                 court = cle if len(cle) <= 34 else cle[:31] + "…"
                 print(f"     {marque} {granularite:<7} {court}")
     print("\nDéfaut, en l'absence de toute règle : anonymiser.")
+    return 0
+
+
+def cmd_mode(args) -> int:
+    politique, _, _ = _outils(args)
+    resolus = politique.reglages_resolus()
+    print(f"mode en vigueur : {resolus['mode']}\n")
+    for nom in REGLAGES:
+        origine = "défaut du mode"
+        if os.environ.get(ENV[nom]):
+            origine = f"variable d'env {ENV[nom]}"
+        else:
+            for portee in reversed(PORTEES):
+                if nom in (politique.resolue()[portee].get("reglages") or {}):
+                    origine = f"portée {portee}"
+                    break
+        print(f"  {nom:<18} {str(resolus[nom]):<14} ({origine})")
+    print("\nModes disponibles :")
+    for nom, reglages in sorted(MODES.items()):
+        detail = " · ".join(f"{k}={v}" for k, v in reglages.items())
+        print(f"  {nom:<14} {detail}")
+    print("\nUn mode n'est qu'un JEU de réglages : chacun se surcharge"
+          "\nindividuellement, et aucun mode ne peut ouvrir quoi que ce soit —"
+          "\nle défaut reste ANONYMISER partout.")
+    return 0
+
+
+def cmd_regler(args) -> int:
+    politique, _, _ = _outils(args)
+    try:
+        chemin = politique.definir_reglage(args.portee_pos, args.nom, args.valeur)
+    except ReglageInvalide as exc:
+        print(f"REFUSÉ : {exc}", file=sys.stderr)
+        return 2
+    print(f"{args.nom} = {args.valeur} (portée {args.portee_pos}) → {chemin}")
+    if args.nom == "mode":
+        for nom, valeur in sorted(defauts_du_mode(args.valeur).items()):
+            print(f"    {nom} = {valeur}")
     return 0
 
 
@@ -152,6 +194,14 @@ def main() -> int:
     sous = ap.add_subparsers(dest="commande", required=True)
 
     sous.add_parser("etat").set_defaults(func=cmd_etat)
+    sous.add_parser("mode").set_defaults(func=cmd_mode)
+
+    p = sous.add_parser("regler", help="poser un réglage, ou un mode entier")
+    p.add_argument("portee_pos", choices=PORTEES, metavar="portée")
+    p.add_argument("nom", metavar="réglage",
+                   choices=[*REGLAGES, "mode"])
+    p.add_argument("valeur")
+    p.set_defaults(func=cmd_regler)
     sous.add_parser("questions").set_defaults(func=cmd_questions)
 
     p = sous.add_parser("arbitrer")

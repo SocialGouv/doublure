@@ -53,6 +53,17 @@ SERVICE_ACCOUNT_WORDS: tuple[str, ...] = (
 # TLD/suffixes plausibles pour les domaines externes fictifs.
 EXTERNAL_TLDS: tuple[str, ...] = ("com", "net", "io", "org", "co", "dev")
 
+# TLD RÉSERVÉS (RFC 2606 / 6761) : prouvablement enregistrables par personne,
+# et jamais résolus. C'est le seul moyen local de garantir qu'un substitut ne
+# désigne pas le domaine d'un tiers — le vérifier autrement demanderait une
+# requête DNS, donc une sortie réseau que D9 interdit.
+#
+# Le prix est réel et assumé : un hôte en `.example` se lit tout de suite comme
+# fictif, ce qui écorne D1 (« substituts plausibles »). D'où le réglage
+# `domaines_fictifs` plutôt qu'un choix figé — c'est un arbitrage d'opérateur,
+# pas une constante de code.
+RESERVED_TLDS: tuple[str, ...] = ("example", "test", "invalid")
+
 # Registres publics plausibles pour les images de conteneurs privées.
 REGISTRY_WORDS: tuple[str, ...] = ("registry", "harbor", "images", "artifacts", "docker")
 

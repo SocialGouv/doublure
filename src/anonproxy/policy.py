@@ -48,6 +48,14 @@ import time
 from enum import Enum
 from pathlib import Path
 
+from .modes import (
+    ARBITRAGE_BLOQUANT, DELAI_ARBITRAGE, ENV, MODE_DEFAUT, MODES, REGLAGES,
+    ReglageInvalide, defauts_du_mode, valide,
+)
+
+#: Période de relecture de la politique pendant une attente d'arbitrage.
+_PERIODE_SONDAGE = 0.25
+
 logger = logging.getLogger("anonproxy.policy")
 
 
@@ -257,6 +265,33 @@ class Policy:
                 logger.error("file d'arbitrage inaccessible (%s) : %s",
                              self._file_attente, exc)
 
+    def attendre_decision(self, etype: str, klass: str,
+                          valeur: str) -> "Decision":
+        """Mode CONSCIENCIEUX : bloque jusqu'à ce que l'opérateur tranche.
+
+        La requête attend, c'est le principe du mode — rien de nouveau ne part
+        sans qu'un humain l'ait vu. À l'échéance, on ANONYMISE : un délai
+        dépassé ne doit jamais valoir un consentement.
+
+        L'attente se fait par relecture du fichier, pas par notification : le
+        gestionnaire de configuration est un autre PROCESSUS, souvent un autre
+        terminal, et un verrou partagé entre les deux serait une source de
+        blocage bien pire que ce sondage.
+        """
+        delai = self.reglage(DELAI_ARBITRAGE)
+        if not delai:
+            return Decision.ANONYMISER
+        echeance = time.monotonic() + float(delai)
+        while time.monotonic() < echeance:
+            decision, source = self.decide(etype, klass, valeur)
+            if source is not None:
+                return decision
+            time.sleep(_PERIODE_SONDAGE)
+        logger.warning(
+            "arbitrage non rendu en %ss pour un %s : la valeur reste anonymisée",
+            delai, etype)
+        return Decision.ANONYMISER
+
     def questions(self) -> list[dict]:
         """Questions en attente, dédoublonnées, les plus anciennes d'abord."""
         try:
@@ -293,3 +328,71 @@ class Policy:
     def resolue(self) -> dict:
         """Vue à plat de la politique, pour le gestionnaire de configuration."""
         return {portee: self._charge(portee) for portee in PORTEES}
+
+    # -- réglages et modes -------------------------------------------------- #
+    #
+    # Les réglages vivent dans les MÊMES fichiers que les règles, et se
+    # résolvent par la MÊME hiérarchie de portées. C'est délibéré : une
+    # seconde hiérarchie serait une seconde chose à maintenir, et elles
+    # divergeraient.
+
+    def mode(self) -> str:
+        """Mode en vigueur : le plus proche l'emporte, l'env prime."""
+        if (forcee := os.environ.get("ANONPROXY_MODE")):
+            if forcee not in MODES:
+                raise ReglageInvalide(
+                    f"ANONPROXY_MODE={forcee!r} inconnu "
+                    f"(parmi {', '.join(sorted(MODES))})")
+            return forcee
+        for portee in reversed(PORTEES):
+            nomme = (self._charge(portee).get("reglages") or {}).get("mode")
+            if nomme in MODES:
+                return nomme
+            if nomme is not None:
+                logger.error("mode inconnu %r dans %s — ignoré", nomme, portee)
+        return MODE_DEFAUT
+
+    def reglage(self, nom: str):
+        """Valeur d'un réglage : défaut du mode → portées → variable d'env.
+
+        L'environnement gagne toujours : c'est le levier de dépannage, il doit
+        primer sur un fichier qu'on ne pense pas à relire.
+        """
+        if nom not in REGLAGES:
+            raise ReglageInvalide(f"réglage inconnu : {nom!r}")
+        if (brut := os.environ.get(ENV[nom])):
+            return valide(nom, brut)
+        for portee in reversed(PORTEES):
+            brut = (self._charge(portee).get("reglages") or {}).get(nom)
+            if brut is None:
+                continue
+            try:
+                return valide(nom, brut)
+            except ReglageInvalide as exc:
+                logger.error("%s dans %s — ignoré (%s)", nom, portee, exc)
+        return defauts_du_mode(self.mode())[nom]
+
+    def definir_reglage(self, portee: str, nom: str, valeur) -> Path:
+        if portee not in PORTEES:
+            raise ReglageInvalide(f"portée inconnue : {portee!r}")
+        # `mode` n'est pas un réglage comme les autres : il en pose plusieurs.
+        normalisee = valeur if nom == "mode" else valide(nom, valeur)
+        if nom == "mode" and valeur not in MODES:
+            raise ReglageInvalide(
+                f"mode inconnu : {valeur!r} (parmi {', '.join(sorted(MODES))})")
+        chemin = self._fichiers[portee]
+        with self._lock:
+            contenu = self._charge(portee)
+            contenu.setdefault("reglages", {})[nom] = normalisee
+            chemin.parent.mkdir(parents=True, exist_ok=True)
+            chemin.write_text(json.dumps(contenu, indent=2, ensure_ascii=False,
+                                         sort_keys=True) + "\n",
+                              encoding="utf-8")
+            os.chmod(chemin, 0o600)
+            self._cache.pop(portee, None)
+        return chemin
+
+    def reglages_resolus(self) -> dict:
+        """Ce qui s'applique réellement, avec le mode qui l'a posé."""
+        return {"mode": self.mode(),
+                **{nom: self.reglage(nom) for nom in REGLAGES}}

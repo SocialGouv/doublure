@@ -192,7 +192,7 @@ async def _pseudonymize(state: ProxyState, request: Request):
             503, "api_error", f"substitution impossible, requête refusée : {exc}")
     # L'annonce est ajoutée APRÈS la substitution : c'est notre texte, il
     # n'a pas à traverser le détecteur, qui y verrait des entités.
-    return body, injecter(safe_body, state.settings.annonce), None
+    return body, injecter(safe_body, state.policy.reglage("annonce")), None
 
 
 @app.post("/v1/messages")

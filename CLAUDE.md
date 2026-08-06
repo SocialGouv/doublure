@@ -33,6 +33,24 @@ décision qui fasse sortir une valeur, son erreur est SILENCIEUSE, et la
 révoquer ne rappelle pas ce qui est parti. Donc : révéler s'écrit, se trace et
 ne s'hérite jamais d'un défaut.
 
+**Les MODES sont l'application de tout ceci** (`src/anonproxy/modes.py`).
+Un mode est un JEU de réglages nommé, jamais un comportement opaque : il
+s'imprime (`politique.sh mode`), se surcharge réglage par réglage, et se
+résout par la MÊME hiérarchie de portées que les règles — l'environnement
+primant toujours, parce que c'est le levier de dépannage.
+`auto` substitue tout sans rien demander et laisse l'agent solliciter s'il
+bute · `consciencieux` fait ATTENDRE la requête jusqu'à l'arbitrage, avec un
+délai dont l'échéance ANONYMISE (un délai dépassé ne vaut jamais un
+consentement) · `ferme` ne dit rien au modèle. **Aucun mode ne peut ouvrir
+quoi que ce soit** : ils choisissent quand l'opérateur est sollicité, pas si
+la protection s'applique.
+
+**Un arbitrage qui oppose deux principes du projet devient un RÉGLAGE, pas une
+constante.** `domaines_fictifs` en est le cas d'école : `tld_reels` sert D1
+(plausible) au risque qu'un domaine fictif existe vraiment, `reserves`
+(RFC 2606) garantit l'inverse au prix de la plausibilité. Aucun des deux n'est
+« le bon » — c'est pour ça que c'est configurable.
+
 **Corollaire de conception** : un résidu assumé doit être COMPTÉ, jamais
 silencieux (`public_by_shape`, file d'arbitrage, constats écrits à l'envers
 dans les E2E). Ce qui échoue doit échouer bruyamment.
@@ -103,7 +121,7 @@ hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
 SCIM/RBAC dans le MVP · valider sans capture egress complète.
 
 ## État des phases
-**2727 tests verts** (2709 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
+**2743 tests verts** (2725 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
 puis `uv run pytest tests/egress/test_report.py`.
 
 | Phase | État | Preuve |

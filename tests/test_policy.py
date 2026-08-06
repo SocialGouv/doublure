@@ -7,6 +7,7 @@ prise ni par défaut, ni par accident, ni sur un secret.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -287,9 +288,136 @@ def test_l_annonce_dit_au_modele_de_ne_pas_deviner():
     assert "c'est lui qui décide" in TEXTE
 
 
-def test_un_mode_inconnu_est_refuse(monkeypatch):
-    """Une faute de frappe retomberait en silence sur le défaut : refus."""
-    from anonproxy.config import Settings
+def test_un_reglage_d_environnement_inconnu_est_refuse(tmp_path, monkeypatch):
+    """Une faute de frappe retomberait en silence sur le défaut : refus.
+
+    La validation vit à UN seul endroit (`modes.valide`) : en avoir une
+    seconde dans `Settings` les aurait fait diverger.
+    """
     monkeypatch.setenv("ANONPROXY_ANNONCE", "anonce")
-    with pytest.raises(RuntimeError, match="ANONPROXY_ANNONCE"):
-        Settings.from_env()
+    with pytest.raises(ReglageInvalide, match="annonce"):
+        make_policy(tmp_path).reglage("annonce")
+
+
+def test_un_mode_d_environnement_inconnu_est_refuse(tmp_path, monkeypatch):
+    monkeypatch.setenv("ANONPROXY_MODE", "rapide")
+    with pytest.raises(ReglageInvalide, match="ANONPROXY_MODE"):
+        make_policy(tmp_path).mode()
+
+
+# --------------------------------------------------------------------------- #
+# Modes — des JEUX de réglages, résolus par la MÊME hiérarchie que les règles
+# --------------------------------------------------------------------------- #
+from anonproxy.modes import (  # noqa: E402
+    ARBITRAGE_BLOQUANT, ARBITRAGE_DIFFERE, DELAI_ARBITRAGE, DOMAINES_RESERVES,
+    MODE_DEFAUT, ReglageInvalide,
+)
+
+
+def test_le_mode_par_defaut_est_auto(tmp_path):
+    assert make_policy(tmp_path).mode() == MODE_DEFAUT == "auto"
+
+
+def test_un_mode_pose_plusieurs_reglages_d_un_coup(tmp_path):
+    politique = make_policy(tmp_path)
+    politique.definir_reglage("projet", "mode", "consciencieux")
+    assert politique.reglage("arbitrage") == ARBITRAGE_BLOQUANT
+    assert politique.reglage("domaines_fictifs") == DOMAINES_RESERVES
+    assert politique.reglage(DELAI_ARBITRAGE) == 120
+
+
+def test_un_reglage_se_surcharge_individuellement(tmp_path):
+    """C'est ce qui distingue un mode d'un comportement opaque."""
+    politique = make_policy(tmp_path)
+    politique.definir_reglage("projet", "mode", "consciencieux")
+    politique.definir_reglage("projet", "arbitrage", ARBITRAGE_DIFFERE)
+    assert politique.reglage("arbitrage") == ARBITRAGE_DIFFERE
+    assert politique.reglage("domaines_fictifs") == DOMAINES_RESERVES  # inchangé
+
+
+def test_la_portee_la_plus_proche_l_emporte_aussi_pour_les_reglages(tmp_path):
+    politique = make_policy(tmp_path, session="s1")
+    politique.definir_reglage("global", "annonce", "annonce")
+    politique.definir_reglage("projet", "annonce", "silencieux")
+    assert politique.reglage("annonce") == "silencieux"
+    politique.definir_reglage("session", "annonce", "annonce")
+    assert politique.reglage("annonce") == "annonce"
+
+
+def test_l_environnement_prime_sur_les_fichiers(tmp_path, monkeypatch):
+    """Levier de dépannage : il doit gagner sur un fichier qu'on ne relit pas."""
+    politique = make_policy(tmp_path)
+    politique.definir_reglage("session", "annonce", "silencieux")
+    monkeypatch.setenv("ANONPROXY_ANNONCE", "annonce")
+    assert politique.reglage("annonce") == "annonce"
+
+
+@pytest.mark.parametrize("nom,valeur", [
+    ("mode", "rapide"), ("arbitrage", "peut-etre"),
+    ("annonce", "anonce"), ("domaines_fictifs", "n_importe"),
+    (DELAI_ARBITRAGE, "-5"), (DELAI_ARBITRAGE, "beaucoup"),
+])
+def test_une_valeur_de_reglage_inconnue_est_refusee(tmp_path, nom, valeur):
+    with pytest.raises(ReglageInvalide):
+        make_policy(tmp_path).definir_reglage("projet", nom, valeur)
+
+
+def test_aucun_mode_n_ouvre_quoi_que_ce_soit(tmp_path):
+    """Un mode choisit QUAND l'opérateur est sollicité, jamais SI on protège."""
+    from anonproxy.modes import MODES
+
+    for nom in MODES:
+        politique = make_policy(tmp_path / nom)
+        politique.definir_reglage("projet", "mode", nom)
+        assert politique.decide("HOSTNAME", "infra", HOTE)[0] is Decision.ANONYMISER
+        moteur = make_engine(tmp_path / nom, politique, nom="m")
+        assert moteur.substitute_value("HOSTNAME", HOTE) != HOTE
+
+
+def test_le_mode_bloquant_anonymise_a_l_echeance(tmp_path):
+    """Un délai dépassé ne vaut JAMAIS un consentement."""
+    politique = make_policy(tmp_path)
+    politique.definir_reglage("projet", "arbitrage", ARBITRAGE_BLOQUANT)
+    politique.definir_reglage("projet", DELAI_ARBITRAGE, 1)
+    moteur = make_engine(tmp_path, politique)
+    assert moteur.substitute_value("HOSTNAME", HOTE) != HOTE
+
+
+def test_le_mode_bloquant_prend_la_decision_rendue(tmp_path):
+    """L'opérateur répond depuis un AUTRE processus : on relit le fichier."""
+    import threading
+
+    politique = make_policy(tmp_path)
+    politique.definir_reglage("projet", "arbitrage", ARBITRAGE_BLOQUANT)
+    politique.definir_reglage("projet", DELAI_ARBITRAGE, 10)
+    moteur = make_engine(tmp_path, politique)
+
+    def repond():
+        autre = make_policy(tmp_path)          # instance distincte, comme la CLI
+        for _ in range(100):
+            if autre.questions():
+                autre.definir("projet", "type", "HOSTNAME", Decision.REVELER)
+                return
+            time.sleep(0.05)
+
+    fil = threading.Thread(target=repond)
+    fil.start()
+    resultat = moteur.substitute_value("HOSTNAME", HOTE)
+    fil.join()
+    assert resultat == HOTE, "la décision rendue pendant l'attente doit s'appliquer"
+
+
+def test_les_domaines_reserves_ne_sont_a_personne(tmp_path):
+    """L'arbitrage que je proposais devient un réglage : les deux marchent."""
+    from anonproxy.surrogates.lexicon import EXTERNAL_TLDS, RESERVED_TLDS
+
+    externe = "www-01.acmecorp-externe.fr"
+    politique = make_policy(tmp_path)
+    politique.definir_reglage("projet", "domaines_fictifs", DOMAINES_RESERVES)
+    faux = make_engine(tmp_path, politique).substitute_value("HOSTNAME", externe)
+    assert faux.rsplit(".", 1)[-1] in RESERVED_TLDS, faux
+
+    politique2 = make_policy(tmp_path / "b")
+    faux2 = make_engine(tmp_path / "b", politique2, nom="c").substitute_value(
+        "HOSTNAME", externe)
+    assert faux2.rsplit(".", 1)[-1] in EXTERNAL_TLDS, faux2

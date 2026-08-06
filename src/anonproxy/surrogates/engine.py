@@ -25,6 +25,7 @@ import unicodedata
 from typing import Any, Callable
 from urllib.parse import unquote_plus
 
+from ..modes import ARBITRAGE_BLOQUANT, DOMAINES_RESERVES
 from ..policy import Decision, Policy
 from ..vault import SurrogateConflict, Vault
 from .canonical import (
@@ -40,6 +41,7 @@ from .canonical import (
 from .classes import DataClass, class_of
 from .lexicon import (
     EXTERNAL_TLDS,
+    RESERVED_TLDS,
     IDENTITY_WORDS,
     ORG_WORDS,
     REGISTRY_WORDS,
@@ -125,6 +127,19 @@ class SurrogateEngine:
         #: Attributs partagés déjà résolus : (type interne, réel) → substitut.
         self._shared: dict[tuple[str, str], str] = {}
 
+    def _tlds_externes(self) -> tuple[str, ...]:
+        """Espace des TLD fictifs — arbitrage d'opérateur, pas constante.
+
+        `tld_reels` privilégie la plausibilité (D1) et accepte qu'un domaine
+        fictif puisse exister vraiment ; `reserves` garantit l'inverse au prix
+        de la plausibilité. Aucun des deux n'est « le bon » : c'est pourquoi
+        c'est un réglage.
+        """
+        if self.policy is not None \
+                and self.policy.reglage("domaines_fictifs") == DOMAINES_RESERVES:
+            return RESERVED_TLDS
+        return EXTERNAL_TLDS
+
     # -- dérivation --------------------------------------------------------- #
 
     def _digest(self, *parts: str) -> bytes:
@@ -193,11 +208,18 @@ class SurrogateEngine:
             except SurrogateConflict:
                 continue
             if self.policy is not None and source is None:
-                # Aucune règle ne couvrait cette valeur : on a anonymisé (le
-                # défaut), et on consigne la question. Elle ne bloque rien —
-                # l'opérateur la tranchera quand il voudra, et sa réponse ne
-                # vaudra que pour la suite.
+                # Aucune règle ne couvrait cette valeur. Elle est DÉJÀ
+                # substituée : le substitut est alloué avant l'arbitrage, ce
+                # qui permet à la question de ne porter que lui — l'opérateur
+                # remonte à la valeur par le coffre, la file ne révèle rien.
                 self.policy.en_attente(etype, klass.value, stored, surrogate)
+                if self.policy.reglage("arbitrage") == ARBITRAGE_BLOQUANT:
+                    # Mode consciencieux : la requête ATTEND. À l'échéance, la
+                    # valeur reste anonymisée — un délai dépassé ne vaut jamais
+                    # un consentement.
+                    if self.policy.attendre_decision(
+                            etype, klass.value, stored) is Decision.REVELER:
+                        return value
             return surrogate
         raise SurrogateCollisionError(
             f"aucun substitut libre après {MAX_ATTEMPTS} tentatives "
@@ -428,7 +450,7 @@ class SurrogateEngine:
                     if zone.endswith(sfx) or zone.endswith(sfx.lstrip(".")):
                         return f"{org}{sfx}"
                 return f"{org}.internal"
-            tld = pick(EXTERNAL_TLDS, self._idx("tld", zone))
+            tld = pick(self._tlds_externes(), self._idx("tld", zone))
             return f"{org}.{tld}"
 
         return self._alloc_shared(self._ZONE, zone, gen)

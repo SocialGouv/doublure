@@ -127,6 +127,52 @@ else
   echo "OK   : la politique ne contient aucune valeur réelle"
 fi
 
+
+# --------------------------------------------------------------------------- #
+# Modes — un mode est un JEU de réglages, et aucun n'ouvre quoi que ce soit.
+# --------------------------------------------------------------------------- #
+echo
+echo "→ mode consciencieux : la requête ATTEND l'arbitrage"
+uv run python scripts/anonproxy_policy.py regler projet mode consciencieux
+uv run python scripts/anonproxy_policy.py regler projet delai_arbitrage 20
+
+NOUVEAU="Le noeud cache-77-prod.acmecorp.internal sature depuis ce matin."
+# Répond depuis un AUTRE processus, comme le ferait l'opérateur dans un
+# second terminal : c'est le seul montage réaliste.
+( sleep 3; uv run python scripts/anonproxy_policy.py arbitrer --portee session \
+    --repondre v >/dev/null 2>&1 ) &
+REPONDEUR=$!
+DEBUT=$(date +%s)
+uv run python tests/policy_e2e_tour.py "${NOUVEAU}" > "${ETAT}/tour4.txt" || exit 1
+ATTENTE=$(( $(date +%s) - DEBUT ))
+wait "${REPONDEUR}" 2>/dev/null
+cat "${ETAT}/tour4.txt"
+echo "   (la requête a attendu ${ATTENTE}s)"
+
+echo
+echo "→ mode ferme : rien n'est annoncé au modèle, et rien ne s'ouvre"
+uv run python scripts/anonproxy_policy.py regler session mode ferme
+uv run python scripts/anonproxy_policy.py mode | head -6
+
+echo
+echo "== Verdict des modes =="
+verifie "consciencieux — la valeur arbitrée sort" "${ETAT}/tour4.txt" \
+        "cache-77-prod.acmecorp.internal" present
+if [[ ${ATTENTE} -ge 2 ]]; then
+  echo "OK   : la requête a bien ATTENDU (${ATTENTE}s)"
+else
+  echo "ÉCHEC: la requête n'a pas attendu (${ATTENTE}s) — le mode ne bloque pas"
+  rc=1
+fi
+
+# Un délai dépassé ne vaut JAMAIS un consentement.
+uv run python scripts/anonproxy_policy.py regler projet delai_arbitrage 1 >/dev/null
+uv run python tests/policy_e2e_tour.py \
+  "Le noeud jamais-arbitre-88.acmecorp.internal repond mal." \
+  > "${ETAT}/tour5.txt" || exit 1
+verifie "échéance dépassée — la valeur reste anonymisée" "${ETAT}/tour5.txt" \
+        "jamais-arbitre-88.acmecorp.internal" absent
+
 echo
 [[ ${rc} -eq 0 ]] && echo "**PASS**" || echo "**FAIL**"
 exit ${rc}
