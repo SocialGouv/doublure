@@ -1,200 +1,210 @@
-# Proxy de pseudonymisation Claude Code ↔ API Anthropic
+# Pseudonymisation proxy — Claude Code ↔ Anthropic API
 
-Proxy bidirectionnel : identifiants sensibles → substituts plausibles en sortie,
-restauration transparente au retour. L'opérateur voit le réel ; Anthropic n'en
-voit rien.
+Bidirectional proxy: sensitive identifiers become plausible surrogates on the
+way out, and are restored transparently on the way back. The operator sees the
+real thing; Anthropic sees none of it.
 
-## Philosophie (énoncée par jo le 2026-08-06) — elle prime sur l'opportunisme
-**Le plus confidentiel possible PAR DÉFAUT, et une ouverture configurable
-intelligemment, progressivement et interactivement.**
+## Philosophy (stated by jo on 2026-08-06) — it outranks convenience
+**As confidential as possible BY DEFAULT, with an opening that is configurable
+intelligently, progressively and interactively.**
 
-Ce n'est pas un slogan : c'est le critère qui tranche les arbitrages, et il se
-décline en quatre conséquences opérationnelles.
+This is not a slogan: it is the criterion that settles arbitrations, and it has
+four operational consequences.
 
-1. **Fermé par défaut, toujours.** Tout ce qui est détecté est substitué. Aucun
-   défaut n'ouvre : ni un seuil, ni une heuristique, ni un modèle, ni une
-   indisponibilité. En cas de doute, on ferme (D5).
-2. **Seul l'opérateur ouvre.** Jamais le modèle, jamais une IA, jamais une
-   règle de forme laissée à elle-même. Une IA peut PROPOSER (router un doute,
-   suggérer une entrée d'inventaire) ; elle ne décide pas. Faire dépendre la
-   protection de la coopération du modèle est l'anti-patron §7.
-3. **L'ouverture est PROGRESSIVE.** Deux axes, du plus étroit au plus large :
-   granularité (valeur → type → classe) et portée (session → projet → global).
-   La plus précise et la plus proche l'emportent. C'est ce qui rend le système
-   utilisable : une décision de classe transforme trente questions en une.
-4. **L'ouverture est INTERACTIVE et jamais bloquante.** Le système anonymise,
-   consigne la question, et continue. L'opérateur répond quand il veut ; sa
-   réponse est persistée et ne vaut que pour la SUITE. Il peut aussi ne rien
-   révéler et expliquer au modèle comment faire sans — c'est lui qui tranche.
+1. **Closed by default, always.** Everything detected is substituted. No
+   default opens anything: not a threshold, not a heuristic, not a model, not
+   an outage. When in doubt, close (D5).
+2. **Only the operator opens.** Never the model, never an AI, never a shape
+   rule left to itself. An AI may PROPOSE (route a doubt, suggest an inventory
+   entry); it does not decide. Making protection depend on the model
+   cooperating is the §7 anti-pattern.
+3. **Opening is PROGRESSIVE.** Two axes, narrowest to widest: granularity
+   (value → type → class) and scope (session → project → global). The narrowest
+   and the nearest win. This is what makes the system usable: one class
+   decision turns thirty questions into one.
+4. **Opening is INTERACTIVE and never blocking.** The system anonymises,
+   records the question, and carries on. The operator answers when they want;
+   the answer persists and applies only GOING FORWARD. They may also reveal
+   nothing and instead tell the model how to proceed without it — they decide.
 
-**L'asymétrie est le cœur de tout.** « Anonymiser » est gratuit, réversible et
-son erreur est VISIBLE (l'agent bute, on le voit). « Révéler » est la seule
-décision qui fasse sortir une valeur, son erreur est SILENCIEUSE, et la
-révoquer ne rappelle pas ce qui est parti. Donc : révéler s'écrit, se trace et
-ne s'hérite jamais d'un défaut.
+**The asymmetry is the heart of it.** "Anonymise" is free, reversible, and its
+error is VISIBLE (the agent stumbles, you see it). "Reveal" is the only
+decision that lets a value out, its error is SILENT, and revoking it does not
+recall what has gone. So revealing is written down, traced, and never inherited
+from a default.
 
-**Les MODES sont l'application de tout ceci** (`src/anonproxy/modes.py`).
-Un mode est un JEU de réglages nommé, jamais un comportement opaque : il
-s'imprime (`politique.sh mode`), se surcharge réglage par réglage, et se
-résout par la MÊME hiérarchie de portées que les règles — l'environnement
-primant toujours, parce que c'est le levier de dépannage.
-`auto` substitue tout sans rien demander et laisse l'agent solliciter s'il
-bute · `consciencieux` fait ATTENDRE la requête jusqu'à l'arbitrage, avec un
-délai dont l'échéance ANONYMISE (un délai dépassé ne vaut jamais un
-consentement) · `ferme` ne dit rien au modèle. **Aucun mode ne peut ouvrir
-quoi que ce soit** : ils choisissent quand l'opérateur est sollicité, pas si
-la protection s'applique.
+**MODES are that philosophy applied** (`src/anonproxy/modes.py`). A mode is a
+named SET of settings, never opaque behaviour: it prints, it can be overridden
+one setting at a time, and it resolves through the SAME scope hierarchy as the
+rules — with the environment always winning, because that is the
+troubleshooting lever. `auto` substitutes everything without asking and leaves
+the agent to solicit if it gets stuck · `consciencieux` makes the request WAIT
+for arbitration, with a deadline that ANONYMISES (a lapsed timer never counts
+as consent) · `ferme` tells the model nothing. **No mode can open anything**:
+they choose when the operator is asked, not whether protection applies.
 
-**Un arbitrage qui oppose deux principes du projet devient un RÉGLAGE, pas une
-constante.** `domaines_fictifs` en est le cas d'école : `tld_reels` sert D1
-(plausible) au risque qu'un domaine fictif existe vraiment, `reserves`
-(RFC 2606) garantit l'inverse au prix de la plausibilité. Aucun des deux n'est
-« le bon » — c'est pour ça que c'est configurable.
+**An arbitration that pits two of the project's principles against each other
+becomes a SETTING, not a constant.** `domaines_fictifs` is the textbook case:
+`tld_reels` serves D1 (plausible) at the risk that a fictional domain really
+exists, `reserves` (RFC 2606) guarantees the opposite at the cost of
+plausibility. Neither is "the right one" — which is exactly why it is
+configurable.
 
-**Corollaire de conception** : un résidu assumé doit être COMPTÉ, jamais
-silencieux (`public_by_shape`, file d'arbitrage, constats écrits à l'envers
-dans les E2E). Ce qui échoue doit échouer bruyamment.
+**Design corollary**: an accepted residual must be COUNTED, never silent
+(`public_by_shape`, the arbitration queue, checks written inverted in the E2E
+proofs). What fails must fail loudly.
 
-## Documents d'autorité — ordre de préséance
-1. `PLAN-proxy-pseudonymisation.md` — spec complète. **NE JAMAIS LE MODIFIER.**
-   S'il est faux ou incomplet : le signaler à jo et ATTENDRE.
-2. `anthropic_walker.py` — fourni tel quel, intégré en Phase 3. Modifiable
-   UNIQUEMENT si un test le met en défaut, test montré à jo AVANT la correction.
-3. Ce fichier — réponses verrouillées + état. C'est lui qui survit à la
-   compaction : le tenir à jour à chaque fin de phase.
-4. `REPRISE.md` — le travail EN COURS, ce qui reste à faire, et les pièges
-   déjà payés. **À lire juste après ce fichier à toute reprise de session.**
-   Sa §0 dit quoi faire en premier. Le PARSEUR du hook est FAIT
-   (`docs/parseur-hook.md`) ; la boucle adversariale reste close — jo l'a
-   arrêtée le 2026-08-05.
+## Documents of authority — order of precedence
+1. `PLAN-proxy-pseudonymisation.md` — the full spec. **NEVER MODIFY IT.**
+   If it is wrong or incomplete: tell jo and WAIT.
+2. `anthropic_walker.py` — supplied as is, integrated in Phase 3. Modifiable
+   ONLY when a test proves it wrong, with the test shown to jo BEFORE the fix.
+3. This file — locked answers and state. It is what survives compaction: keep
+   it current at the end of every phase.
+4. `REPRISE.md` — work IN PROGRESS, what remains, and the traps already paid
+   for. **Read it right after this file whenever a session resumes.** Its §0
+   says what to do first. The hook PARSER is DONE (`docs/parseur-hook.md`); the
+   adversarial loop stays closed — jo stopped it on 2026-08-05.
 
-## Réponses §3 (verrouillées par jo le 2026-08-01 — ne pas re-demander)
-1. **Déterminisme : par PROJET par défaut, configurable** (session/projet/
-   tenant/global). Le moteur (Phase 2) prend un `scope_key` explicite ; le sel
-   HMAC en dérive.
-2. **Outils MVP** : kubectl/helm, terraform, gh/git, CLI cloud (aws/OVH/gcloud)
-   + outils non encore cadrés → rien de codé en dur par outil ; générique +
-   custom patterns (§6 du plan).
-3. **Corpus doré** : matière réelle ARCHIVÉE existante (logs/tickets/CI).
-   Annotation en Phase 5 seulement.
-4. **Attributs préservés** (fuites assumées, à documenter §9) : environnement,
-   co-appartenance /24, humain vs service, interne vs externe — les QUATRE.
-5. **Coffre : local, même utilisateur** — gap assumé et documenté. Il vit HORS
-   du repo (`~/.local/state/anonproxy/` : vault.db + ANON_SECRET_KEY). Ce
-   chemin est un SECRET : l'agent ne le lit ni ne l'affiche JAMAIS (règle
-   secrets de jo). Mitigation : deny PreToolUse sur ce chemin (Phase 4),
-   durcissement Phase 6.
+## §3 answers (locked by jo on 2026-08-01 — do not ask again)
+1. **Determinism: per PROJECT by default, configurable** (session/project/
+   tenant/global). The engine (Phase 2) takes an explicit `scope_key`; the HMAC
+   salt derives from it.
+2. **MVP tools**: kubectl/helm, terraform, gh/git, cloud CLIs (aws/OVH/gcloud)
+   plus tools not yet scoped → nothing hard-coded per tool; generic detection
+   plus custom patterns (§6 of the plan).
+3. **Golden corpus**: existing ARCHIVED real material (logs/tickets/CI).
+   Annotation in Phase 5 only.
+4. **Preserved attributes** (accepted leaks, to be documented in §9):
+   environment, /24 co-membership, human vs service, internal vs external —
+   all FOUR.
+5. **Vault: local, same user** — accepted and documented gap. It lives OUTSIDE
+   the repo (state directory: the store plus the master secret). That path is a
+   SECRET: the agent never reads or prints it (jo's secrets rule). Mitigation:
+   PreToolUse deny on that path (Phase 4), hardening in Phase 6.
 
-## Règles de travail (non négociables)
-- **Une phase à la fois.** Critère de sortie PROUVÉ (commande + sortie
-  montrées à jo), puis rendre la main. Jamais deux phases sans accord explicite.
-- **Test-first** sur injectivité, fail-closed, streaming SSE — ces trois-là ne
-  se déboguent pas après coup.
-- **Relire la §7 du plan avant chaque commit** : liste d'interdictions, pas de
-  recommandations.
-- **Données synthétiques uniquement jusqu'à la fin de la Phase 3** : tout ce
-  que lit l'agent part chez Anthropic, fixtures de test comprises. Ne JAMAIS
-  demander de logs, configs, kubeconfig ou sorties kubectl réels avant.
-- Désaccord avec le plan → argumenter auprès de jo ; ne jamais contourner.
-- Commits : uniquement à la demande de jo (conventional commits).
+## Working rules (non-negotiable)
+- **One phase at a time.** Exit criterion PROVEN (command and output shown to
+  jo), then hand back. Never two phases without explicit agreement.
+- **Test-first** on injectivity, fail-closed and SSE streaming — those three do
+  not get debugged after the fact.
+- **Re-read §7 of the plan before every commit**: it is a list of prohibitions,
+  not of recommendations.
+- **Synthetic data only until the end of Phase 3**: everything the agent reads
+  goes to Anthropic, test fixtures included. NEVER ask for real logs, configs,
+  kubeconfigs or kubectl output before then.
+- Disagree with the plan → argue it with jo; never route around it.
+- Commits: only when jo asks (conventional commits).
 
-## Décisions verrouillées (résumé — le détail §2 du plan fait foi)
-D1 substituts plausibles, JAMAIS de sentinelles `[HOST_1]`/`<IP_3>` ·
-D2 zéro résolution dans les partial_json (accumuler → stop → parser → résoudre
-atomiquement) · D3 thinking/redacted_thinking opaques (signés) · D4 un secret
-est une référence, jamais restauré dans une sortie modèle · D5 fail-closed :
-substitut inconnu jamais deviné · D6 injectivité stricte (unicité en base +
-CI) · D7 AnonShield en PROCESSUS SÉPARÉ derrière HTTP (GPL-3.0) · D8 MVP
-lecture seule (pas de SCIM/RBAC, §8) · D9 le proxy est le seul chemin réseau.
+## Locked decisions (summary — §2 of the plan is authoritative)
+D1 plausible surrogates, NEVER sentinels like `[HOST_1]`/`<IP_3>` · D2 no
+resolution inside partial_json (accumulate → stop → parse → resolve
+atomically) · D3 thinking/redacted_thinking stay opaque (they are signed) ·
+D4 a secret is a reference, never restored into model output · D5 fail-closed:
+an unknown surrogate is never guessed · D6 strict injectivity (uniqueness in
+the store plus CI) · D7 AnonShield as a SEPARATE PROCESS behind HTTP (GPL-3.0)
+· D8 read-only MVP (no SCIM/RBAC, §8) · D9 the proxy is the only network path.
 
-## Frontière GPL
-`services/anonshield/**` = côté GPL-3.0 : clone upstream (gitignoré) + notre
-wrapper HTTP `/detect` (GPL lui aussi, LICENSE propre). Communication avec le
-reste par HTTP uniquement. `src/anonproxy/**` n'importe JAMAIS depuis
+## GPL boundary
+`services/anonshield/**` is the GPL-3.0 side: upstream clone (gitignored) plus
+our HTTP `/detect` wrapper (GPL too, with its own LICENSE). It communicates
+with the rest over HTTP only. `src/anonproxy/**` NEVER imports from
 `services/anonshield/`.
 
-## Anti-patterns — rappel condensé (§7 du plan fait foi, la relire avant commit)
-sentinelles · résoudre en streaming · toucher thinking · ne traiter que le
-dernier message · oublier tools[] (descriptions ET input_schema) · deviner un
-substitut inconnu · importer AnonShield · restaurer un secret · compter sur les
-hooks pour la réversibilité · anonymize en serveur MCP « volontaire » ·
-SCIM/RBAC dans le MVP · valider sans capture egress complète.
+Note (jo, 2026-08-06): the project will be fully open source, so licence
+contamination is no longer the reason to keep the boundary. D7 stands as a
+locked decision; do not undo it without jo saying so.
 
-## État des phases
-**2767 tests verts** (2749 + 18 egress) : `uv run pytest tests/ --ignore=tests/egress`
-puis `uv run pytest tests/egress/test_report.py`.
+## Anti-patterns — condensed reminder (§7 of the plan is authoritative)
+sentinels · resolving mid-stream · touching thinking · handling only the last
+message · forgetting tools[] (descriptions AND input_schema) · guessing an
+unknown surrogate · importing AnonShield · restoring a secret · relying on
+hooks for reversibility · anonymise as a "voluntary" MCP server · SCIM/RBAC in
+the MVP · validating without a complete egress capture.
 
-| Phase | État | Preuve |
+## Phase state
+**2767 tests green** (2749 + 18 egress): `task test` then `task test:egress`.
+
+| Phase | State | Proof |
 |---|---|---|
-| 0 — Harnais d'egress | critère atteint | `tests/egress_capture.sh` → `captures/*/report.md` code 0 ; 18 tests |
-| 1 — AnonShield local | critère atteint | `tests/detect_latency.py` : P95 **100,6 ms** < 150 ms (GPU cu130), regex 2,1 ms, zéro rechargement |
-| 2 — Moteur de substituts | critère atteint | `tests/test_surrogate_properties.py` : **10 000 valeurs**, 0 collision, déterminisme octet pour octet, env + /24 + humain/service + interne préservés |
-| 3 — Proxy + walker | critère atteint | `tests/phase3_e2e.sh` : session Claude Code RÉELLE, rc=0, **0 valeur réelle sur 427 Ko** capturés (mitmproxy), restauration 3/3 côté opérateur |
-| 4 — Hooks PreToolUse | critère atteint | `tests/phase4_e2e.sh` : commande interdite bloquée AVANT exécution, tracée, raison citée par le modèle |
-| 5 — Corpus doré | critère atteint (corpus synthétique) | `tests/corpus_eval.py` : 0 fuite, secrets **100 %**, 0 faux positif, variance 0, 0 collision ; 16 scénarios adversariaux (`test_adversarial.py`) |
-| 6 — Durcissement | coffre CHIFFRÉ au repos + fail-closed ; KMS/rotation restent à faire | `tests/test_vault_at_rest.py` (7) + `test_hardening.py` (11) + `docs/analyse-re-identification.md` |
+| 0 — Egress harness | criterion met | `tests/egress_capture.sh` → `captures/*/report.md` exit 0; 18 tests |
+| 1 — Local AnonShield | criterion met | `tests/detect_latency.py`: P95 **100.6 ms** < 150 ms (GPU cu130), regex 2.1 ms, no reloads |
+| 2 — Surrogate engine | criterion met | `tests/test_surrogate_properties.py`: **10,000 values**, 0 collisions, byte-for-byte determinism, env + /24 + human/service + internal preserved |
+| 3 — Proxy + walker | criterion met | `tests/phase3_e2e.sh`: REAL Claude Code session, rc=0, **0 real values across 427 KB** captured (mitmproxy), restoration 3/3 operator-side |
+| 4 — PreToolUse hooks | criterion met | `tests/phase4_e2e.sh`: forbidden command blocked BEFORE execution, traced, reason quoted by the model |
+| 5 — Golden corpus | criterion met (synthetic corpus) | `tests/corpus_eval.py`: 0 leaks, secrets **100 %**, 0 false positives, variance 0, 0 collisions; 16 adversarial scenarios (`test_adversarial.py`) |
+| 6 — Hardening | vault ENCRYPTED at rest + fail-closed; KMS/rotation still to do | `tests/test_vault_at_rest.py` (7) + `test_hardening.py` (11) + `docs/analyse-re-identification.md` |
 
-## Coffre chiffré au repos (2026-08-02)
-La doc affirmait que « la clé + la base sont les deux moitiés du secret » —
-c'était FAUX : les valeurs réelles étaient stockées en clair, la base seule
-suffisait à tout lire. Corrigé :
-- `real_enc` = AES-256-GCM, clé dérivée de la clé maître (HMAC de domaine).
-- Recherche par index HMAC (`key_idx`, `real_idx`) : le chiffrement
-  authentifié utilise un nonce aléatoire, une recherche directe serait
-  impossible. L'index ne révèle qu'une égalité.
-- Clé fausse ⇒ `VaultUnavailableError`, jamais une valeur devinée (D5).
-- Un coffre au format antérieur est REFUSÉ, pas lu silencieusement.
-  Migration : `scripts/migrate_vault.py ANCIEN.db NOUVEAU.db` (n'écrase rien,
-  clé lue par référence, jamais affichée). Le recréer à vide ferait perdre la
-  restauration des substituts DÉJÀ envoyés à Anthropic.
-- Fichiers du coffre remis à 0600 à chaque ouverture (y compris `-wal`/`-shm`).
-- Reste hors MVP : chiffrement d'enveloppe KMS/HSM, rotation de clé, journal
-  d'accès immuable, protection contre l'énumération.
+## Vault encrypted at rest (2026-08-02)
+The documentation claimed "the key and the database are the two halves of the
+secret" — that was FALSE: real values were stored in clear, and the database
+alone was enough to read everything. Fixed:
+- `real_enc` = AES-256-GCM, key derived from the master secret (domain HMAC).
+- Lookup by HMAC index (`key_idx`, `real_idx`): authenticated encryption uses a
+  random nonce, so a direct search would be impossible. The index reveals only
+  equality.
+- Wrong key ⇒ `VaultUnavailableError`, never a guessed value (D5).
+- A store in the previous format is REFUSED, not read silently. Migration:
+  `scripts/migrate_vault.py OLD.db NEW.db` (overwrites nothing, key passed by
+  reference, never printed). Recreating it empty would lose the ability to
+  restore surrogates ALREADY sent to Anthropic.
+- Store files reset to 0600 on every open (including `-wal`/`-shm`).
+- Still out of MVP scope: KMS/HSM envelope encryption, key rotation, immutable
+  access log, enumeration protection.
 
-## D9 — arbitrage jo (2026-08-02) : PAS de pare-feu local
-D9 se traite au **déploiement**, pas sur le poste : environnement
-conteneurisé, et/ou intégration dans un système plus vaste doté d'un bac à
-sable. Ne pas reproposer de règles `nft`/`ufw` locales.
+## D9 — jo's arbitration (2026-08-02): NO local firewall
+D9 is handled at **deployment**, not on the workstation: a containerised
+environment, and/or integration into a larger sandboxed system. Do not propose
+local `nft`/`ufw` rules again.
 
-Fait qui invalide toute règle par IP : `api.anthropic.com` et
-`mcp-proxy.anthropic.com` résolvent vers **la même adresse** (160.79.104.10).
-Un pare-feu ne voit pas les noms d'hôtes → impossible d'autoriser l'API modèle
-en bloquant les connecteurs à ce niveau. Les connecteurs se désactivent CÔTÉ
-CLIENT (réglages claude.ai), gratuitement.
+The fact that invalidates any IP-based rule: `api.anthropic.com` and
+`mcp-proxy.anthropic.com` resolve to **the same address** (160.79.104.10). A
+firewall does not see hostnames → allowing the model API while blocking the
+connectors is impossible at that level. Connectors are disabled CLIENT-side
+(claude.ai settings), for free.
 
-Forme cible : réseau `internal: true` pour l'agent, le proxy seul à cheval sur
-les deux réseaux. Ce n'est pas une règle à maintenir mais une **absence de
-route** — rien à contourner, et le problème du « même IP » disparaît. Détail,
-variante Kubernetes et points d'attention (DNS, MCP distants, isolation du
-coffre) : `docs/d9-blocage-reseau.md`.
+Target shape: an `internal: true` network for the agent, with the proxy alone
+straddling both networks. That is not a rule to maintain but an **absence of
+route** — nothing to bypass, and the "same IP" problem disappears. Detail,
+Kubernetes variant and things to watch (DNS, remote MCP, vault isolation):
+`docs/d9-blocage-reseau.md`.
 
-**Tant que ce n'est pas déployé ainsi, D9 n'est pas tenue** : le harnais
-d'egress détecte, il n'empêche pas. À énoncer tel quel au DPO.
+**Until it is deployed that way, D9 is NOT met**: the egress harness detects,
+it does not prevent. Say exactly that to the DPO.
 
-## Outillage — `devbox install && task`
+## Toolchain — `devbox install && task`
 ```bash
-devbox install        # chaîne d'outils épinglée : uv, go, node, task, curl, jq
-devbox shell          # ou `devbox run -- task …` sans entrer dans le shell
-task                  # liste TOUT ce qu'on peut lancer
+devbox install        # pinned toolchain: uv, go, node, task, curl, jq
+devbox shell          # or `devbox run -- task …` without entering the shell
+task                  # lists EVERYTHING that can be run
 ```
 
-**`Taskfile.yml` est la référence des commandes.** Ne pas recopier ici une
-invocation qu'il contient : c'est précisément ce qui avait divergé — l'ordre de
-lancement documenté ne correspondait plus aux scripts. Ce fichier dit le
-POURQUOI et l'état ; le Taskfile dit le COMMENT.
+**`Taskfile.yml` is the reference for commands.** Do not copy an invocation it
+already holds into this file: that is exactly what had drifted — the documented
+launch order no longer matched the scripts. This file says WHY and what state
+we are in; the Taskfile says HOW.
 
-Ordre de lancement : `task detector` (le laisser tourner) → `task proxy` →
-`task session`. Arbitrage : `task control` puis l'extension, ou `task policy --
-questions`.
+Launch order: `task detector` (leave it running) → `task proxy` →
+`task session`. Arbitration: `task control` plus the extension, or
+`task policy -- questions`.
 
-**Deux choses volontairement HORS de devbox**, parce qu'elles dépendent du
-matériel ou d'un lock étranger :
-- le **détecteur** (pilote NVIDIA + torch CUDA) vit dans son propre venv ;
-  relancer `services/anonshield/wrapper/install-cuda.sh` après TOUT
-  `uv sync`/`uv run` dans `upstream/` (le piège uv, cf. plus bas) ;
-- **Python** appartient à `uv`, pas à devbox. Les deux se disputaient le
-  `.venv` à chaque entrée dans le shell : deux gestionnaires pour une même
-  chose, aucun ne gagne.
+**Two things deliberately OUTSIDE devbox**, because they depend on hardware or
+on a foreign lock:
+- the **detector** (NVIDIA driver + CUDA torch) lives in its own virtualenv;
+  re-run `services/anonshield/wrapper/install-cuda.sh` after ANY
+  `uv sync`/`uv run` inside `upstream/` (the uv trap, see below);
+- **Python belongs to uv**, not to devbox. With both declared they fought over
+  the `.venv` on every shell entry: two managers for one thing, neither wins.
+
+## Language
+Code, identifiers, endpoint names, comments and documentation are in **English**
+(jo, 2026-08-06). French remains only where a value is part of the on-disk
+format and renaming it would break existing state — policy scopes
+(`global`/`projet`/`session`), granularities (`classe`/`type`/`valeur`),
+decisions (`anonymiser`/`reveler`) and mode names. Those are data, not code:
+changing them would invalidate every policy file already written.
+
+<!-- Round history below is still in French; translation in progress. -->
 
 ## Quatrième revue adversariale (2026-08-03, round 3 — 3 agents opus effort max)
 Deux fuites SORTANTES et deux fuites du hook, toutes corrigées avec
