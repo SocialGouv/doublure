@@ -157,6 +157,23 @@ NETWORK_CAPABLE = frozenset({
     "ping", "traceroute", "whois", "aria2c", "httpie", "http", "xh",
 })
 
+#: Builtins qui exposent l'état du SHELL lui-même — l'historique des commandes
+#: saisies, où passent les jetons collés à la main.
+#:
+#: Ils se reconnaissent en POSITION DE PROGRAMME, comme tout programme. Le
+#: motif de texte `\bhistory\b` qui les remplaçait refusait « git history »,
+#: « release history », « incident history » — n'importe quelle prose. Mesuré
+#: EN USAGE : il a bloqué deux fois de suite le lancement d'un sous-agent, sur
+#: son champ `description`.
+#:
+#: C'est la règle que les rounds 8 et 9 avaient établie pour tout le reste
+#: (« la porte porte sur la POSITION DE PROGRAMME, pas sur la présence du mot
+#: dans le texte ») et que celle-ci n'avait jamais suivie.
+_SHELL_STATE_PROGRAMS = frozenset({"history", "fc"})
+
+#: `fc` ne liste qu'avec un drapeau ; sans, il ré-exécute ou ouvre un éditeur.
+_FC_LISTE_RE = re.compile(r"^-[lnrs]")
+
 #: Chemins pseudo-fichiers ouvrant une socket dans le shell.
 _SHELL_SOCKET_RE = re.compile(r"/dev/(tcp|udp)/", re.I)
 
@@ -587,9 +604,7 @@ DENY_COMMAND_PATTERNS: tuple[tuple[str, str], ...] = (
      "montage d'un répertoire de secrets dans un conteneur"),
     (r"(^|[|;&\s])(\.|source)\s+(/tmp/|/dev/|/var/tmp/)",
      "exécution d'un script depuis un répertoire temporaire : contenu non analysable"),
-    (r"\bfc\b(\s+-[lnrs]\S*)+(\s|$)",
-     "`fc -l` liste l'historique de shell, comme `history`"),
-    (r"\bhistory\b(\s|$)|\$HISTFILE\b", "l'historique de shell contient des secrets saisis"),
+    (r"\$HISTFILE\b", "l'historique de shell contient des secrets saisis"),
     (r"\.(bash|zsh|sh)_history\b", "l'historique de shell contient des secrets saisis"),
     # Une affectation ne fait normalement rien exécuter. Ces noms-là font
     # charger du code depuis un chemin que le hook ne peut pas lire : bash
@@ -1623,6 +1638,10 @@ def check_bash(command: str, _profondeur: int = 0) -> str | None:
                         "son contenu n'est pas analysable avant exécution")
             if base in ENV_DUMP_PROGRAMS and _est_deversement(base, tokens, idx):
                 return "déversement de l'environnement (jetons et clés compris)"
+            if base in _SHELL_STATE_PROGRAMS and (
+                    base == "history"
+                    or any(_FC_LISTE_RE.match(t) for t in tokens[idx + 1:])):
+                return "l'historique de shell contient des secrets saisis"
             if base in NETWORK_CAPABLE:
                 if _est_usage_local(base, tokens[idx + 1:]):
                     continue

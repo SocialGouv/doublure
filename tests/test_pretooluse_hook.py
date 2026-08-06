@@ -8,6 +8,7 @@ stdin, décision sur stdout.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,11 +18,24 @@ import pytest
 HOOK = Path(__file__).resolve().parent.parent / "hooks" / "pretooluse_guard.py"
 
 
+def hook_command() -> list[str]:
+    """How to invoke the hook — implementation-agnostic.
+
+    The suite drives the hook as a SUBPROCESS (JSON in, JSON out), so it can
+    validate any implementation without a single test changing. Point
+    `ANONPROXY_HOOK_BIN` at a binary to run that instead of the Python module:
+    that is what makes a rewrite verifiable rather than hoped for.
+    """
+    if (binary := os.environ.get("ANONPROXY_HOOK_BIN")):
+        return [binary]
+    return [sys.executable, str(HOOK)]
+
+
 def run_hook(tool: str, tool_input: dict, audit_log: Path) -> dict:
     event = {"hook_event_name": "PreToolUse", "tool_name": tool,
              "tool_input": tool_input, "session_id": "test-session"}
     proc = subprocess.run(
-        [sys.executable, str(HOOK)],
+        hook_command(),
         input=json.dumps(event),
         capture_output=True,
         text=True,
@@ -1816,3 +1830,46 @@ def test_une_socket_unix_n_est_jamais_une_url_locale(command, audit_log):
 ])
 def test_l_exemption_locale_tient_toujours_sans_socket(command, audit_log):
     assert not is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+# --------------------------------------------------------------------------- #
+# `history` is a PROGRAM, not a word — round 21, found in use.
+#
+# The rule scanned the text (`\bhistory\b`), so it refused "git history",
+# "release history", any prose. Measured in use: it blocked the launch of a
+# subagent twice in a row, on its `description` field — which carries prose,
+# not a command.
+#
+# Rounds 8 and 9 had already established the principle for everything else:
+# the gate applies to the PROGRAM POSITION, not to the presence of the word in
+# the text. This rule had never followed it.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("payload", [
+    "Translate CLAUDE.md round history",
+    "Summarise the git history of this module",
+    "Document the release history before the migration",
+    "Review the incident history with the team",
+    "git log shows the full history of the file",
+])
+def test_le_mot_historique_dans_de_la_prose_passe(payload, audit_log):
+    assert not is_denied(run_hook("Task", {"description": payload,
+                                           "prompt": "x"}, audit_log)), payload
+
+
+@pytest.mark.parametrize("command", [
+    "history",
+    "history | grep -i token",
+    "builtin history",
+    "bash -c history",
+    "sudo history",
+    "env history",
+    "x=1; history",
+    "fc -l",
+    "fc -ln 1 10",
+    "/usr/bin/fc -l",
+    "echo $HISTFILE",
+    "cat ~/.bash_history",
+])
+def test_le_programme_historique_reste_refuse(command, audit_log):
+    """Reconnu en position de PROGRAMME : les enveloppes sont couvertes."""
+    assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
