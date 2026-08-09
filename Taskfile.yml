@@ -147,15 +147,25 @@ tasks:
 
   # -------------------------------------------------------------------- demo
 
-  demo:
-    desc: Sandbox for a real session (own vault, own key)
+  # A project holds only its own content. The chain, the state and the scripts
+  # live here; a project is designated by its PATH.
+
+  start:
+    desc: 'Bring the chain up for a project — e.g. task start -- ~/proj --mode=consciencieux'
     cmds:
-      - '{{.DEMO_DIR}}/start.sh {{.CLI_ARGS}}'
-    vars:
-      DEMO_DIR:
-        sh: echo "${ANONPROXY_DEMO:-$HOME/lab/ai/anonproxy-demo}"
+      - scripts/anonproxy.sh start {{.CLI_ARGS}}
+
+  stop:
+    desc: 'Stop a project''s proxy — e.g. task stop -- ~/proj'
+    cmds:
+      - scripts/anonproxy.sh stop {{.CLI_ARGS}}
+
+  state:
+    desc: 'Where a project''s state lives — e.g. task state -- ~/proj'
+    cmds:
+      - scripts/anonproxy.sh state {{.CLI_ARGS}}
 
   policy:
-    desc: 'Policy manager — e.g. task policy -- questions'
+    desc: 'Policy manager — e.g. task policy -- ~/proj -- questions'
     cmds:
-      - uv run python scripts/anonproxy_policy.py {{.CLI_ARGS}}
+      - scripts/anonproxy.sh policy {{.CLI_ARGS}}

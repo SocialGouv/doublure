@@ -31,18 +31,6 @@ import (
 	"anonproxy/internal/guard"
 )
 
-func auditLogPath() string {
-	if path := os.Getenv("ANONPROXY_AUDIT_LOG"); path != "" {
-		return path
-	}
-	// The state directory is a SECRET path: it is read from the environment,
-	// never rebuilt here, and never printed.
-	if dir := os.Getenv("ANONPROXY_STATE_DIR"); dir != "" {
-		return filepath.Join(dir, "canal2_audit.jsonl")
-	}
-	return ""
-}
-
 // record is a struct rather than a map so its fields keep a fixed order: the
 // audit log is read line by line after an incident, and a stable shape is what
 // makes it greppable.
@@ -76,10 +64,9 @@ func deny(reason, hint string) map[string]any {
 }
 
 func audit(rec record) {
-	path := auditLogPath()
+	path := guard.AuditLogPath()
 	if path == "" {
-		fmt.Fprintln(os.Stderr, "anonproxy: no audit log configured "+
-			"(ANONPROXY_AUDIT_LOG or ANONPROXY_STATE_DIR)")
+		fmt.Fprintln(os.Stderr, "anonproxy: no audit log path could be derived")
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -229,36 +230,43 @@ func firstReason(text string) string {
 // openDomainsPath names the file listing the domains the operator has opened to
 // direct reading.
 //
-// The environment wins, because that is the troubleshooting lever; the default
-// resolves against the working directory, which is the project root both under
-// Claude Code and under the test suite. Deriving it from the binary's own path
-// would break as soon as the binary is installed outside the project.
+// It is the ONLY rule in the whole hook that opens a network destination, so
+// where it lives decides who may open one. In the state directory it is out of
+// the agent's reach; inside the project it was not, and the agent could add a
+// domain and then read it — measured, not assumed. "Only the operator opens.
+// Never the model."
 //
-// This is the ONLY rule in the whole hook that opens a network destination, and
-// it reads a file that lives INSIDE the project the agent works in — so the
-// agent can write it. Same exposure as the Python hook, stated rather than
-// inherited: closing it means moving this file next to the vault, out of the
-// agent's reach, which is jo's call.
+// The project copy is still read, and stays SECOND: it lets a repository ship a
+// suggested list, but a session that writes it opens nothing that the state
+// directory has not already opened.
 const (
 	openDomainsEnv     = "ANONPROXY_OPEN_DOMAINS"
-	openDomainsDefault = "config/domaines_ouverts.txt"
+	openDomainsFile    = "open-domains.txt"
+	openDomainsProject = "config/domaines_ouverts.txt"
 )
 
 // openDomains is read on EVERY call: removing a line closes the domain at once.
 func openDomains() map[string]bool {
-	path := os.Getenv(openDomainsEnv)
-	if path == "" {
-		path = openDomainsDefault
-	}
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return nil // no file means nothing open
+	var paths []string
+	if path := os.Getenv(openDomainsEnv); path != "" {
+		paths = []string{path}
+	} else {
+		if dir := StateDir(); dir != "" {
+			paths = append(paths, filepath.Join(dir, openDomainsFile))
+		}
+		paths = append(paths, openDomainsProject)
 	}
 	domains := map[string]bool{}
-	for _, line := range strings.Split(string(content), "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" &&
-			!strings.HasPrefix(line, "#") {
-			domains[strings.ToLower(trimmed)] = true
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue // no file means nothing open from there
+		}
+		for line := range strings.SplitSeq(string(content), "\n") {
+			if trimmed := strings.TrimSpace(line); trimmed != "" &&
+				!strings.HasPrefix(line, "#") {
+				domains[strings.ToLower(trimmed)] = true
+			}
 		}
 	}
 	return domains
