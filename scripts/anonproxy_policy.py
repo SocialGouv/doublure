@@ -37,7 +37,7 @@ from anonproxy.modes import (  # noqa: E402
 from anonproxy.policy import (  # noqa: E402
     GRANULARITES, PORTEES, Decision, PolitiqueInvalide, Policy,
 )
-from anonproxy.vault import Vault  # noqa: E402
+from anonproxy.vault import SurrogateConflict, Vault  # noqa: E402
 
 #: Ce que l'opérateur peut répondre. « Révéler » n'est jamais le défaut : il
 #: faut le taper.
@@ -129,6 +129,34 @@ def cmd_questions(args) -> int:
     return 0
 
 
+def cmd_substituer(args) -> int:
+    """Choisir soi-même le substitut d'une valeur.
+
+    Le générateur vise la plausibilité (D1) sans rien connaître du domaine :
+    parfois l'opérateur sait mieux, et un nom qu'il reconnaît lui coûte moins
+    à relire. C'est un choix d'ERGONOMIE, jamais une ouverture — la valeur
+    réelle reste dans le coffre et ne part pas davantage.
+    """
+    _politique, coffre, scope = _outils(args)
+    ancien = coffre.get_surrogate(scope, args.type, args.valeur)
+    try:
+        coffre.rebind(scope, args.type, args.valeur, args.substitut)
+    except SurrogateConflict as exc:
+        # Refuser, jamais écraser : deux réels sous une même identité fictive
+        # rendraient la restauration ambiguë, et le silence est le pire mode
+        # d'échec de ce système.
+        print(f"refusé : {exc}", file=sys.stderr)
+        print("  ce substitut appartient déjà à une AUTRE valeur ; en choisir "
+              "un autre.", file=sys.stderr)
+        return 1
+    if ancien and ancien != args.substitut:
+        print(f"{args.valeur!r} : {ancien!r} → {args.substitut!r}")
+        print(f"  {ancien!r} reste restaurable : il est déjà parti sous ce nom.")
+    else:
+        print(f"{args.valeur!r} sortira désormais sous {args.substitut!r}")
+    return 0
+
+
 def cmd_arbitrer(args) -> int:
     politique, coffre, scope = _outils(args)
     vue = coffre.view(scope)
@@ -203,6 +231,13 @@ def main() -> int:
     p.add_argument("valeur")
     p.set_defaults(func=cmd_regler)
     sous.add_parser("questions").set_defaults(func=cmd_questions)
+
+    p = sous.add_parser("substituer",
+                        help="choisir soi-même le substitut d'une valeur")
+    p.add_argument("type", metavar="TYPE", help="HOSTNAME, IP_ADDRESS, PERSON…")
+    p.add_argument("valeur", metavar="VALEUR", help="la valeur RÉELLE")
+    p.add_argument("substitut", metavar="SUBSTITUT", help="ce qu'Anthropic verra")
+    p.set_defaults(func=cmd_substituer)
 
     p = sous.add_parser("arbitrer")
     p.add_argument("--portee", choices=PORTEES, default="projet",
