@@ -171,9 +171,14 @@ tasks:
       - scripts/anonproxy.sh watch {{.CLI_ARGS}}
 
   extension:
-    desc: Install the arbitration extension into VSCodium / VS Code
+    desc: Install the arbitration extension by symlink (live on reload)
     cmds:
       - scripts/install-extension.sh
+
+  extension:vsix:
+    desc: Build a .vsix into dist/ (offline, standard library only)
+    cmds:
+      - python3 scripts/package-extension.py
 
   policy:
     desc: 'Policy manager — e.g. task policy -- ~/proj -- questions'

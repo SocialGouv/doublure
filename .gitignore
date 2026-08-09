@@ -18,3 +18,4 @@ __pycache__/
 
 # devbox — environnement local (nix), jamais committé
 .devbox/
+dist/

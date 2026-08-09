@@ -19,12 +19,12 @@
     "commands": [
       {
         "command": "anonproxy.arbitrate",
-        "title": "anonproxy: arbitrate anonymised values",
+        "title": "Arbitrate anonymised values",
         "category": "anonproxy"
       },
       {
         "command": "anonproxy.mode",
-        "title": "anonproxy: change mode",
+        "title": "Change mode",
         "category": "anonproxy"
       }
     ],
