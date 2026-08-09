@@ -48,6 +48,20 @@ ARBITRAGE_BLOQUANT = "bloquant"    # attend la décision avant de substituer
 DOMAINES_TLD_REELS = "tld_reels"   # plausible (D1), collision possible
 DOMAINES_RESERVES = "reserves"     # RFC 2606/6761 : prouvablement à personne
 
+#: Ce qu'on substitue dans un CHEMIN. Un chemin est un contenant : ses
+#: segments n'ont pas tous la même nature. `/home` est sur toutes les machines
+#: du monde, le nom d'utilisateur désigne une personne, et le nom du projet
+#: peut nommer un client — trois choses différentes que masquer en bloc
+#: confondait.
+#:
+#: Le prix du masquage total n'est pas théorique : au round 7, une extension
+#: prise pour un domaine a empêché l'agent de retrouver le fichier dont on lui
+#: parlait, et il a épuisé ses tours à le chercher. Un agent bloqué est aussi
+#: cassé qu'un agent qui fuit.
+CHEMINS_COMPLET = "complet"                        # tout, l'ancien comportement
+CHEMINS_UTILISATEUR_PROJET = "utilisateur_projet"  # l'utilisateur ET le projet
+CHEMINS_UTILISATEUR = "utilisateur"                # l'utilisateur seul
+
 #: Valeurs admises, par réglage. Une valeur hors liste est REFUSÉE : une faute
 #: de frappe retomberait sinon en silence sur un défaut que l'opérateur croit
 #: avoir changé.
@@ -55,6 +69,7 @@ VALEURS: dict[str, tuple[str, ...]] = {
     "annonce": (ANNONCE_SILENCIEUX, ANNONCE_ANNONCE),
     "arbitrage": (ARBITRAGE_DIFFERE, ARBITRAGE_BLOQUANT),
     "domaines_fictifs": (DOMAINES_TLD_REELS, DOMAINES_RESERVES),
+    "chemins": (CHEMINS_COMPLET, CHEMINS_UTILISATEUR_PROJET, CHEMINS_UTILISATEUR),
 }
 
 #: Réglage numérique : combien de temps la requête attend une décision, en
@@ -66,18 +81,21 @@ MODES: dict[str, dict[str, object]] = {
         "annonce": ANNONCE_ANNONCE,
         "arbitrage": ARBITRAGE_DIFFERE,
         "domaines_fictifs": DOMAINES_TLD_REELS,
+        "chemins": CHEMINS_UTILISATEUR_PROJET,
         DELAI_ARBITRAGE: 0,
     },
     "consciencieux": {
         "annonce": ANNONCE_ANNONCE,
         "arbitrage": ARBITRAGE_BLOQUANT,
         "domaines_fictifs": DOMAINES_RESERVES,
+        "chemins": CHEMINS_UTILISATEUR_PROJET,
         DELAI_ARBITRAGE: 120,
     },
     "ferme": {
         "annonce": ANNONCE_SILENCIEUX,
         "arbitrage": ARBITRAGE_DIFFERE,
         "domaines_fictifs": DOMAINES_RESERVES,
+        "chemins": CHEMINS_UTILISATEUR_PROJET,
         DELAI_ARBITRAGE: 0,
     },
 }
@@ -89,6 +107,7 @@ ENV: dict[str, str] = {
     "annonce": "ANONPROXY_ANNONCE",
     "arbitrage": "ANONPROXY_ARBITRAGE",
     "domaines_fictifs": "ANONPROXY_DOMAINES_FICTIFS",
+    "chemins": "ANONPROXY_CHEMINS",
     DELAI_ARBITRAGE: "ANONPROXY_DELAI_ARBITRAGE",
 }
 

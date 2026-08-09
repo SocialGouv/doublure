@@ -159,17 +159,22 @@ d = json.load(sys.stdin)
 print("→ ready   : scope", d["scope"], "·", d["vault_entries"],
       "vault entry(ies) · detector", d["detector"]["device"])
 '
+  # Saying this plainly matters: the command returning immediately reads like
+  # the services stopping, and the first person to run it read it that way.
   cat <<FIN
 
 ────────────────────────────────────────────────────────────────────────────
-Open ${project} in the IDE and start Claude Code. Its .claude/settings.json
-points ANTHROPIC_BASE_URL at the proxy and the PreToolUse hook at the Go
-binary — nothing to export.
+This command is DONE. The proxy and the control service keep running in the
+background, in their own session — they survive this terminal and the IDE.
 
-  scripts/anonproxy.sh policy ${project} -- questions   what was anonymised
-                                                        without a rule
-  scripts/anonproxy.sh state ${project}                 where the state lives
-  scripts/anonproxy.sh stop  ${project}                 stop the proxy
+Open ${project} and start Claude Code. Its .claude/settings.json points
+ANTHROPIC_BASE_URL at the proxy and the PreToolUse hook at the Go binary —
+nothing to export.
+
+  task watch  -- ${project}   live view
+  task policy -- ${project} -- questions   anonymised without a rule
+  task state  -- ${project}   where the state lives
+  task stop   -- ${project}   stop both services
 ────────────────────────────────────────────────────────────────────────────
 FIN
 }

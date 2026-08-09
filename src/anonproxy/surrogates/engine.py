@@ -25,7 +25,8 @@ import unicodedata
 from typing import Any, Callable
 from urllib.parse import unquote_plus
 
-from ..modes import ARBITRAGE_BLOQUANT, DOMAINES_RESERVES
+from ..modes import (ARBITRAGE_BLOQUANT, CHEMINS_COMPLET, CHEMINS_UTILISATEUR,
+                     CHEMINS_UTILISATEUR_PROJET, DOMAINES_RESERVES)
 from ..policy import Decision, Policy
 from ..vault import SurrogateConflict, Vault
 from .canonical import (
@@ -127,6 +128,78 @@ class SurrogateEngine:
         #: Attributs partagés déjà résolus : (type interne, réel) → substitut.
         self._shared: dict[tuple[str, str], str] = {}
 
+    #: Racines de l'arborescence Unix. Liste FERMÉE, et c'est elle qui rend
+    #: la règle sûre : ces répertoires existent sur toutes les machines, donc
+    #: les laisser en clair ne dit rien de celle-ci. Une racine hors liste
+    #: retombe sur la substitution complète — on ne devine pas une forme qu'on
+    #: n'a pas modélisée.
+    _RACINES = frozenset({
+        "home", "Users", "root", "usr", "etc", "var", "opt", "tmp", "srv",
+        "mnt", "media", "proc", "sys", "dev", "bin", "sbin", "lib", "lib64",
+        "boot", "run", "Applications", "Library", "System", "private",
+    })
+
+    #: Racines sous lesquelles le segment suivant est un NOM D'UTILISATEUR.
+    _RACINES_HOME = frozenset({"home", "Users"})
+
+    def _fake_path(self, v: str, attempt: int) -> str:
+        """Un chemin est un CONTENANT : on ne substitue que ce qui identifie.
+
+        Trois natures dans un même chemin, que le masquage en bloc confondait :
+        une racine standard, présente partout et qui ne dit rien ; un nom
+        d'utilisateur, qui désigne une personne ; un chemin relatif et un nom
+        de fichier, qui désignent un contenu dont le modèle a BESOIN pour
+        travailler.
+
+        Le masquage total n'était pas « plus sûr », il était plus bruyant — et
+        ce bruit a un coût mesuré : au round 7, un agent a épuisé ses tours à
+        chercher un fichier dont on avait maquillé le nom.
+        """
+        parts = [p for p in v.split("/") if p]
+        if not parts:  # « / », « // » : la racine n'a rien à masquer
+            return v
+        absolu = v.startswith("/")
+
+        def masque(i: int, p: str) -> str:
+            return self._combo("path", f"{i}:{p}", attempt, SERVICE_WORDS)
+
+        garder = self._segments_gardes(parts, absolu)
+        sortie = [p if i in garder else masque(i, p) for i, p in enumerate(parts)]
+        out = "/".join(sortie)
+        return f"/{out}" if absolu else out
+
+    def _segments_gardes(self, parts: list[str], absolu: bool) -> set[int]:
+        """Les indices que le substitut conserve — la règle, en un seul endroit.
+
+        Elle sert deux fois : ici pour construire le substitut, et en amont
+        pour reconnaître un chemin qui ne porte AUCUN identifiant (`/home`,
+        `/usr`). Sans ce second usage, le substitut serait égal au réel et la
+        garde d'injectivité le refuserait, 64 fois, avant de rendre un 503.
+        """
+        reglage = (self.policy.reglage("chemins") if self.policy is not None
+                   else CHEMINS_UTILISATEUR_PROJET)
+        # Un chemin RELATIF ne dit pas où commence le projet, et une racine
+        # inconnue n'est pas une racine : dans les deux cas on ferme.
+        if reglage == CHEMINS_COMPLET or not absolu or parts[0] not in self._RACINES:
+            return set()
+        if parts[0] in self._RACINES_HOME:
+            # `/home` reste · l'utilisateur sort · le projet sort selon le
+            # réglage · le reste est du contenu, il reste.
+            depuis = 2 if reglage == CHEMINS_UTILISATEUR else 3
+            return {0, *range(depuis, len(parts))}
+        # Une racine système sans utilisateur : la racine reste, le reste est
+        # substitué. `/etc/acme-vpn.conf` peut nommer une entreprise, et rien
+        # ici ne permet de trancher — donc on ne tranche pas.
+        return {0}
+
+    def _chemin_sans_identifiant(self, value: str) -> bool:
+        """Ce chemin n'a-t-il rien à masquer ? (`/home`, `/usr`, `/`)"""
+        parts = [p for p in value.strip().split("/") if p]
+        if not parts:
+            return True
+        return len(self._segments_gardes(parts, value.strip().startswith("/"))) \
+            == len(parts)
+
     def _tlds_externes(self) -> tuple[str, ...]:
         """Espace des TLD fictifs — arbitrage d'opérateur, pas constante.
 
@@ -163,8 +236,8 @@ class SurrogateEngine:
         if klass is DataClass.PUBLIC:
             return value  # allowlist : laissé en clair
 
-        if etype in ("FILE_PATH", "USER_PATH") and not [p for p in value.strip().split("/") if p]:
-            return value  # « / », « // » : la racine ne porte aucun identifiant
+        if etype in ("FILE_PATH", "USER_PATH") and self._chemin_sans_identifiant(value):
+            return value  # « / », « /home », « /usr » : rien à masquer
 
         if not _HAS_ALNUM.search(value):
             # Un fragment sans caractère alphanumérique (un saut de ligne resté
@@ -624,13 +697,7 @@ class SurrogateEngine:
             return sep.join(octets)
 
         if etype in ("FILE_PATH", "USER_PATH"):
-            parts = [p for p in v.split("/") if p]
-            if not parts:  # « / », « // » : la racine n'a rien à masquer
-                return v
-            fake = [self._combo("path", f"{i}:{p}", attempt, SERVICE_WORDS)
-                    for i, p in enumerate(parts)]
-            out = "/".join(fake)
-            return f"/{out}" if v.startswith("/") else out
+            return self._fake_path(v, attempt)
 
         if etype == "PERSON":
             # Même nombre de mots : « Marie-Anne De La Fontaine » réduit à deux
