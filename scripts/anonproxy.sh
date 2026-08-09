@@ -103,6 +103,18 @@ cmd_start() {
 
   # --- proxy ---------------------------------------------------------------
   if curl -sf -m 3 "http://127.0.0.1:${PROXY_PORT}/healthz" >/dev/null 2>&1; then
+    # A port that answers is NOT a proxy in a coherent state. Wiping the state
+    # directory leaves the running proxy serving a store that no longer exists
+    # — it holds the deleted file open — while everything started afterwards
+    # opens it BY PATH and fails. Trusting the port alone turned that into an
+    # error about SQLite, three steps away from the cause.
+    if [[ ! -f "${ANONPROXY_VAULT}" ]]; then
+      echo "anonproxy: a proxy answers on :${PROXY_PORT}, but the store it" >&2
+      echo "           should be using is gone from ${state}." >&2
+      echo "           It is running against a deleted store; stop it first:" >&2
+      echo "             scripts/anonproxy.sh stop ${project}" >&2
+      exit 1
+    fi
     echo "→ proxy   : already listening on :${PROXY_PORT}"
     echo "            (if it runs with another vault, stop it and start again)"
   else
@@ -195,6 +207,15 @@ cmd_stop() {
   resolve_project "${1:-}"; project="${PROJECT}"
   state="$(anonproxy_state_dir "${project}")"
   pid="$(cat "${state}/proxy.pid" 2>/dev/null || true)"
+  # The pid file lives in the state directory it helps clean up: wipe the
+  # state and `stop` loses the only handle it had, reports "nothing to stop",
+  # and leaves a proxy running against a store that no longer exists. The
+  # PORT is the durable handle — it does not live in the directory.
+  if [[ -z "${pid}" ]] || ! kill -0 "${pid}" 2>/dev/null; then
+    pid="$(ss -lntpH "sport = :${PROXY_PORT}" 2>/dev/null \
+           | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)"
+    [[ -n "${pid}" ]] && echo "→ pid file gone; found the proxy by its port"
+  fi
   if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
     # The whole GROUP: `uv run` supervises uvicorn, and signalling only the
     # supervisor left the server listening on the port.
