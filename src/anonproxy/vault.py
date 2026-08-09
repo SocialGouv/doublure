@@ -39,6 +39,14 @@ DEFAULT_VAULT_PATH = Path.home() / ".local" / "state" / "anonproxy" / "vault.db"
 #: doit être refusé plutôt que lu.
 SCHEMA_VERSION = 2
 
+#: Préfixe d'un substitut HISTORIQUE : l'opérateur en a choisi un autre pour
+#: cette valeur, mais celui-ci est déjà parti. Il commence par `_`, donc il
+#: sort de l'unicité « un réel, un substitut » — c'est ce qui permet d'en
+#: attribuer un nouveau. Il reste dans la vue de restauration, contrairement
+#: aux attributs partagés : ce n'est pas une aide à l'allocation, c'est une
+#: entité qu'Anthropic a réellement vue sous ce nom.
+PREFIXE_ANCIEN = "_ancien:"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS mapping (
     scope      TEXT NOT NULL,
@@ -227,7 +235,14 @@ class Vault:
         """
         query = "SELECT etype, surrogate, real_enc FROM mapping WHERE scope=?"
         if not include_internal:
-            query += r" AND etype NOT LIKE '\_%' ESCAPE '\'"
+            # Les substituts HISTORIQUES sont dans la vue, eux : ce sont de
+            # vraies entités, déjà parties chez Anthropic sous ce nom-là. Les
+            # exclure rendrait non résolvable ce qui a été envoyé avant que
+            # l'opérateur ne choisisse un autre substitut — une régression que
+            # personne ne verrait, sinon le modèle lisant un nom qu'il a lui
+            # même reçu.
+            query += (r" AND (etype NOT LIKE '\_%' ESCAPE '\'"
+                      r"      OR etype LIKE '" + PREFIXE_ANCIEN + r"%')")
         with self._lock:
             rows = self._conn.execute(query, (scope,)).fetchall()
         return {s: self._open(scope, etype, s, enc) for etype, s, enc in rows}
@@ -239,6 +254,74 @@ class Vault:
             ).fetchone()[0]
 
     # -- écriture ----------------------------------------------------------- #
+
+    def rebind(self, scope: str, etype: str, real: str, surrogate: str) -> str:
+        """L'opérateur CHOISIT le substitut d'une valeur. Jamais le modèle.
+
+        L'ancien substitut n'est pas effacé : il est démoté en HISTORIQUE. Il
+        est déjà parti chez Anthropic sous ce nom-là, et l'oublier rendrait non
+        résolvable ce qui a été envoyé avant le changement — le modèle relirait
+        un nom qu'il a lui-même reçu, sans que rien ne le signale. Démoté, il
+        reste dans la vue de restauration et garde son substitut RÉSERVÉ :
+        l'injectivité (D6) vaut aussi sur le passé.
+
+        Lève ``SurrogateConflict`` si le substitut visé appartient déjà à une
+        AUTRE valeur. On refuse, on n'écrase pas : deux réels partageant une
+        identité fictive rendent la restauration ambiguë, et l'ambiguïté se
+        résoudrait en silence.
+        """
+        with self._lock:
+            proprietaire = self._conn.execute(
+                "SELECT etype, real_enc FROM mapping WHERE scope=? AND surrogate=?",
+                (scope, surrogate)).fetchone()
+            if proprietaire is not None:
+                detenu = self._open(scope, proprietaire[0], surrogate,
+                                    proprietaire[1])
+                if detenu != real:
+                    raise SurrogateConflict(
+                        f"substitut déjà pris dans {scope!r} : {surrogate!r}")
+                return surrogate  # déjà exactement ce que l'opérateur demande
+            try:
+                anciens = self._conn.execute(
+                    r"SELECT etype, key_idx, surrogate, real_enc FROM mapping"
+                    r" WHERE scope=? AND real_idx=?"
+                    r"   AND etype NOT LIKE '\_%' ESCAPE '\'",
+                    (scope, self._index(scope, real))).fetchall()
+                with self._conn:
+                    # Démotion puis insertion, dans la MÊME transaction : entre
+                    # les deux, la valeur n'aurait aucun substitut, et une
+                    # requête concurrente en allouerait un.
+                    for ancien_type, key_idx, surr, enc in anciens:
+                        # Le chiffré est LIÉ à son type (données associées) :
+                        # renommer le type sans re-sceller rendrait la ligne
+                        # indéchiffrable, donc la valeur irrécupérable.
+                        valeur = self._open(scope, ancien_type, surr, enc)
+                        # Le SUBSTITUT entre dans le type historique : deux
+                        # changements successifs démoteraient sinon deux lignes
+                        # vers la même clé primaire, et la seconde démotion
+                        # échouerait — en refusant un choix parfaitement légal.
+                        neuf = f"{PREFIXE_ANCIEN}{surr}:{ancien_type}"
+                        self._conn.execute(
+                            "UPDATE mapping SET etype=?, real_enc=?"
+                            " WHERE scope=? AND etype=? AND key_idx=?",
+                            (neuf, self._seal(scope, neuf, surr, valeur),
+                             scope, ancien_type, key_idx))
+                    self._conn.execute(
+                        "INSERT INTO mapping (scope, etype, key_idx, real_idx,"
+                        " real_enc, surrogate) VALUES (?,?,?,?,?,?)",
+                        (scope, etype, self._index(scope, etype, real),
+                         self._index(scope, real),
+                         self._seal(scope, etype, surrogate, real), surrogate))
+                self.version += 1
+                return surrogate
+            except sqlite3.IntegrityError as exc:
+                raise SurrogateConflict(
+                    f"substitut refusé dans {scope!r} : {surrogate!r} ({exc})"
+                ) from None
+            except sqlite3.Error as exc:
+                raise VaultUnavailableError(
+                    f"écriture impossible dans le coffre ({self.path}) : {exc}"
+                ) from exc
 
     def bind(self, scope: str, etype: str, real: str, surrogate: str) -> str:
         """Lie ``real`` à ``surrogate``, atomiquement.
