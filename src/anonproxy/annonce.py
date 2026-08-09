@@ -54,6 +54,12 @@ cohérents entre eux — tu ne peux pas les distinguer de vraies valeurs, et tu 
 n'as pas à essayer. L'opérateur, lui, voit les valeurs réelles : ta réponse \
 lui parvient retraduite, donc cite les valeurs telles que tu les vois.
 
+Cite-les ENTIÈRES. La retraduction se fait par correspondance exacte : un \
+identifiant abrégé, tronqué à son préfixe ou coupé par des points de \
+suspension ne correspond plus à rien, et l'opérateur lit alors un nom fictif \
+en croyant lire le sien. Écris l'hôte complet plutôt que « srv-01… », et \
+répète-le en entier plutôt que d'écrire « le même que ci-dessus ».
+
 Cette substitution peut introduire des INCOHÉRENCES apparentes. Un exemple \
 réel : un document déclare un sous-réseau, et les adresses des machines \
 semblent ne pas lui appartenir. La contradiction vient de la substitution, \

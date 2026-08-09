@@ -27,21 +27,32 @@ DETECT_PORT="${DETECT_PORT:-9000}"
 
 usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
-# resolve_project — the project directory, defaulting to the working directory.
+# resolve_project — sets PROJECT to the project directory, or STOPS.
+#
+# It assigns a global rather than printing, because the caller used to read it
+# through a command substitution — and `exit` inside one leaves only the
+# subshell. The script carried on with an empty project and built a state path
+# from it, so it read a vault somewhere else instead of failing. Fail loudly:
+# a wrong store read in silence is worse than not starting.
+PROJECT=""
 resolve_project() {
   local candidate="${1:-}"
   if [[ -z "${candidate}" || "${candidate}" == --* ]]; then
     candidate="${PWD}"
   fi
-  (cd "${candidate}" 2>/dev/null && pwd) || {
+  # A `~` held in a VARIABLE is not expanded by the shell: `task state -- $D`
+  # passes the tilde through literally, and nothing would find that directory.
+  candidate="${candidate/#\~/${HOME}}"
+  PROJECT="$(cd "${candidate}" 2>/dev/null && pwd)" || PROJECT=""
+  if [[ -z "${PROJECT}" ]]; then
     echo "anonproxy: no such project directory: ${candidate}" >&2
     exit 1
-  }
+  fi
 }
 
 cmd_state() {
   local project state
-  project="$(resolve_project "${1:-}")"
+  resolve_project "${1:-}"; project="${PROJECT}"
   state="$(anonproxy_state_dir "${project}")"
   echo "project : ${project}"
   echo "state   : ${state}"
@@ -51,7 +62,7 @@ cmd_state() {
 
 cmd_start() {
   local project state mode="" arg
-  project="$(resolve_project "${1:-}")"
+  resolve_project "${1:-}"; project="${PROJECT}"
   shift || true
   for arg in "$@"; do
     case "${arg}" in --mode=*) mode="${arg#--mode=}" ;; esac
@@ -181,7 +192,7 @@ FIN
 
 cmd_stop() {
   local project state pid
-  project="$(resolve_project "${1:-}")"
+  resolve_project "${1:-}"; project="${PROJECT}"
   state="$(anonproxy_state_dir "${project}")"
   pid="$(cat "${state}/proxy.pid" 2>/dev/null || true)"
   if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
@@ -204,7 +215,7 @@ cmd_stop() {
 
 cmd_watch() {
   local project state
-  project="$(resolve_project "${1:-}")"
+  resolve_project "${1:-}"; project="${PROJECT}"
   state="$(anonproxy_state_dir "${project}")"
   exec python3 "${REPO}/scripts/watch.py" "${project}" "${state}" \
        "http://127.0.0.1:${PROXY_PORT}"
@@ -212,7 +223,7 @@ cmd_watch() {
 
 cmd_policy() {
   local project state
-  project="$(resolve_project "${1:-}")"
+  resolve_project "${1:-}"; project="${PROJECT}"
   shift || true
   [[ "${1:-}" == "--" ]] && shift
   state="$(anonproxy_state_dir "${project}")"
