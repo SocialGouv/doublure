@@ -165,6 +165,11 @@ tasks:
     cmds:
       - scripts/anonproxy.sh state {{.CLI_ARGS}}
 
+  watch:
+    desc: 'Live view of a session — e.g. task watch -- ~/proj'
+    cmds:
+      - scripts/anonproxy.sh watch {{.CLI_ARGS}}
+
   policy:
     desc: 'Policy manager — e.g. task policy -- ~/proj -- questions'
     cmds:

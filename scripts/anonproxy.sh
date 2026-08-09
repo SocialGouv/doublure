@@ -14,6 +14,7 @@
 #   scripts/anonproxy.sh start [PROJECT] [--mode=auto|consciencieux|ferme]
 #   scripts/anonproxy.sh stop  [PROJECT]
 #   scripts/anonproxy.sh state [PROJECT]
+#   scripts/anonproxy.sh watch [PROJECT]      live view, refreshed each second
 #   scripts/anonproxy.sh policy [PROJECT] -- questions
 set -uo pipefail
 
@@ -161,6 +162,14 @@ cmd_stop() {
   echo "  the detector is left running: it is shared and slow to warm up."
 }
 
+cmd_watch() {
+  local project state
+  project="$(resolve_project "${1:-}")"
+  state="$(anonproxy_state_dir "${project}")"
+  exec python3 "${REPO}/scripts/watch.py" "${project}" "${state}" \
+       "http://127.0.0.1:${PROXY_PORT}"
+}
+
 cmd_policy() {
   local project state
   project="$(resolve_project "${1:-}")"
@@ -175,6 +184,7 @@ case "${1:-}" in
   start)  shift; cmd_start "$@" ;;
   stop)   shift; cmd_stop "$@" ;;
   state)  shift; cmd_state "$@" ;;
+  watch)  shift; cmd_watch "$@" ;;
   policy) shift; cmd_policy "$@" ;;
   ""|-h|--help) usage ;;
   *) echo "anonproxy: unknown command: $1" >&2; usage >&2; exit 1 ;;
