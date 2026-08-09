@@ -170,6 +170,11 @@ tasks:
     cmds:
       - scripts/anonproxy.sh watch {{.CLI_ARGS}}
 
+  extension:
+    desc: Install the arbitration extension into VSCodium / VS Code
+    cmds:
+      - scripts/install-extension.sh
+
   policy:
     desc: 'Policy manager — e.g. task policy -- ~/proj -- questions'
     cmds:

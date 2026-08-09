@@ -23,12 +23,36 @@ const os = require("os");
 const path = require("path");
 const vscode = require("vscode");
 
+/**
+ * The state directory of the open project.
+ *
+ * The same derivation as scripts/lib/state.sh and go/internal/guard/state.go:
+ * one directory per project, named after the project's own path. The rule
+ * lives in three places because three processes reach it independently — the
+ * launcher, the hook that Claude Code starts, and this extension, which the
+ * IDE starts with an environment none of the others control. A config file
+ * would only move the problem: it would have to be found first.
+ *
+ * Zero configuration is the point. An arbitration surface nobody manages to
+ * point at the right socket is an arbitration surface nobody uses, and the
+ * operator then stops arbitrating — which is the one thing this whole system
+ * asks of them.
+ */
+function slug(project) {
+  return project.replace(/[^A-Za-z0-9_.]/g, "-");
+}
+
 function socketPath() {
   const configured = vscode.workspace.getConfiguration("anonproxy").get("socket");
   if (configured) return configured;
-  const state = process.env.ANONPROXY_STATE_DIR
-    || path.join(os.homedir(), ".local", "state", "anonproxy");
-  return path.join(state, "control.sock");
+  if (process.env.ANONPROXY_STATE_DIR) {
+    return path.join(process.env.ANONPROXY_STATE_DIR, "control.sock");
+  }
+  const folders = vscode.workspace.workspaceFolders;
+  const project = folders && folders.length
+    ? folders[0].uri.fsPath
+    : process.cwd();
+  return path.join(os.homedir(), ".anonshield", slug(project), "control.sock");
 }
 
 /** One-shot request. Resolves to null when the service is not listening. */

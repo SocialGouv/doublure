@@ -124,6 +124,35 @@ cmd_start() {
     echo "→ proxy   : listening on :${PROXY_PORT}, detached from this terminal"
   fi
 
+  # --- control service -----------------------------------------------------
+  # The arbitration API, on a UNIX SOCKET and never a port: it returns REAL
+  # values, and the agent runs on this machine where the hook lets loopback
+  # through — a port would reopen exactly what the hook closes.
+  export ANONPROXY_API_SOCKET="${state}/control.sock"
+  if [[ -S "${ANONPROXY_API_SOCKET}" ]] && \
+     curl -sf -m 2 --unix-socket "${ANONPROXY_API_SOCKET}" http://localhost/health >/dev/null 2>&1; then
+    echo "→ control : already listening"
+  else
+    rm -f "${ANONPROXY_API_SOCKET}"
+    if ! (cd "${REPO}" && go build -C go -o ../go/bin/anonproxy-control ./cmd/anonproxy-control); then
+      echo "anonproxy: the control service does not build — session refused." >&2
+      exit 1
+    fi
+    (cd "${REPO}" && setsid --fork bash -c \
+        "echo \$\$ > '${state}/control.pid'; exec '${REPO}/go/bin/anonproxy-control'" \
+        < /dev/null > "${state}/control.log" 2>&1)
+    for _ in $(seq 1 20); do
+      [[ -S "${ANONPROXY_API_SOCKET}" ]] && break
+      sleep 0.25
+    done
+    if [[ ! -S "${ANONPROXY_API_SOCKET}" ]]; then
+      echo "anonproxy: the control service did not start — see ${state}/control.log" >&2
+      tail -10 "${state}/control.log" >&2
+      exit 1
+    fi
+    echo "→ control : arbitration socket ready"
+  fi
+
   curl -s "http://127.0.0.1:${PROXY_PORT}/healthz" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
@@ -158,6 +187,12 @@ cmd_stop() {
     rm -f "${state}/proxy.pid"
   else
     echo "→ no proxy recorded for this project"
+  fi
+  pid="$(cat "${state}/control.pid" 2>/dev/null || true)"
+  if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+    kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}"
+    echo "→ control service stopped"
+    rm -f "${state}/control.pid" "${state}/control.sock"
   fi
   echo "  the detector is left running: it is shared and slow to warm up."
 }
