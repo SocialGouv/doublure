@@ -65,8 +65,6 @@ def test_coffre_indisponible_erreur_explicite(tmp_path):
 
 def test_substitut_inconnu_jamais_devine():
     """Sens entrant : un substitut absent de la table reste en place (D5)."""
-    import sys
-    sys.path.insert(0, "/home/jo/lab/ai/anonshield+claude-code")
     from anthropic_walker import Substituter
 
     sub = Substituter(to_surrogate=lambda t: t, surrogates={"vrai-connu": "réel"})

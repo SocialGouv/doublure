@@ -78,6 +78,9 @@ session. Three defects were only ever found by them, never by the unit suites.
 | `ANONPROXY_MODE` | `auto` | `auto` \| `consciencieux` \| `ferme` — a mode is a set of settings |
 | `ANONPROXY_REGEX_THRESHOLD` | `8000` | Above this, regex detection (large volumes) |
 | `ANON_DEVICE` | `auto` | `cuda` \| `cpu` — `cuda` fails if unavailable |
+| `ANON_ALLOWLIST_FILE` | `config/allowlist.txt` | Read by both sides of the D7 boundary |
+| `ANON_CUSTOM_PATTERNS_FILE` | `config/custom_patterns.json` | Read by both sides too |
+| `ANON_INVENTORY_FILE` | `config/inventory.txt` | "What is ours" — keep the real one out of the tree |
 
 State paths (vault, master secret, policy) also come from the environment; the
 control service has no defaults for them and refuses to start without them, so
@@ -87,6 +90,15 @@ Detection reads `config/allowlist.txt` (§6 of the plan) and
 `config/custom_patterns.json` (environment conventions, to be written with jo).
 Those files sit on neutral ground: BOTH the detection service and the surrogate
 engine read them, so "this token is public" is maintained in one place.
+
+**What ships here is an example, on synthetic material.** A real deployment
+fills `config/inventory.txt` with the labels that are ITS OWN — company name,
+internal zones, team prefixes — which is the one list you do not want to
+publish by committing it. Point `ANON_INVENTORY_FILE` (and
+`ANON_ALLOWLIST_FILE`) at files outside the working tree and keep yours there.
+A path you ask for and that does not exist is an error, never an empty
+inventory: reading it as empty would re-open, in silence, the names it was
+meant to close.
 
 ## Confidentiality policy
 
@@ -105,11 +117,16 @@ Revealing is the only decision that lets a value out, so it is never a default,
 it is traced, and revoking it does not recall what has already gone. A SECRET
 is never revealable (D4).
 
-## GPL boundary
+## Licence
 
-`services/anonshield/**` is GPL-3.0 (upstream plus our wrapper). It
-communicates with the rest **over HTTP only**: `src/anonproxy/` never imports
-from that directory (decision D7).
+**MIT** ([LICENSE](LICENSE)), except `services/anonshield/**` which is
+**GPL-3.0** (upstream plus our wrapper). It communicates with the rest **over
+HTTP only**: `src/anonproxy/` never imports from that directory (decision D7),
+which is what makes the two licences coexist here.
+
+That is not left to prose — [tests/test_gpl_boundary.py](tests/test_gpl_boundary.py)
+fails on any import that crosses, in either direction. Details:
+[LICENSES.md](LICENSES.md).
 
 ## Known limits
 

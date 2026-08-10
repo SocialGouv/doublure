@@ -76,3 +76,22 @@ def test_un_segment_declare_protege_le_compose(tmp_path, inventaire):
     inv = Inventory.load(inventaire)
     assert inv.est_a_nous("acmecorp-billing")
     assert not inv.est_a_nous("cert-manager")
+
+
+def test_l_inventaire_reel_peut_vivre_hors_du_depot(monkeypatch, inventaire):
+    """Le fichier nomme l'organisation et ses zones : le tenir dans l'arbre de
+    travail, c'est le publier au premier `git add` distrait."""
+    monkeypatch.setenv("ANON_INVENTORY_FILE", str(inventaire))
+    assert Inventory.load().est_a_nous("acmecorp-billing")
+
+
+def test_un_inventaire_demande_et_introuvable_est_une_erreur(monkeypatch, tmp_path):
+    """Le lire comme vide rendrait publics les noms qu'il devait fermer, sans
+    rien dire. Seule l'absence à l'emplacement PAR DÉFAUT est légitime."""
+    monkeypatch.setenv("ANON_INVENTORY_FILE", str(tmp_path / "faute-de-frappe.txt"))
+    with pytest.raises(FileNotFoundError):
+        Inventory.load()
+
+    monkeypatch.delenv("ANON_INVENTORY_FILE")
+    with pytest.raises(FileNotFoundError):
+        Inventory.load(tmp_path / "inexistant.txt")

@@ -16,10 +16,17 @@ seul mode d'échec du système qui ne se voie pas.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 DEFAULT_INVENTORY = Path(__file__).resolve().parents[2] / "config" / "inventory.txt"
+
+#: L'inventaire réel nomme l'organisation, ses zones et ses préfixes d'équipe :
+#: c'est la liste qu'un dépôt public ne doit surtout pas recevoir par un `git
+#: add` distrait. Cette variable le fait vivre hors de l'arbre de travail, comme
+#: `ANON_ALLOWLIST_FILE` le permet déjà pour l'allowlist.
+ENV_INVENTORY = "ANON_INVENTORY_FILE"
 
 #: Séparateurs de segments d'un identifiant composite. Un nom nous appartient
 #: dès qu'un de ses segments est à nous : `tenant-acmecorp-nda`,
@@ -42,11 +49,17 @@ class Inventory:
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> "Inventory":
-        p = Path(path) if path is not None else DEFAULT_INVENTORY
+        demande = path if path is not None else os.environ.get(ENV_INVENTORY)
+        p = Path(demande) if demande is not None else DEFAULT_INVENTORY
         if not p.exists():
-            # Un inventaire absent n'est pas une erreur : c'est l'état d'un
-            # dépôt qui n'en a pas encore constitué un. Il n'ouvre rien —
-            # l'allowlist décide alors seule, comme avant.
+            if demande is not None:
+                # Un chemin DEMANDÉ qui n'existe pas est une faute de frappe,
+                # pas un dépôt sans inventaire : le lire comme vide rendrait
+                # publics les noms qu'il devait fermer, en silence.
+                raise FileNotFoundError(f"inventaire introuvable : {p}")
+            # Un inventaire absent à l'emplacement par défaut n'est pas une
+            # erreur : c'est l'état d'un dépôt qui n'en a pas encore constitué
+            # un. Il n'ouvre rien — l'allowlist décide alors seule, comme avant.
             return cls(set(), [])
         labels: set[str] = set()
         patterns: list[re.Pattern[str]] = []
