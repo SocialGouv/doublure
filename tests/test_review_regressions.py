@@ -247,7 +247,7 @@ def test_allowlist_partagee_avec_les_sous_parties(tmp_path):
 
     eng = SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER), master_key=MASTER,
                           scope_key="project:rt",
-                          is_public=lambda v: v in {"python3.12-slim", "healthz"})
+                          is_public=lambda v, t=None: v in {"python3.12-slim", "healthz"})
     image = eng.substitute_value("CONTAINER_IMAGE", "registry.acme.io/app:python3.12-slim")
     assert image.endswith(":python3.12-slim"), f"tag public substitué : {image}"
     url = eng.substitute_value("URL", "https://api.acme.internal/healthz")
@@ -665,7 +665,7 @@ def test_une_entree_exacte_vaut_toujours_pour_une_sous_partie(tmp_path):
     from anonproxy.surrogates.engine import SurrogateEngine
     eng = SurrogateEngine(vault=Vault(tmp_path / "v.db", master_key=MASTER),
                           master_key=MASTER, scope_key="project:r9",
-                          is_public=lambda v: v in {"python3.12-slim", "healthz"})
+                          is_public=lambda v, t=None: v in {"python3.12-slim", "healthz"})
     assert eng.substitute_value(
         "CONTAINER_IMAGE", "registry.acme.io/app:python3.12-slim").endswith(
             ":python3.12-slim")

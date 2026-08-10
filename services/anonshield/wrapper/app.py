@@ -51,24 +51,45 @@ _ENGINE: dict = {"ready": False}
 # --------------------------------------------------------------------------- #
 
 
-def _load_allowlist(path: Path) -> tuple[list[str], list[re.Pattern[str]]]:
-    """Deux formes de lignes : chaîne exacte, ou ``re:<regex>`` (full-match)."""
+def _load_allowlist(path: Path):
+    """Trois formes de lignes : chaîne exacte, ``re:<regex>`` (full-match), ou
+    ``types:T1,T2 <entrée>`` — publique seulement sous ces types d'entité."""
     exact: list[str] = []
     patterns: list[re.Pattern[str]] = []
+    types: dict[str, frozenset[str]] = {}
+    patterns_types: list[tuple[re.Pattern[str], frozenset[str]]] = []
     if not path.exists():
         raise FileNotFoundError(f"allowlist introuvable : {path}")
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
+        # Une entrée peut se limiter à des TYPES d'entité : `code` est public
+        # en FILE_PATH, jamais en HOSTNAME. Même forme de ligne que de l'autre
+        # côté de la frontière D7 — le parseur est dupliqué, la règle doit
+        # l'être aussi, sinon les deux moitiés du système ne lisent pas la
+        # même liste.
+        portee = None
+        if line.startswith("types:"):
+            tete, _, reste = line.partition(" ")
+            portee = frozenset(t for t in tete[len("types:"):].split(",") if t)
+            line = reste.strip()
+            if not portee or not line:
+                raise ValueError(
+                    f"{path}:{lineno} — entrée typée incomplète : il faut "
+                    f"`types:TYPE1,TYPE2 <entrée>`")
         if line.startswith("re:"):
             try:
-                patterns.append(re.compile(line[3:]))
+                motif = re.compile(line[3:])
             except re.error as exc:
                 raise ValueError(f"{path}:{lineno} — regex allowlist invalide : {exc}") from exc
-        else:
+            (patterns if portee is None else patterns_types).append(
+                motif if portee is None else (motif, portee))
+        elif portee is None:
             exact.append(line)
-    return exact, patterns
+        else:
+            types[line] = portee
+    return exact, patterns, types, patterns_types
 
 
 def _load_custom_patterns(path: Path) -> list[dict]:
@@ -143,7 +164,8 @@ def _load_engine() -> None:
         )
 
     t0 = time.perf_counter()
-    allow_exact, allow_patterns = _load_allowlist(ALLOWLIST_FILE)
+    allow_exact, allow_patterns, allow_types, allow_pat_types = \
+        _load_allowlist(ALLOWLIST_FILE)
     custom_patterns = _load_custom_patterns(CUSTOM_PATTERNS_FILE)
 
     # Imports src.anon APRÈS la mise en place de l'environnement.
@@ -230,6 +252,8 @@ def _load_engine() -> None:
         threshold=threshold,
         device=device,
         allow_exact=allow_exact,
+        allow_types=allow_types,
+        allow_pat_types=allow_pat_types,
         allow_patterns=allow_patterns,
         loaded_in_s=round(time.perf_counter() - t0, 1),
         loaded_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -299,7 +323,8 @@ def _ecarter_cartes_invalides(ents: list[dict]) -> list[dict]:
 
 
 def _raison_publique(text: str, ent: dict, allow_exact: list[str],
-                     allow_patterns) -> str | None:
+                     allow_patterns, allow_types=None,
+                     allow_pat_types=None) -> str | None:
     """Ce span est-il public ? C'est le TOKEN ÉTENDU qui décide, et lui seul.
 
     Un span n'est qu'un fragment ; ce qui part sur le réseau, c'est le token.
@@ -330,13 +355,16 @@ def _raison_publique(text: str, ent: dict, allow_exact: list[str],
     Elle vivait EN LIGNE dans l'endpoint, donc hors de portée des tests : c'est
     ce qui lui a permis de casser trois fois. Elle est ici pour être testable.
     """
+    etype = ent.get("type")
     etendu = _expand_token(text, ent["start"], ent["end"])
-    raison = _allowed(etendu, allow_exact, allow_patterns)
+    raison = _allowed(etendu, allow_exact, allow_patterns,
+                      allow_types, allow_pat_types, etype)
     if raison is not None:
         return raison
     valeur = ent["value"]
     if valeur != etendu and valeur in etendu.split("/"):
-        return _allowed(valeur, allow_exact, allow_patterns)
+        return _allowed(valeur, allow_exact, allow_patterns,
+                        allow_types, allow_pat_types, etype)
     return None
 
 
@@ -359,7 +387,9 @@ def _trim_span(text: str, ent: dict) -> dict:
 
 
 def _allowed(value: str, allow_exact: list[str],
-             allow_patterns: list[re.Pattern[str]]) -> str | None:
+             allow_patterns: list[re.Pattern[str]],
+             allow_types=None, allow_pat_types=None,
+             etype: str | None = None) -> str | None:
     """La RAISON pour laquelle une valeur est publique, ou None.
 
     Distinguer l'entrée exacte de la règle de FORME n'est pas cosmétique :
@@ -374,9 +404,17 @@ def _allowed(value: str, allow_exact: list[str],
     if value in allow_exact or value.lower() in {
             e for e in allow_exact if e == e.lower()}:
         return "exact"
+    # Une entrée TYPÉE ne vaut que sous ses types, et pas du tout quand le
+    # type est inconnu : qui ne sait pas de quoi il parle n'ouvre rien.
+    portee = (allow_types or {}).get(value) or (allow_types or {}).get(value.lower())
+    if portee is not None and etype in portee:
+        return "exact"
     for p in allow_patterns:
         if p.fullmatch(value):
             return p.pattern
+    for motif, portee in (allow_pat_types or []):
+        if etype in portee and motif.fullmatch(value):
+            return motif.pattern
     return None
 
 
@@ -445,13 +483,16 @@ def detect(inp: DetectIn):
 
     ents = _ecarter_cartes_invalides([_trim_span(inp.text, e) for e in ents])
     allow_exact, allow_patterns = _ENGINE["allow_exact"], _ENGINE["allow_patterns"]
+    allow_types = _ENGINE.get("allow_types") or {}
+    allow_pat_types = _ENGINE.get("allow_pat_types") or []
     gardees: list[dict] = []
     # Dédoublonné par VALEUR : un même token reçoit plusieurs spans (SERVICE,
     # HOSTNAME, URL), et compter les spans donnerait un chiffre sans rapport
     # avec le nombre d'identifiants réellement rendus publics.
     par_forme: dict[str, dict] = {}
     for e in ents:
-        raison = _raison_publique(inp.text, e, allow_exact, allow_patterns)
+        raison = _raison_publique(inp.text, e, allow_exact, allow_patterns,
+                                  allow_types, allow_pat_types)
         if raison is None:
             gardees.append(e)
         elif raison != "exact":

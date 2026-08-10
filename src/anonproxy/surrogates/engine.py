@@ -147,7 +147,10 @@ class SurrogateEngine:
         #: détecteur l'applique aux entités entières ; il faut la consulter à
         #: nouveau ici, sur les COMPOSANTS d'une valeur composite (tag d'image,
         #: segment d'URL) que le détecteur n'a jamais vus isolément.
-        self.is_public = is_public or (lambda _value: False)
+        # Deux arguments : la valeur ET son type. Une entrée d'allowlist peut
+        # se limiter à des types (`code` public en FILE_PATH, jamais en
+        # HOSTNAME) — sans le type, elle ne s'applique pas.
+        self.is_public = is_public or (lambda _value, _etype=None: False)
         self._master = master_key.encode() if isinstance(master_key, str) else master_key
         # Sel de portée : deux portées ne dérivent jamais le même substitut.
         self._salt = hmac.new(self._master, scope_key.encode(), hashlib.sha256).digest()
@@ -323,7 +326,7 @@ class SurrogateEngine:
         # l'allowlist d'abord les laissait sortir verbatim ET sautait la
         # référence qu'exige D4. Un secret reste un secret même quand son
         # contenu coïncide avec un jeton public.
-        if self.is_public(value):
+        if self.is_public(value, etype):
             # Entrée EXACTE de l'allowlist : une décision prise token par token,
             # donc valable partout (round 9). Le détecteur l'écarte déjà ; on le
             # refait ici pour qu'un détecteur en retard sur le fichier ne fasse
@@ -965,7 +968,7 @@ class SurrogateEngine:
         # `is_public` est ici le prédicat des entrées EXACTES : une règle de
         # forme (`re:`) suppose un contexte que le tag n'a pas, et celle qui
         # reconnaît un nom de fichier laissait passer `tenant-nda-v1.tar`.
-        if _PLAIN_TAG_RE.fullmatch(tag) or self.is_public(tag):
+        if _PLAIN_TAG_RE.fullmatch(tag) or self.is_public(tag, "CONTAINER_IMAGE"):
             return f"{out}:{tag}"
         return f"{out}:{self._combo('image-tag', tag, attempt, SERVICE_WORDS)}"
 

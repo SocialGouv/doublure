@@ -76,7 +76,8 @@ def predicat_public(allowlist_file, inventory_file=None):
     inv = Inventory.load(inventory_file)
     if not inv:
         return allow.is_exact
-    return lambda value: allow.is_exact(value) and not inv.est_a_nous(value)
+    return (lambda value, etype=None:
+            allow.is_exact(value, etype) and not inv.est_a_nous(value))
 
 
 class ProxyState:

@@ -54,15 +54,18 @@ def wrapper():
     return module
 
 
-def juge(wrapper, texte: str, valeur: str):
+def juge(wrapper, texte: str, valeur: str, etype: str | None = None):
     """Rejoue la décision RÉELLE du service — la fonction qu'il appelle, pas
     une réécriture de sa règle dans le test. C'est toute la différence : la
     décision vivait en ligne dans l'endpoint, et un test qui la reformule
     passe au vert pendant que le service se trompe."""
-    exact, motifs = wrapper._load_allowlist(wrapper.ALLOWLIST_FILE)
+    exact, motifs, types, motifs_types = wrapper._load_allowlist(
+        wrapper.ALLOWLIST_FILE)
     debut = texte.index(valeur)
-    span = {"value": valeur, "start": debut, "end": debut + len(valeur)}
-    return wrapper._raison_publique(texte, span, exact, motifs)
+    span = {"value": valeur, "start": debut, "end": debut + len(valeur),
+            "type": etype}
+    return wrapper._raison_publique(texte, span, exact, motifs, types,
+                                    motifs_types)
 
 
 PUBLICS = [
@@ -104,6 +107,23 @@ SENSIBLES = [
     ("image registry.acmecorp.io/payments/api:4.2.1", "registry.acmecorp.io"),
     ("noeud node1.k8s.io.acme.internal", "k8s.io"),
 ]
+
+
+@pytest.mark.parametrize("mot", ["code", "run", "error", "low", "png"])
+def test_les_deux_parseurs_lisent_la_meme_liste_typee(wrapper, mot):
+    """Le parseur est DUPLIQUÉ de part et d'autre de la frontière D7 : c'est la
+    LISTE qui est maintenue une fois, pas le code qui la lit. Une nouvelle forme
+    de ligne doit donc être écrite deux fois — et si les deux moitiés
+    divergeaient, le détecteur et le moteur ne protégeraient pas la même chose,
+    en silence. Ce test compare leurs verdicts sur le fichier RÉEL."""
+    from anonproxy.allowlist import Allowlist
+    notre = Allowlist.load()
+    for etype, attendu in (("FILE_PATH", True), ("HOSTNAME", False),
+                           (None, False)):
+        cote_moteur = notre(mot, etype)
+        cote_detecteur = juge(wrapper, f"voir {mot} ici", mot, etype) is not None
+        assert cote_moteur is attendu, (mot, etype, "moteur")
+        assert cote_detecteur is attendu, (mot, etype, "détecteur")
 
 
 @pytest.mark.parametrize("texte,valeur", SENSIBLES)

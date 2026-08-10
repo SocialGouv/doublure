@@ -1,31 +1,23 @@
-"""Pourquoi les mots courants ne sont PAS dans l'allowlist.
+"""Les mots courants sont publics SOUS LEUR TYPE, et nulle part ailleurs.
 
 Mesuré en session : `to`, `fire`, `the`, `code`, `run`, `png` sortent en
 FILE_PATH, `low` et `medium` en ORGANIZATION. Chacun coûte une question
-d'arbitrage, et il y en avait 248 pour une quinzaine de légitimes. La tentation
-est donc forte de les déclarer publics.
+d'arbitrage, et il y en avait des centaines pour une poignée de légitimes.
 
-Ils l'ont été, une heure durant, et la revue adversariale a montré le prix :
-une machine RÉELLEMENT nommée `code` — VS Code Server, Gitea, une convention de
-cluster — sortait alors VERBATIM en HOSTNAME. `https://code/api/customer/…`
-laissait l'hôte en clair, sans entrée de coffre ni substitut non résolu : rien
-à compter.
+Ils ont d'abord été déclarés publics TOUT COURT, et la revue a montré le prix :
+une machine réellement nommée `code` — VS Code Server, Gitea, une convention de
+cluster — sortait alors VERBATIM en HOSTNAME, sans entrée de coffre ni
+substitut non résolu. Rien à compter.
 
-**L'allowlist est TYPE-AGNOSTIQUE par construction.** Elle répond « cette
-valeur est publique », pas « cette valeur est publique QUAND elle est un chemin
-de fichier ». Elle ne peut donc pas distinguer le mot de la machine.
+D'où la portée par TYPE. Deux gardes, et il faut les deux :
 
-Le contrepoids envisagé — l'inventaire, qui répond « ce nom est à nous » et qui
-prime — est VIDE par défaut : un dépôt neuf n'a aucune protection sur ces noms.
-Faire dépendre la fermeture d'un fichier que l'opérateur doit penser à écrire,
-c'est la même inversion que l'anti-patron §7.
+- une entrée typée ne vaut QUE sous ses types ;
+- sans type connu, elle ne vaut PAS DU TOUT — qui ne sait pas de quoi il parle
+  n'ouvre rien.
 
-Fermer ce bruit demande une allowlist TYPÉE, plus la mesure de la file
-d'arbitrage — que seul l'opérateur peut faire, elle rend des valeurs réelles.
-En attendant : **une question d'arbitrage se voit, une fuite d'hôte ne se voit
-pas.**
-
-Ce fichier existe pour que la tentation ne se reprenne pas sans le prix.
+`ORGANIZATION` est le type qui attrape les raisons sociales : n'y déclarer que
+des mots-outils et des niveaux. `code`, `fire`, `text` n'y figurent pas — ce
+sont des noms d'entreprise plausibles.
 """
 from __future__ import annotations
 
@@ -39,19 +31,46 @@ def public():
     return Allowlist.load()
 
 
-@pytest.mark.parametrize("mot", [
-    "to", "the", "a", "an", "and", "or", "not", "if", "for", "with", "from",
-    "run", "code", "fire", "text", "error", "warning", "debug",
-    "png", "jpg", "svg", "low", "medium", "high",
+MOTS_OUTILS = ["to", "the", "a", "an", "and", "or", "not", "if", "for",
+               "with", "from", "low", "medium", "high"]
+TERMES = ["run", "code", "fire", "text", "error", "warning", "debug",
+          "png", "jpg", "svg"]
+
+
+@pytest.mark.parametrize("mot", MOTS_OUTILS + TERMES)
+def test_un_mot_courant_est_lisible_en_chemin(mot, public):
+    assert public(mot, "FILE_PATH"), f"{mot!r} substitué en FILE_PATH"
+
+
+@pytest.mark.parametrize("mot", MOTS_OUTILS + TERMES)
+def test_un_mot_courant_reste_protege_en_hote(mot, public):
+    """Le cas qui a tranché : une machine réellement nommée `code`."""
+    assert not public(mot, "HOSTNAME"), f"{mot!r} rendu public en HOSTNAME"
+    assert not public(mot, "URL"), f"{mot!r} rendu public en URL"
+
+
+@pytest.mark.parametrize("mot", MOTS_OUTILS + TERMES)
+def test_sans_type_connu_rien_ne_s_ouvre(mot, public):
+    """Fail-closed : c'est ce qui rend la liste tenable."""
+    assert not public(mot), f"{mot!r} rendu public sans type"
+
+
+@pytest.mark.parametrize("mot", TERMES)
+def test_un_terme_technique_n_est_pas_ouvert_en_organisation(mot, public):
+    """`Code`, `Fire`, `Text` sont des raisons sociales plausibles ; les
+    mots-outils, non."""
+    assert not public(mot, "ORGANIZATION"), f"{mot!r} ouvert en ORGANIZATION"
+
+
+@pytest.mark.parametrize("mot", MOTS_OUTILS)
+def test_un_mot_outil_est_ouvert_en_organisation(mot, public):
+    assert public(mot, "ORGANIZATION")
+
+
+@pytest.mark.parametrize("valeur", [
+    "Acme", "Renault", "Dassault", "acmecorp",
+    "code-billing-01", "run.acme.internal", "acme-low", "/home/jo/code",
 ])
-def test_un_mot_courant_n_est_pas_public(mot, public):
-    """Chacun coûte une question d'arbitrage — et c'est le prix à payer tant
-    que l'allowlist ne sait pas de quel TYPE elle parle."""
-    assert not public(mot), (
-        f"{mot!r} rendu public : une machine portant ce nom sortirait en clair")
-
-
-def test_le_cas_qui_a_tranche(public):
-    """Le cas mesuré : l'hôte d'une URL est justement un mot courant."""
-    assert not public("code")
-    assert not public("https://code/api/customer/acme-billing-2025-nda/export")
+def test_un_nom_propre_ou_compose_n_est_pas_ouvert(valeur, public):
+    for etype in ("FILE_PATH", "ORGANIZATION", "HOSTNAME", None):
+        assert not public(valeur, etype), f"{valeur!r} ouvert en {etype}"
