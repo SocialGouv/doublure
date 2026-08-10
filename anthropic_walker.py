@@ -205,7 +205,7 @@ def _traverse_hors_forme(value: Any, fn: Callable[[str], str],
     return {
         cle: (val if (cle in formes and isinstance(val, str)
                       and formes[cle].fullmatch(val))
-              else _walk(val, fn, in_user_data=True))
+              else _walk(val, fn, in_user_data=True, cles_libres=True))
         for cle, val in value.items()
     }
 
@@ -240,6 +240,17 @@ RESPONSE_CONTROL_KEYS: frozenset[str] = frozenset({"usage", "container_id"})
 #: forme connue. Sans cela, le fail-closed ne tenait qu'au premier niveau, et
 #: un champ ajoute par une beta a l'interieur de `thinking` ou
 #: `context_management` serait parti brut.
+#: Marqueur : dans ce sous-arbre, TOUTE cle est admise et c'est la FORME de la
+#: valeur qui decide. A reserver aux blocs de PARAMETRES d'inference, ou
+#: Anthropic ajoute des champs sans preavis et ou rien ne porte de donnee.
+#: Mesure en session reelle le 2026-08-10 : le client s'est mis a envoyer une
+#: cle de plus dans `output_config`, la cle inconnue a fait traverser le bloc
+#: ENTIER, `effort` est parti au detecteur et en est revenu substitue — l'API
+#: a repondu 400 « Input should be 'low', 'medium', 'high', 'xhigh' or 'max' »
+#: et la session s'est arretee. Enumerer les sous-cles d'un bloc que l'amont
+#: fait evoluer est un pari perdu d'avance ; la forme, elle, tient.
+TOUTE_CLE: frozenset[str] = frozenset({"*"})
+
 REQUEST_CONTROL_KEYS: dict[str, frozenset[str]] = {
     "model": frozenset(),
     "max_tokens": frozenset(),
@@ -255,7 +266,7 @@ REQUEST_CONTROL_KEYS: dict[str, frozenset[str]] = {
     # (`image`) et retombe donc dans la traversee.
     "container": frozenset(),
     "thinking": frozenset({"type", "budget_tokens", "display"}),
-    "output_config": frozenset({"effort"}),
+    "output_config": TOUTE_CLE,
     "context_management": frozenset(
         {"edits", "type", "keep", "trigger", "at_least", "value",
          "clear_at_least", "clear_tool_inputs", "exclude_tools"}
@@ -292,7 +303,8 @@ def _is_known_control(
     """
     if isinstance(node, dict):
         return all(
-            key in allowed and _is_known_control(value, allowed, motif)
+            (allowed is TOUTE_CLE or key in allowed)
+            and _is_known_control(value, allowed, motif)
             for key, value in node.items()
         )
     if isinstance(node, list):
@@ -344,6 +356,95 @@ SCHEMA_NAMED_SUBSCHEMAS: frozenset[str] = frozenset(
 #: Cles de schema qui peuvent contenir un sous-schema (donc des `description`
 #: a traverser) mais jamais de texte libre a leur racine.
 SCHEMA_NESTED_KEYS: frozenset[str] = frozenset({"additionalProperties", "items"})
+
+#: Shape of an `enum` member left VERBATIM: a vocabulary token, starting with a
+#: LETTER and carrying no dot, slash, at-sign, colon or space. `10.4.2.17`,
+#: `db-01.acme.internal`, `/home/jo/x` and `alice@acme.corp` are therefore
+#: excluded and keep being substituted. Residual, bounded and stated: a
+#: single-label bare identifier (`db-prod01`) has the shape of a vocabulary
+#: token and stays verbatim — the same accepted leak as `tools[].name`,
+#: `allowed_tools` and property names, and strictly narrower since those carry
+#: no shape guard at all. A question of inventory, not of shape.
+_ENUM_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_+-]{0,63}")
+
+#: Keys whose value ECHOES a member of the neighbouring `enum`.
+SCHEMA_ENUM_ECHO: frozenset[str] = frozenset({"default", "const"})
+
+
+#: A media type accepted as an enum member. The top-level registry is closed,
+#: but the `vnd.`/`prs.` tree is NOT — RFC 6838 §3.2 lets anyone register the
+#: labels they like, and it accepts DOTS: `application/vnd.db-01.acme.internal`
+#: and `application/vnd.10.0.5.7` both had the shape. Only the registered
+#: subtype and the experimental `x-` tree survive here, neither of which can
+#: carry a dot. Real vendor types pay for it by being substituted inside an
+#: enum: damaging a media type is visible, letting an internal host out is not.
+_ENUM_MEDIA_RE = re.compile(
+    r"(text|image|audio|video|application|font|model|message|multipart|"
+    r"example)/(?:[\w+-]+|x-[\w+-]+)(\s*;\s*[\w+-]+=[\w+-]+)*")
+
+#: Segment separators of a vocabulary token.
+_ENUM_SEGMENTS_RE = re.compile(r"[_+-]")
+
+
+def _segment_opaque(token: str) -> bool:
+    """Does a segment look DRAWN rather than written?
+
+    The enum guard never submits its members to the detector, so anything the
+    detector would have caught becomes invisible — the SECRET class included,
+    which D4 says is a reference and never leaves. A vocabulary token is not a
+    high-entropy blob: a long segment MIXING letters and digits is the
+    signature of a drawn identifier (`AKIAIOSFODNN7EXAMPLE`, `ghp_16C7e42F…`),
+    never of a word. `AVAILABILITY_BUSY` has no digit, `claude-opus-4-5-
+    20251101` no mixed segment, `us-east-1` nothing long enough.
+    """
+    segments = _ENUM_SEGMENTS_RE.split(token)
+    if len(token) > 32:
+        # A vocabulary value is READ by a human in a schema. Beyond this it is
+        # an identifier — `alice-dupont-directrice-financiere` is PII whose
+        # segments are all short and all dictionary-shaped.
+        return True
+    if any(len(seg) >= 16 for seg in segments):
+        # Length alone, with no digit required: an AWS key carries a digit only
+        # 98.6 % of the time, so one repository key in seventy has none, and
+        # `gho_…` OAuth tokens can be pure letters.
+        return True
+    if any(len(seg) >= 12 and any(c.isdigit() for c in seg)
+           and any(c.isalpha() for c in seg) for seg in segments):
+        return True
+    # A MAC address in dash form: six two-character hex segments, none of them
+    # long enough or mixed enough for the rules above.
+    return len(segments) == 6 and all(
+        len(seg) == 2 and all(c in "0123456789abcdefABCDEF" for c in seg)
+        for seg in segments)
+
+
+def _vocabulaire_ferme(value: Any) -> bool:
+    """Does the value belong to a vocabulary rather than to an infrastructure?"""
+    if not isinstance(value, str):
+        return False
+    if _ENUM_TOKEN_RE.fullmatch(value) is not None:
+        return not _segment_opaque(value)
+    if _ENUM_MEDIA_RE.fullmatch(value) is None:
+        return False
+    # The subtype AND the parameters are FREE TEXT: returning here without the
+    # opacity guard made `application/x-<secret>` a channel out, and checking
+    # only the subtype left `; boundary=<AWS key>` — a key that IS caught when
+    # presented on its own. Only the top-level registry is closed; everything
+    # after the slash gets the same treatment as a bare token.
+    reste = value.split("/", 1)[1]
+    if _segment_opaque(reste.split(";", 1)[0].strip()):
+        return False
+    # Une valeur de parametre appartient a un vocabulaire court (`utf-8`,
+    # `us-ascii`, `iso-8859-1`). Au-dela, c'est une charge : une frontiere MIME
+    # est un alea, et un jeton court y tenait sous le seuil d'opacite.
+    # Le NOM d'un parametre est aussi libre que sa valeur : `; charset=` et
+    # `; boundary=` sont courts, `; my-corporate-billing-tenant=` ne l'est pas.
+    return all(
+        len(pnom := parametre.partition("=")[0].strip()) <= 12
+        and len(pval := parametre.partition("=")[2].strip()) <= 12
+        and not _segment_opaque(pnom) and not _segment_opaque(pval)
+        for parametre in reste.split(";")[1:]
+    )
 
 
 class UnresolvedSurrogate(Exception):
@@ -432,6 +533,16 @@ class Substituter:
 #: l'outil s'executait alors avec le nom FICTIF.
 USER_DATA_KEYS: frozenset[str] = frozenset({"input", "metadata"})
 
+#: Sous-arbres dont les CLES elles-memes sont choisies librement par
+#: l'appelant. `input` en est un : l'outil declare ses parametres, et le modele
+#: peut y ecrire `{"db-01.acme.internal": …}` — un nom d'hote en position de
+#: cle, qui sortait verbatim.
+#: `metadata` n'en est PAS un, malgre son appartenance a USER_DATA_KEYS : ses
+#: cles sont un CONTRAT que l'API valide, et substituer `user_id` fait repondre
+#: 400 « Extra inputs are not permitted », donc tue la session. Meme classe que
+#: le `type` de schema casse au round 3 : la valeur est libre, la cle non.
+CLES_LIBRES: frozenset[str] = frozenset({"input"})
+
 #: `name` et `id` ne sont un CONTRAT que dans un noeud de PROTOCOLE. Ailleurs
 #: — dans la sortie d'un outil MCP, qui renvoie couramment
 #: `{"type": …, "name": …, "uri": …}` — ce sont des donnees : les recopier
@@ -491,6 +602,8 @@ def _walk(
     signe_partout: bool = False,
     dans_messages: bool = False,
     bloc_message: bool = False,
+    dans_outils: bool = False,
+    cles_libres: bool = False,
 ) -> Any:
     """
     Traverse recursivement une structure JSON et applique `fn` a chaque chaine
@@ -510,7 +623,8 @@ def _walk(
             _walk(item, fn, in_schema=in_schema, in_user_data=in_user_data,
                   protocole=protocole, signe_ici=signe_ici,
                   signe_partout=signe_partout, dans_messages=dans_messages,
-                  bloc_message=bloc_message)
+                  bloc_message=bloc_message, dans_outils=dans_outils,
+                  cles_libres=cles_libres)
             for item in node
         ]
 
@@ -621,6 +735,45 @@ def _walk(
                     out[key] = value
                     continue
 
+            # An `enum` member is the CLOSED vocabulary declared by the tool:
+            # the model has to emit one of them VERBATIM. Substituting them
+            # lets nothing OUT — the call is restored on the way back — but it
+            # destroys the MEANING: told the permitted values are
+            # `glacier-vault10` and `tundra-planner03`, the model can no longer
+            # know which one stands for `low`. It picks one, the tool runs on
+            # the wrong value, and nothing reports an error. Same silent class
+            # as a broken `type` at round 3, reached from the other side.
+            # Guarded by SHAPE, like SCALAR_SKIP_FORMS. `in_user_data` excludes
+            # it: an `input_schema` forged inside a tool argument would
+            # otherwise buy protocol protection — the forgery closed at rounds
+            # 4, 10, 11 and 12, reached through a new key.
+            if in_schema and not in_user_data and key == "enum" \
+                    and isinstance(value, list):
+                # Un membre d'enum est une VALEUR que le modele doit emettre,
+                # jamais un fragment de schema. Le traverser avec
+                # `in_schema=True` rendait verbatim les cles structurelles
+                # qu'il porterait — `{"type": "srv-01.acme.internal"}`,
+                # `{"required": [...]}`, `{"$anchor": "/var/lib/secrets/..."}`
+                # sortaient entiers. En mode DONNEES, tout y est substitue.
+                out[key] = [
+                    item if _vocabulaire_ferme(item)
+                    else _walk(item, fn, in_user_data=True, cles_libres=True,
+                               signe_partout=signe_partout)
+                    for item in value
+                ]
+                continue
+
+            # A `default` (or `const`) substituted while its `enum` is not is no
+            # longer a legal value: the schema publishes a default outside its
+            # own constraint. The echo only holds for a member the enum ALREADY
+            # renders verbatim, so it widens nothing.
+            if in_schema and not in_user_data and key in SCHEMA_ENUM_ECHO \
+                    and _vocabulaire_ferme(value) \
+                    and isinstance(node.get("enum"), list) \
+                    and value in node["enum"]:
+                out[key] = value
+                continue
+
             # Les noms de proprietes d'un schema sont un contrat avec le modele :
             # on preserve les cles et on traverse chaque definition. Teste AVANT
             # SCHEMA_STRUCTURAL_KEYS (qui contient "properties") : sinon la
@@ -657,11 +810,56 @@ def _walk(
                 )
                 continue
 
-            entering_schema = in_schema or key == "input_schema"
-            out[key] = _walk(
+            # La légitimité d'un schéma est une propriété de POSITION : elle
+            # descend d'un conteneur de PROTOCOLE (`tools`), elle ne s'achète
+            # pas en écrivant la clé `input_schema` dans son propre sous-arbre.
+            # Sans `protocole`, un serveur MCP hostile la nichait dans sa sortie
+            # — deux crans sous un `tool_result` — et tout le traitement
+            # « schéma » s'y appliquait : membres d'`enum` recopiés verbatim,
+            # mais aussi `required`, `type`, `$ref` et les NOMS de propriétés.
+            # Même remède qu'au round 11, atteint par une nouvelle clé.
+            # `protocole` se propage a TOUT descendant d'un conteneur : exiger
+            # ce drapeau laissait `input_schema` legitime a n'importe quelle
+            # PROFONDEUR sous `tools`, `mcp_servers` ou `tool_choice`. Un
+            # schema est l'enfant DIRECT d'un outil, jamais un descendant
+            # quelconque — `dans_outils` ne vaut que d'un cran, et retombe.
+            entering_schema = in_schema or (key == "input_schema" and dans_outils)
+            # Dans un sous-arbre de DONNEES, une cle est un nom choisi par
+            # l'appelant, pas un contrat : le modele ecrit
+            # `{"db-01.acme.internal": …}` et le nom d'hote sortait verbatim,
+            # sans entree de coffre — et sans restauration au retour, donc
+            # l'outil se serait execute sur le nom FICTIF. Hors donnees, une
+            # cle est du protocole et la renommer casserait la requete.
+            cle = fn(key) if cles_libres and isinstance(key, str) else key
+            if cle != key and cle in out:
+                # Deux cles reelles distinctes tirant le meme substitut : la
+                # seconde ecrasait la premiere et une valeur DISPARAISSAIT du
+                # corps, sans entree de coffre ni compteur pour le signaler. Un
+                # residu accepte se compte ; une perte de donnee se refuse.
+                raise ValueError(
+                    f"collision de cles apres substitution : {cle!r} "
+                    f"est deja present dans ce bloc")
+            out[cle] = _walk(
                 value, fn,
                 in_schema=entering_schema,
+                # SEME a la racine par `walk_request`, propage d'un cran par la
+                # liste `tools`, et remis a FAUX partout ailleurs. Le re-deriver
+                # de la cle a chaque niveau rouvrait la forgerie : une cle
+                # `tools` imbriquee dans un `tool_result`, un bloc `system` ou
+                # une entree `mcp_servers` redonnait le traitement schema. Une
+                # position ne se deduit pas d'un nom de cle.
+                dans_outils=False,
                 in_user_data=in_user_data or key in USER_DATA_KEYS,
+                # Le `content` d'un resultat d'outil est ecrit par un TIERS, et
+                # un sous-arbre de forme inconnue n'a par definition pas la
+                # structure de l'API : leurs cles sont des donnees. N'ouvrir
+                # que `input` avait RETRECI la classe, pas ferme la classe.
+                # Forger le type d'un bloc pour obtenir ce traitement ne fait
+                # qu'AUGMENTER la substitution : c'est le seul sens ou une
+                # forgerie est sans danger.
+                cles_libres=cles_libres or key in CLES_LIBRES or (
+                    key == "content" and isinstance(btype, str)
+                    and btype in _TOOL_RESULTS),
                 # HERITE : `mcp_servers[].tool_configuration.allowed_tools` est
                 # deux crans sous son conteneur. La propagation s'arrete aux
                 # frontieres de donnees — un `content` sous une racine de
@@ -739,7 +937,9 @@ def walk_request(body: dict[str, Any], sub: Substituter) -> dict[str, Any]:
         out[key] = _walk(value, sub.to_surrogate,
                          in_user_data=key in USER_DATA_KEYS,
                          protocole=key in PROTOCOL_CONTAINER_KEYS,
-                         dans_messages=key == "messages")
+                         cles_libres=key in CLES_LIBRES,
+                         dans_messages=key == "messages",
+                         dans_outils=key == "tools")
 
     return out
 
@@ -1078,7 +1278,8 @@ class SSERewriter:
 
         # La racine EST l'argument d'outil : aucune cle n'y est protocolaire.
         return json.dumps(
-            _walk(parsed, _resolve, in_user_data=True), ensure_ascii=False
+            _walk(parsed, _resolve, in_user_data=True, cles_libres=True),
+            ensure_ascii=False
         )
 
 

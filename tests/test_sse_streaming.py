@@ -281,7 +281,11 @@ def test_ids_de_protocole_intacts():
     out = walk_request(body, sub)
     blk = out["messages"][0]["content"][0]
     assert blk["id"] == "toolu_01ABC" and blk["type"] == "tool_use" and blk["name"] == "bash"
-    assert blk["input"]["cmd"] == "MODIFIÉ"
+    # Le NOM d'un argument est une donnée, pas un contrat : le modèle écrit
+    # `{"db-01.acme.internal": …}` et le nom d'hôte sortait verbatim. Il passe
+    # donc par le détecteur comme le reste — qui ne signale ni `cmd` ni `path`,
+    # et ne les touche donc pas en pratique. Ici le substituteur modifie TOUT.
+    assert list(blk["input"].values()) == ["MODIFIÉ"]
 
 
 # --------------------------------------------------------------------------- #
