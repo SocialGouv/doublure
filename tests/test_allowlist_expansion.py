@@ -109,21 +109,37 @@ SENSIBLES = [
 ]
 
 
-@pytest.mark.parametrize("mot", ["code", "run", "error", "low", "png"])
-def test_les_deux_parseurs_lisent_la_meme_liste_typee(wrapper, mot):
+def test_les_deux_parseurs_lisent_la_meme_liste_typee(wrapper, tmp_path):
     """Le parseur est DUPLIQUÉ de part et d'autre de la frontière D7 : c'est la
     LISTE qui est maintenue une fois, pas le code qui la lit. Une nouvelle forme
     de ligne doit donc être écrite deux fois — et si les deux moitiés
     divergeaient, le détecteur et le moteur ne protégeraient pas la même chose,
-    en silence. Ce test compare leurs verdicts sur le fichier RÉEL."""
+    EN SILENCE. C'est le mode d'échec propre à cette duplication, et il n'a
+    aucun symptôme visible."""
     from anonproxy.allowlist import Allowlist
-    notre = Allowlist.load()
-    for etype, attendu in (("FILE_PATH", True), ("HOSTNAME", False),
-                           (None, False)):
-        cote_moteur = notre(mot, etype)
-        cote_detecteur = juge(wrapper, f"voir {mot} ici", mot, etype) is not None
-        assert cote_moteur is attendu, (mot, etype, "moteur")
-        assert cote_detecteur is attendu, (mot, etype, "détecteur")
+
+    fichier = tmp_path / "allowlist.txt"
+    fichier.write_text(
+        "# commentaire\nlocalhost\ntypes:K8S_NAMESPACE demo-apps\n"
+        "types:FILE_PATH,ORGANIZATION jeton\n"
+        "types:FILE_PATH re:[\\w-]+\\.(md|txt)\n",
+        encoding="utf-8")
+
+    notre = Allowlist.load(fichier)
+    exact, motifs, types, motifs_types = wrapper._load_allowlist(fichier)
+
+    cas = [("localhost", "HOSTNAME", True), ("localhost", None, True),
+           ("demo-apps", "K8S_NAMESPACE", True),
+           ("demo-apps", "HOSTNAME", False), ("demo-apps", None, False),
+           ("jeton", "ORGANIZATION", True), ("jeton", "URL", False),
+           ("NOTES.txt", "FILE_PATH", True), ("NOTES.txt", "HOSTNAME", False)]
+    for valeur, etype, attendu in cas:
+        cote_moteur = notre(valeur, etype)
+        span = {"value": valeur, "start": 0, "end": len(valeur), "type": etype}
+        cote_detecteur = wrapper._raison_publique(
+            valeur, span, exact, motifs, types, motifs_types) is not None
+        assert cote_moteur is attendu, (valeur, etype, "moteur")
+        assert cote_detecteur is attendu, (valeur, etype, "détecteur")
 
 
 @pytest.mark.parametrize("texte,valeur", SENSIBLES)

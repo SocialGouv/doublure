@@ -91,8 +91,18 @@ class Allowlist:
                 else:
                     patterns_types.append((motif, portee))
             elif portee is None:
+                if line in types:
+                    raise ValueError(
+                        f"{p}:{lineno} — {line!r} est déjà déclaré avec une "
+                        f"portée de types : une entrée ordinaire l'ouvrirait "
+                        f"pour TOUS les types, en silence")
                 exact.add(line)
             else:
+                if line in exact:
+                    raise ValueError(
+                        f"{p}:{lineno} — {line!r} est déjà déclaré sans "
+                        f"portée : l'entrée ordinaire gagne, et la portée de "
+                        f"types ne servirait à rien")
                 types[line] = portee
         return cls(exact, patterns, types, patterns_types)
 

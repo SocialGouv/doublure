@@ -155,45 +155,35 @@ re:https?://(www\.)?iana\.org(/[\w-]+)*/?
 node.js
 next.js
 
-# --- Mots courants, TYPÉS --------------------------------------------------
-# Mesuré : `to`, `run`, `code`, `error`, `png`, `low`, `high` sortent en
-# FILE_PATH ou en ORGANIZATION sur de la prose, et chacun coûte une question
-# d'arbitrage.
+# --- Mots courants : RETIRÉS DEUX FOIS, et voici pourquoi -------------------
+# `to`, `run`, `code`, `error`, `png`, `low`, `high` sortent en FILE_PATH ou en
+# ORGANIZATION sur de la prose, et chacun coûte une question d'arbitrage. La
+# tentation est donc forte de les déclarer publics.
 #
-# Les déclarer publics TOUT COURT était une fuite : une machine réellement
-# nommée `code` sortait alors verbatim en HOSTNAME. D'où la portée par TYPE —
-# `types:` limite l'entrée aux types listés, et sans type connu elle ne
-# s'applique pas du tout. Le sens fermé est le défaut.
+# PREMIER ESSAI — publics tout court. Une machine réellement nommée `code`
+# sortait alors VERBATIM en HOSTNAME.
 #
-# ORGANIZATION est le type qui attrape les noms d'entreprise (`Acme`,
-# `Renault`) : n'y déclarer QUE des mots-outils et des niveaux, jamais un mot
-# qui puisse être une raison sociale.
-types:FILE_PATH,ORGANIZATION to
-types:FILE_PATH,ORGANIZATION the
-types:FILE_PATH,ORGANIZATION a
-types:FILE_PATH,ORGANIZATION an
-types:FILE_PATH,ORGANIZATION and
-types:FILE_PATH,ORGANIZATION or
-types:FILE_PATH,ORGANIZATION not
-types:FILE_PATH,ORGANIZATION if
-types:FILE_PATH,ORGANIZATION for
-types:FILE_PATH,ORGANIZATION with
-types:FILE_PATH,ORGANIZATION from
-types:FILE_PATH,ORGANIZATION low
-types:FILE_PATH,ORGANIZATION medium
-types:FILE_PATH,ORGANIZATION high
-# Termes techniques : seulement en FILE_PATH, où ils sont un faux positif de
-# forme. En ORGANIZATION, `Fire` ou `Code` peuvent être une raison sociale.
-types:FILE_PATH run
-types:FILE_PATH code
-types:FILE_PATH fire
-types:FILE_PATH text
-types:FILE_PATH error
-types:FILE_PATH warning
-types:FILE_PATH debug
-types:FILE_PATH png
-types:FILE_PATH jpg
-types:FILE_PATH svg
+# SECOND ESSAI — publics sous les seuls types FILE_PATH et ORGANIZATION. La
+# prémisse était que le TYPE sépare le mot de la machine. Elle est FAUSSE, et
+# c'est mesuré sur le détecteur réel :
+#
+#     "reach code at port 8080"          -> FILE_PATH 'code'     (c'est un hôte)
+#     "server hostname: code"            -> FILE_PATH 'code'     (c'est un hôte)
+#     "consult with High Fidelity Corp"  -> ORGANIZATION 'High'  (raison sociale
+#                                           découpée en tokens par le NER)
+#
+# Le type est lui-même une HEURISTIQUE, et elle échoue précisément sur les cas
+# ambigus — ceux pour lesquels on voulait la portée. La règle était déplacée,
+# pas fermée : `code` en position d'hôte sortait toujours en clair, et le nom
+# d'une entreprise composée (`High Fidelity`, `Low Latency`) partait par
+# morceaux.
+#
+# Ce qu'il faudrait vraiment : une détection dont le type soit fiable, ou un
+# inventaire renseigné qui reprenne la main. Une question d'arbitrage se voit
+# et se solde en un geste ; une fuite d'hôte ne se voit jamais.
+#
+# `tests/test_mots_courants.py` épingle les deux sens pour que la tentation ne
+# se reprenne pas une troisième fois sans le prix.
 
 # --- Historique de cette liste, à ne pas refaire ------------------------------
 # `to`, `run`, `code`, `error`, `low`, `high` avaient été ajoutés ici : le

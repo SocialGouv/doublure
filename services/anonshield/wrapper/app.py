@@ -86,8 +86,22 @@ def _load_allowlist(path: Path):
             (patterns if portee is None else patterns_types).append(
                 motif if portee is None else (motif, portee))
         elif portee is None:
+            # Un homonyme typé serait SILENCIEUSEMENT écrasé : l'entrée
+            # ordinaire gagne et ouvre pour TOUS les types. Fail-loud, des deux
+            # côtés de la frontière D7 — un doublon non signalé refabrique
+            # exactement la fuite que la portée de types ferme.
+            if line in types:
+                raise ValueError(
+                    f"{path}:{lineno} — {line!r} est déjà déclaré avec une "
+                    f"portée de types : une entrée ordinaire l'ouvrirait "
+                    f"pour TOUS les types, en silence")
             exact.append(line)
         else:
+            if line in exact:
+                raise ValueError(
+                    f"{path}:{lineno} — {line!r} est déjà déclaré sans "
+                    f"portée : l'entrée ordinaire gagne, et la portée de "
+                    f"types ne servirait à rien")
             types[line] = portee
     return exact, patterns, types, patterns_types
 
