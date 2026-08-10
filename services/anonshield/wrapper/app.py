@@ -259,6 +259,87 @@ def _expand_token(text: str, start: int, end: int) -> str:
     return text[left:right].lstrip(_TRIM_LEFT).rstrip(_TRIM_RIGHT)
 
 
+def _luhn(chiffres: str) -> bool:
+    """Somme de contrôle ISO/IEC 7812 — une carte en porte une par définition."""
+    total, pair = 0, False
+    for c in reversed(chiffres):
+        n = int(c)
+        if pair:
+            n *= 2
+            if n > 9:
+                n -= 9
+        total += n
+        pair = not pair
+    return total % 10 == 0
+
+
+def _ecarter_cartes_invalides(ents: list[dict]) -> list[dict]:
+    """Un `CREDIT_CARD` sans somme de contrôle valide, CONTENU dans un autre
+    span, est un fragment de ce span — pas une carte.
+
+    Mesuré : `FR76 3000 6000 0112 3456 7890 189` porte en son milieu seize
+    chiffres par groupes de quatre. Le détecteur y voyait une carte, donc un
+    SECRET, qui gagne l'arbitrage de recouvrement « absolument, même plus court
+    et moins bien scoré » — la garde D4, et elle est juste. L'IBAN était déchiré
+    par le milieu et ses deux extrémités substituées séparément.
+
+    On n'écarte QUE ce qu'un autre span couvre déjà : sinon la règle devient un
+    chemin de fuite, une vraie carte au span mal borné échouant à Luhn et
+    sortant en clair. Contenue, elle reste substituée par son conteneur.
+    """
+    def couverte(e: dict) -> bool:
+        return any(a is not e and a["start"] <= e["start"]
+                   and a["end"] >= e["end"] and (a["end"] - a["start"])
+                   > (e["end"] - e["start"]) for a in ents)
+
+    return [e for e in ents
+            if e.get("type") != "CREDIT_CARD"
+            or _luhn(re.sub(r"\D", "", e.get("value", "")) or "1")
+            or not couverte(e)]
+
+
+def _raison_publique(text: str, ent: dict, allow_exact: list[str],
+                     allow_patterns) -> str | None:
+    """Ce span est-il public ? C'est le TOKEN ÉTENDU qui décide, et lui seul.
+
+    Un span n'est qu'un fragment ; ce qui part sur le réseau, c'est le token.
+    Les deux cas tombent alors juste, sans arbitrage supplémentaire :
+
+        `github.com`  dans `github.com/spf13/cobra`  -> token public   -> écarté
+        `example.com` dans `db.example.com`          -> token non public -> gardé
+
+    Trois cas, et il faut les trois :
+
+        `github.com`       dans `github.com/spf13/cobra`  -> token public
+        `incident-4218.md` dans `infra/incident-4218.md`  -> SEGMENT public
+        `example.com`      dans `db.example.com`          -> ni l'un ni l'autre
+
+    D'où la règle : le TOKEN entier, ou un SEGMENT de chemin du token. La barre
+    oblique sépare des composants indépendants ; le point, lui, ATTACHE un
+    préfixe — `db.` devant `example.com` fait un autre hôte, alors que
+    `infra/` devant `incident-4218.md` laisse le nom de fichier intact.
+
+    Cette décision a été fausse trois fois. « La valeur OU le token » écartait
+    un span dont la seule valeur était publique, laissant passer l'hôte interne
+    qui l'entourait. « La valeur ET le token » gardait tous les spans que le
+    NER rend nus (`github.com`, `docker.io`) : les dépendances publiques se sont
+    mises à sortir substituées, et les noms de fichiers `.md` sont redevenus de
+    faux domaines — le défaut du round 7, qui avait déjà interrompu une session.
+    « Le token seul » corrigeait le premier symptôme et pas le second.
+
+    Elle vivait EN LIGNE dans l'endpoint, donc hors de portée des tests : c'est
+    ce qui lui a permis de casser trois fois. Elle est ici pour être testable.
+    """
+    etendu = _expand_token(text, ent["start"], ent["end"])
+    raison = _allowed(etendu, allow_exact, allow_patterns)
+    if raison is not None:
+        return raison
+    valeur = ent["value"]
+    if valeur != etendu and valeur in etendu.split("/"):
+        return _allowed(valeur, allow_exact, allow_patterns)
+    return None
+
+
 def _trim_span(text: str, ent: dict) -> dict:
     """Retire la ponctuation happée en bord de span.
 
@@ -362,7 +443,7 @@ def detect(inp: DetectIn):
     else:
         raise HTTPException(status_code=422, detail=f"stratégie inconnue : {inp.strategy!r}")
 
-    ents = [_trim_span(inp.text, e) for e in ents]
+    ents = _ecarter_cartes_invalides([_trim_span(inp.text, e) for e in ents])
     allow_exact, allow_patterns = _ENGINE["allow_exact"], _ENGINE["allow_patterns"]
     gardees: list[dict] = []
     # Dédoublonné par VALEUR : un même token reçoit plusieurs spans (SERVICE,
@@ -370,9 +451,7 @@ def detect(inp: DetectIn):
     # avec le nombre d'identifiants réellement rendus publics.
     par_forme: dict[str, dict] = {}
     for e in ents:
-        raison = (_allowed(e["value"], allow_exact, allow_patterns)
-                  or _allowed(_expand_token(inp.text, e["start"], e["end"]),
-                              allow_exact, allow_patterns))
+        raison = _raison_publique(inp.text, e, allow_exact, allow_patterns)
         if raison is None:
             gardees.append(e)
         elif raison != "exact":
