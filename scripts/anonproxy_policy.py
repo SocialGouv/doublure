@@ -41,12 +41,22 @@ from anonproxy.vault import SurrogateConflict, Vault  # noqa: E402
 
 #: Ce que l'opérateur peut répondre. « Révéler » n'est jamais le défaut : il
 #: faut le taper.
+#: Les libellés NOMMENT le type et la classe, et l'affichage y ajoute combien
+#: de questions en attente la réponse réglerait.
+#:
+#: « révéler ce TYPE en entier » se lit comme une décision sur l'entrée qu'on
+#: regarde. Elle en ouvre une dizaine d'un coup au niveau CLASSE — et révéler
+#: est la seule décision qui fasse sortir une valeur, dont l'erreur est
+#: silencieuse et que révoquer ne rattrape pas. La portée doit être lisible AU
+#: MOMENT du choix, pas après.
 REPONSES = {
-    "v": ("valeur", Decision.REVELER, "révéler CETTE valeur"),
-    "t": ("type", Decision.REVELER, "révéler ce TYPE en entier"),
-    "c": ("classe", Decision.REVELER, "révéler cette CLASSE en entier"),
-    "T": ("type", Decision.ANONYMISER, "anonymiser ce TYPE (ne plus demander)"),
-    "C": ("classe", Decision.ANONYMISER, "anonymiser cette CLASSE (ne plus demander)"),
+    "v": ("valeur", Decision.REVELER, "révéler CETTE valeur, elle seule"),
+    "t": ("type", Decision.REVELER, "révéler TOUT le type {type}"),
+    "c": ("classe", Decision.REVELER, "révéler TOUTE la classe {classe}"),
+    "T": ("type", Decision.ANONYMISER,
+          "anonymiser tout le type {type}, ne plus demander"),
+    "C": ("classe", Decision.ANONYMISER,
+          "anonymiser toute la classe {classe}, ne plus demander"),
 }
 
 
@@ -113,6 +123,34 @@ def cmd_regler(args) -> int:
     return 0
 
 
+#: Combien d'exemples montrer par groupe. Assez pour reconnaître de quoi il
+#: s'agit, pas assez pour redevenir une liste à plat.
+APERCU = 3
+
+
+def _groupes(questions: list[dict]) -> list[list[dict]]:
+    """La file, groupée par TYPE — l'axe qui transforme 205 gestes en 15.
+
+    L'ouverture est PROGRESSIVE par conception : une décision de type règle
+    d'un coup toutes les questions du même type. Présenter la file à plat
+    cachait cet axe, et l'opérateur voyait deux cents lignes là où quinze
+    suffisent. Les plus nombreux d'abord : c'est là qu'un geste rapporte le
+    plus.
+    """
+    par_type: dict[str, list[dict]] = {}
+    for q in questions:
+        par_type.setdefault(q["type"], []).append(q)
+    return sorted(par_type.values(), key=len, reverse=True)
+
+
+def _apercu(groupe: list[dict], vue: dict, marge: str = "        ") -> None:
+    for q in groupe[:APERCU]:
+        reel = vue.get(q["substitut"], "(hors coffre)")
+        print(f"{marge}{reel!r} → {q['substitut']!r}")
+    if len(groupe) > APERCU:
+        print(f"{marge}… et {len(groupe) - APERCU} autre(s)")
+
+
 def cmd_questions(args) -> int:
     politique, coffre, scope = _outils(args)
     vue = coffre.view(scope)
@@ -120,12 +158,15 @@ def cmd_questions(args) -> int:
     if not questions:
         print("aucune question en attente.")
         return 0
-    print(f"{len(questions)} valeur(s) anonymisée(s) sans règle explicite :\n")
-    for q in questions:
-        reel = vue.get(q["substitut"], "(hors coffre)")
-        print(f"  {q['classe']:<6} {q['type']:<16} {reel!r}")
-        print(f"  {'':<6} {'':<16} → envoyé sous {q['substitut']!r}")
-    print("\n`arbitrer` pour les trancher une à une.")
+    groupes = _groupes(questions)
+    print(f"{len(questions)} valeur(s) anonymisée(s) sans règle explicite, "
+          f"en {len(groupes)} type(s) :\n")
+    for groupe in groupes:
+        tete = groupe[0]
+        print(f"  {len(groupe):>4}  {tete['classe']:<6} {tete['type']}")
+        _apercu(groupe, vue)
+    print(f"\n`arbitrer` — {len(groupes)} geste(s) pour tout solder, "
+          f"ou `arbitrer --une-par-une` pour trancher valeur par valeur.")
     return 0
 
 
@@ -166,22 +207,60 @@ def cmd_arbitrer(args) -> int:
         return 0
 
     portee = args.portee
-    for i, q in enumerate(questions, 1):
+    # Par GROUPE de type ; `--une-par-une` retrouve le geste fin. Le défaut est
+    # le groupe parce que c'est là que le temps d'arbitrage se joue : quinze
+    # gestes au lieu de deux cents, sans rien perdre — le détail reste à une
+    # touche, et une réponse de type couvre exactement le groupe affiché.
+    unites = ([[q] for q in questions] if getattr(args, "une_par_une", False)
+              else _groupes(questions))
+    file_a_traiter = list(unites)
+    i = 0
+    while file_a_traiter:
+        groupe = file_a_traiter.pop(0)
+        i += 1
+        q = groupe[0]
+        groupe_entier = len(groupe) > 1
         reel = vue.get(q["substitut"], "(hors coffre)")
-        print(f"\n[{i}/{len(questions)}] {q['classe']} · {q['type']}")
-        print(f"  valeur réelle : {reel!r}")
-        print(f"  envoyée sous  : {q['substitut']!r}  (anonymisée par défaut)")
-        for touche, (granularite, decision, libelle) in REPONSES.items():
-            print(f"    {touche} — {libelle}")
+        print(f"\n[{i}/{len(unites)}] {q['classe']} · {q['type']}"
+              + (f"   — {len(groupe)} valeur(s)" if groupe_entier else ""))
+        if groupe_entier:
+            _apercu(groupe, vue, marge="  ")
+        else:
+            print(f"  valeur réelle : {reel!r}")
+            print(f"  envoyée sous  : {q['substitut']!r}  (anonymisée par défaut)")
+        couvre = {
+            "valeur": 1,
+            "type": sum(1 for x in questions if x["type"] == q["type"]),
+            "classe": sum(1 for x in questions if x["classe"] == q["classe"]),
+        }
+        for touche, (granularite, decision, modele) in REPONSES.items():
+            # Sur un groupe, « CETTE valeur » n'a pas de référent : c'est
+            # précisément ce que `d` sert à obtenir.
+            if groupe_entier and granularite == "valeur":
+                continue
+            libelle = modele.format(type=q["type"], classe=q["classe"])
+            combien = couvre[granularite]
+            portee_visible = (f"   ({combien} question(s) en attente)"
+                              if combien > 1 else "")
+            print(f"    {touche} — {libelle}{portee_visible}")
+        if groupe_entier:
+            print(f"    d — détailler les {len(groupe)} valeurs, une par une")
         print("    ⏎ — laisser anonymisé, redemander plus tard")
 
         choix = args.repondre if args.repondre is not None else input("  > ").strip()
         if not choix:
             continue
+        if groupe_entier and choix == "d":
+            # Le groupe repasse en tête, éclaté : la granularité fine reste à
+            # une touche, elle n'est simplement plus le défaut.
+            file_a_traiter[:0] = [[x] for x in groupe]
+            unites = unites + [[x] for x in groupe]
+            continue
         if choix not in REPONSES:
             print(f"  réponse inconnue : {choix!r} — laissé anonymisé")
             continue
-        granularite, decision, libelle = REPONSES[choix]
+        granularite, decision, modele = REPONSES[choix]
+        libelle = modele.format(type=q["type"], classe=q["classe"])
         cle = {"valeur": q["empreinte"], "type": q["type"],
                "classe": q["classe"]}[granularite]
         try:
@@ -244,6 +323,8 @@ def main() -> int:
                    help="portée où écrire la décision (défaut : projet)")
     p.add_argument("--repondre", choices=sorted(REPONSES), default=None,
                    help="répondre la même chose à tout, sans interaction")
+    p.add_argument("--une-par-une", action="store_true", dest="une_par_une",
+                   help="trancher valeur par valeur (défaut : par type)")
     p.set_defaults(func=cmd_arbitrer)
 
     for nom, fonction in (("definir", cmd_definir), ("retirer", cmd_retirer)):

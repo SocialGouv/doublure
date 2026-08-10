@@ -97,19 +97,52 @@ const SCOPES = [
 
 let latest = { settings: null, questions: [] };
 
+/**
+ * The queue, grouped by TYPE — the axis that turns hundreds of gestures into
+ * a dozen. Opening is PROGRESSIVE by design: one type decision settles every
+ * question of that type. Listing values flat hid that axis; measured on a real
+ * sandbox, 462 values fell into 14 types. Largest groups first: that is where
+ * one gesture pays most.
+ */
+function groupByType(questions) {
+  const byType = new Map();
+  for (const q of questions) {
+    if (!byType.has(q.type)) byType.set(q.type, []);
+    byType.get(q.type).push(q);
+  }
+  return [...byType.values()].sort((a, b) => b.length - a.length);
+}
+
 async function arbitrate() {
   const questions = latest.questions;
   if (!questions.length) {
     vscode.window.showInformationMessage("anonproxy: nothing waiting.");
     return;
   }
-  for (const q of questions) {
-    const choice = await vscode.window.showQuickPick(ANSWERS, {
-      title: `anonproxy — ${q.class} · ${q.type}`,
-      placeHolder: `${q.value}  →  sent as  ${q.surrogate}`,
+  // Groups are the DEFAULT, never a loss: "Show the N values" drops back to
+  // one gesture per value. On a group, "Reveal THIS value" has no referent —
+  // which is exactly what the detail option is for.
+  const units = groupByType(questions);
+  for (const group of units) {
+    const q = group[0];
+    const whole = group.length > 1;
+    const answers = whole
+      ? [...ANSWERS.filter((a) => a.granularity !== "valeur"),
+         { label: `$(list-unordered) Show the ${group.length} values`,
+           detail: true }]
+      : ANSWERS;
+    const preview = group.slice(0, 3)
+      .map((x) => `${x.value} → ${x.surrogate}`).join("   ·   ");
+    const choice = await vscode.window.showQuickPick(answers, {
+      title: `anonproxy — ${q.class} · ${q.type}`
+        + (whole ? `   (${group.length} values)` : ""),
+      placeHolder: whole
+        ? `${preview}${group.length > 3 ? `   …and ${group.length - 3} more` : ""}`
+        : `${q.value}  →  sent as  ${q.surrogate}`,
       ignoreFocusOut: true,
     });
     if (!choice) return;                   // escaped: nothing is decided
+    if (choice.detail) { units.push(...group.map((x) => [x])); continue; }
     if (!choice.granularity) continue;     // stays anonymised, asked again later
 
     const scope = await vscode.window.showQuickPick(SCOPES, {
@@ -221,15 +254,22 @@ function activate(context) {
       item.tooltip = "Control service unreachable — the real state is unknown.";
       return;
     }
+    // Le compteur annonce les GESTES, pas les valeurs : ce qui coûte à
+    // l'opérateur est le nombre de décisions à prendre, et une décision de
+    // type les règle toutes. Afficher 462 là où 14 gestes suffisent décourage
+    // d'ouvrir la file — et une file jamais ouverte ne protège rien de plus.
+    const groups = groupByType(questions);
     item.text = questions.length
-      ? `$(shield) anonproxy ${settings.mode} · ${questions.length}`
+      ? `$(shield) anonproxy ${settings.mode} · ${groups.length}`
       : `$(shield) anonproxy ${settings.mode}`;
     item.tooltip = new vscode.MarkdownString(
       [`**mode**: ${settings.mode}`,
        ...Object.entries(settings).filter(([k]) => k !== "mode")
          .map(([k, v]) => `**${k}**: ${v}`),
        "",
-       `${questions.length} value(s) anonymised without an explicit rule.`,
+       `${questions.length} value(s) anonymised without an explicit rule, `
+       + `in ${groups.length} type(s) — ${groups.length} decision(s) settle them all.`,
+       ...groups.slice(0, 5).map((g) => `- ${g.length} × ${g[0].type}`),
        "",
        "_This extension enforces nothing: protection is in the proxy._"].join("\n\n"));
   }
