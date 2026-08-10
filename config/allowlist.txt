@@ -68,6 +68,36 @@ localhost
 169.254.169.254
 8.8.8.8
 1.1.1.1
+
+# Les RÉSEAUX réservés sont des constantes de RFC, pas un plan d'adressage :
+# `10.0.0.0/8` dit seulement « cette organisation utilise l'espace privé », ce
+# que fait toute organisation. Un SOUS-RÉSEAU précis (`10.1.2.0/24`) reste
+# sensible et continue d'être substitué — c'est lui qui révèle le plan.
+#
+# Et ils ne PEUVENT pas être substitués : les substituts sont tirés dans ces
+# plages-là (round 18, pour ne jamais désigner la machine d'un tiers), donc
+# masquer un substitut à leur longueur de préfixe retombe sur la valeur réelle.
+# La garde `candidat == réel` rejetait alors les 64 tentatives et la requête
+# partait en 503. Mesuré par `tests/phase3_e2e.sh` : `198.18.0.0/15` figure
+# dans le CLAUDE.md de ce dépôt, chargé dans le prompt système à CHAQUE tour —
+# toute la session était refusée avant le moindre octet sortant.
+10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+127.0.0.0/8
+169.254.0.0/16
+198.18.0.0/15
+192.0.2.0/24
+198.51.100.0/24
+203.0.113.0/24
+2001:db8::/32
+fc00::/7
+fe80::/10
+# Les routes par défaut, citées dans tout prompt iptables, Kubernetes ou
+# Terraform. Elles ne désignent ni machine ni plan d'adressage — et aucune
+# plage réservée ne peut contenir un /0, donc elles ne savent que refuser.
+0.0.0.0/0
+::/0
 # DÉVIATION ASSUMÉE vs §6 du plan, à valider par jo.
 # Le plan liste `*.amazonaws.com` / `*.googleapis.com` / `*.azure.com` en
 # allowlist. Pris au pied de la lettre, c'est une FUITE : un endpoint de
@@ -85,6 +115,61 @@ re:(management|login|graph)\.azure\.com
 login.microsoftonline.com
 graph.microsoft.com
 re:login\.windows\.net
+
+# --- Anthropic — endpoints ÉNUMÉRÉS, jamais de joker -------------------------
+# Le joker est le piège `*.amazonaws.com` juste au-dessus : un endpoint de
+# RESSOURCE porte l'identifiant du compte. Ici les hôtes sont de
+# l'infrastructure publique et se comptent sur les doigts — on les écrit.
+# Les règles d'URL plus bas ne couvrent que la forme AVEC schéma ; en prose,
+# l'agent écrit le domaine nu, et c'est là qu'il partait en substitut.
+claude.ai
+claude.com
+anthropic.com
+api.anthropic.com
+console.anthropic.com
+
+# --- Domaines réservés à la documentation (RFC 2606 §3) ----------------------
+# Les seuls domaines dont une spécification garantit qu'ils ne joignent aucune
+# machine. C'est aussi ce que vise le réglage `domaines_fictifs=reserves`.
+example.com
+example.net
+example.org
+www.example.com
+# La partie LOCALE n'est PAS réservée : `prenom.nom@example.com` reste le nom
+# d'une personne, donc de la PII. D'où un vocabulaire FERMÉ de bouche-trous —
+# tout autre partie locale continue d'être substituée.
+re:(user|test|example|admin|you|me|someone|noreply|no-reply|foo|bar|john\.doe|jane\.doe)@example\.(com|net|org)
+# Les TLD réservés (`.test`, `.invalid`, `.example`, `.localhost`) n'y sont
+# PAS : n'appartenir à personne sur l'Internet public n'empêche pas un
+# opérateur d'en faire une convention INTERNE. Ouvrir le TLD rendrait public
+# un hôte réel qui s'y trouve.
+
+# --- IANA — registre public --------------------------------------------------
+iana.org
+www.iana.org
+re:https?://(www\.)?iana\.org(/[\w-]+)*/?
+
+# --- Noms de produits qui ont la FORME d'un domaine --------------------------
+# Le détecteur les classe en HOSTNAME. Entrées EXACTES : elles valent partout,
+# y compris dans une sous-partie, alors que `billing.node.js` reste substitué.
+node.js
+next.js
+
+# --- Mots courants : RETIRÉS, et voici pourquoi ------------------------------
+# `to`, `run`, `code`, `error`, `low`, `high` avaient été ajoutés ici : le
+# détecteur les rend en FILE_PATH ou ORGANIZATION sur de la prose, et chacun
+# coûte une question d'arbitrage.
+#
+# Mesuré : une machine RÉELLEMENT nommée `code` (VS Code Server, Gitea, une
+# convention de cluster) sortait alors VERBATIM en HOSTNAME —
+# `https://code/api/customer/...` laissait l'hôte en clair. L'allowlist est
+# TYPE-AGNOSTIQUE par construction : elle ne sait pas distinguer le mot de la
+# machine, et l'inventaire censé la rattraper est VIDE par défaut.
+#
+# Fermer ce bruit demande une allowlist TYPÉE — public pour FILE_PATH et
+# ORGANIZATION, jamais pour HOSTNAME ni URL — et la mesure de la file
+# d'arbitrage, que seul l'opérateur peut faire. En attendant, on ferme :
+# une question d'arbitrage se voit, une fuite d'hôte ne se voit pas.
 
 # --- Permissions Microsoft Graph — et ELLES SEULES.
 # La forme générique `PascalCase.PascalCase` rendait publique la moitié des
