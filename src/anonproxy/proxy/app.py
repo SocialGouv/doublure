@@ -35,6 +35,7 @@ if str(ROOT) not in sys.path:
 from anthropic_walker import SSERewriter, Substituter, walk_request, walk_response  # noqa: E402
 
 from ..allowlist import Allowlist  # noqa: E402
+from ..inventory import Inventory  # noqa: E402
 from ..config import Settings, read_master_key  # noqa: E402
 from ..detect import DetectClient, DetectionUnavailable  # noqa: E402
 from ..annonce import injecter  # noqa: E402
@@ -56,6 +57,28 @@ _HOP_BY_HOP = {
 }
 
 
+def predicat_public(allowlist_file, inventory_file=None):
+    """« Cette valeur est publique » — l'allowlist MOINS l'inventaire.
+
+    `.is_exact` et non l'allowlist entière : une règle de FORME n'a pas de sens
+    sur une sous-partie (cf. allowlist.py).
+
+    L'inventaire PRIME, et c'est ce qui rend l'allowlist tenable : elle
+    contient des mots courants (`code`, `run`, `error`), publics tant que
+    l'opérateur n'a pas déclaré qu'une de ses machines porte ce nom. Il ne peut
+    que REMONTER la protection, donc il ne peut pas introduire de fuite
+    silencieuse — le seul mode d'échec du système qui ne se voie pas.
+
+    Il était défini, documenté, testé… et lu par PERSONNE : le fichier existait
+    et ne protégeait rien.
+    """
+    allow = Allowlist.load(allowlist_file)
+    inv = Inventory.load(inventory_file)
+    if not inv:
+        return allow.is_exact
+    return lambda value: allow.is_exact(value) and not inv.est_a_nous(value)
+
+
 class ProxyState:
     """Objets vivants du proxy (un par processus, une portée)."""
 
@@ -72,10 +95,9 @@ class ProxyState:
             vault=self.vault,
             master_key=master,
             scope_key=settings.scope_key,
-            # `.is_exact` et non l'allowlist entière : une règle de FORME
-            # n'a pas de sens sur une sous-partie (cf. allowlist.py).
-            is_public=Allowlist.load(settings.allowlist_file).is_exact,
+            is_public=predicat_public(settings.allowlist_file),
             policy=self.policy,
+            projet=settings.projet,
         )
         self.detector = DetectClient(
             settings.detect_url, regex_threshold=settings.regex_threshold

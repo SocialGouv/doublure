@@ -57,6 +57,25 @@ MAX_ATTEMPTS = 64
 #: Une valeur sans caractère alphanumérique ne porte aucun identifiant.
 _HAS_ALNUM = re.compile(r"\w", re.UNICODE)
 
+#: Types que le MOTEUR découpe lui-même dans une valeur composite. Ils vont au
+#: coffre — la restauration en dépend, un segment absent du coffre rend un
+#: chemin composé illisible — mais ils ne posent PAS de question d'arbitrage :
+#: l'unité que l'opérateur reconnaît est le chemin, pas chacun de ses segments.
+#: Mesuré : router les segments par le coffre a fait passer la file de 205 à
+#: 267 questions, dont 62 pour des morceaux que personne n'a jamais désignés.
+#: Granulaire là où ça sert (restaurer), grossier là où ça coûte (arbitrer).
+TYPES_COMPOSITION: frozenset[str] = frozenset({"PATH_SEGMENT"})
+
+#: Un port est un NOMBRE (RFC 3986), borné à 65535 (RFC 6335). Tout le reste
+#: après le « : » d'une autorité d'URL est un identifiant, et doit être
+#: substitué. La LONGUEUR ne suffit pas : `:99999` a cinq chiffres et n'est
+#: pas un port.
+_PORT_RE = re.compile(r"\d{1,5}")
+
+
+def _porte_un_port(texte: str) -> bool:
+    return _PORT_RE.fullmatch(texte) is not None and int(texte) < 65536
+
 #: Suffixes de dépôt conservés tels quels : ils qualifient le rôle, pas l'entité.
 _REPO_SUFFIXES = ("-api", "-service", "-svc", "-lib", "-cli", "-web", "-ui",
                   "-worker", "-operator", "-controller")
@@ -110,9 +129,16 @@ class SurrogateEngine:
 
     def __init__(self, vault: Vault, master_key: str, scope_key: str,
                  is_public: Callable[[str], bool] | None = None,
-                 policy: "Policy | None" = None):
+                 policy: "Policy | None" = None,
+                 projet: str | None = None):
         self.vault = vault
         self.scope_key = scope_key
+        #: Chemin ABSOLU du projet, tel que le lanceur l'exporte
+        #: (`ANONPROXY_PROJECT`). Le nom du dépôt s'y lit ; le déduire d'une
+        #: POSITION (`/home/<user>/<projet>`) était un pari sur la disposition
+        #: des répertoires de l'opérateur, et il faisait sortir le nom du dépôt
+        #: en clair dès que le projet n'était pas directement sous le home.
+        self._projet = [p for p in projet.split("/") if p] if projet else None
         #: Politique de confidentialité. Absente = tout est anonymisé, ce qui
         #: est aussi le défaut quand elle est présente : elle ne peut
         #: qu'OUVRIR, jamais fermer davantage.
@@ -161,7 +187,16 @@ class SurrogateEngine:
         absolu = v.startswith("/")
 
         def masque(i: int, p: str) -> str:
-            return self._combo("path", f"{i}:{p}", attempt, SERVICE_WORDS)
+            # Par le COFFRE, jamais par un tirage direct. Tiré hors du coffre,
+            # le substitut n'entrait dans aucune table : il restait LIBRE
+            # (une autre valeur réelle pouvait l'obtenir, D6) et surtout il
+            # n'était pas RESTAURABLE — seul le chemin entier l'était. Dès que
+            # le modèle composait un autre fichier du même dossier, `Read`
+            # recevait un chemin fictif et échouait, pendant qu'un `cat` sur la
+            # chaîne déjà vue fonctionnait. Mesuré en session réelle ; et
+            # `unresolved` restait à zéro, un substitut jamais enregistré étant
+            # invisible au compteur comme à la restauration.
+            return self.substitute_value("PATH_SEGMENT", p)
 
         garder = self._segments_gardes(parts, absolu)
         sortie = [p if i in garder else masque(i, p) for i, p in enumerate(parts)]
@@ -183,10 +218,26 @@ class SurrogateEngine:
         if reglage == CHEMINS_COMPLET or not absolu or parts[0] not in self._RACINES:
             return set()
         if parts[0] in self._RACINES_HOME:
-            # `/home` reste · l'utilisateur sort · le projet sort selon le
-            # réglage · le reste est du contenu, il reste.
-            depuis = 2 if reglage == CHEMINS_UTILISATEUR else 3
-            return {0, *range(depuis, len(parts))}
+            # `/home` reste · l'utilisateur sort · le nom du PROJET sort selon
+            # le réglage · tout le reste est du contenu, et reste.
+            sortent = {1} if len(parts) > 1 else set()
+            if reglage != CHEMINS_UTILISATEUR:
+                # Le nom du dépôt est à SA place dans le chemin du projet, pas
+                # à l'indice 2 : `/home/jo/lab/ai/anonproxy-demo` laissait
+                # `anonproxy-demo` en clair — or un dépôt porte souvent le nom
+                # du client — et masquait `lab` pour rien.
+                if self._projet is not None \
+                        and len(parts) >= len(self._projet) \
+                        and parts[:len(self._projet) - 1] == self._projet[:-1]:
+                    sortent.add(len(self._projet) - 1)
+                elif self._projet is None:
+                    # Projet inconnu : on ne sait pas où est le dépôt, et ne
+                    # rien masquer le laisserait sortir dans la disposition la
+                    # plus courante. Le pari de position reste donc en repli —
+                    # masquer un répertoire de trop est visible et réparable,
+                    # laisser sortir un nom de dépôt ne l'est pas.
+                    sortent.add(2)
+            return set(range(len(parts))) - sortent
         # Une racine système sans utilisateur : la racine reste, le reste est
         # substitué. `/etc/acme-vpn.conf` peut nommer une entreprise, et rien
         # ici ne permet de trancher — donc on ne tranche pas.
@@ -200,14 +251,31 @@ class SurrogateEngine:
         return len(self._segments_gardes(parts, value.strip().startswith("/"))) \
             == len(parts)
 
-    def _tlds_externes(self) -> tuple[str, ...]:
+    #: Espaces de noms que la RFC 2606 réserve à la documentation : ils
+    #: n'appartiennent à personne, par spécification.
+    _RESERVES_RFC2606 = (".example", ".test", ".invalid", ".localhost",
+                         "example.com", "example.net", "example.org")
+
+    def _tlds_externes(self, zone: str = "") -> tuple[str, ...]:
         """Espace des TLD fictifs — arbitrage d'opérateur, pas constante.
 
         `tld_reels` privilégie la plausibilité (D1) et accepte qu'un domaine
         fictif puisse exister vraiment ; `reserves` garantit l'inverse au prix
         de la plausibilité. Aucun des deux n'est « le bon » : c'est pourquoi
         c'est un réglage.
+
+        Sauf quand le réel est DÉJÀ réservé : là il n'y a rien à peser.
+        `acmecorp.example` sortait en `parnell-alpine.co`, donc un domaine
+        garanti à personne devenait un domaine qui peut appartenir à quelqu'un
+        — la substitution rendait la valeur MOINS sûre qu'elle ne l'était.
+        Rester dans le réservé ne coûte aucune plausibilité, puisque l'original
+        était réservé : c'est un attribut déjà présent qu'on préserve, comme
+        « interne vs externe » et la co-appartenance /24 (§3.4).
         """
+        bas = zone.lower()
+        if any(bas == r.lstrip(".") or bas.endswith(r)
+               for r in self._RESERVES_RFC2606):
+            return RESERVED_TLDS
         if self.policy is not None \
                 and self.policy.reglage("domaines_fictifs") == DOMAINES_RESERVES:
             return RESERVED_TLDS
@@ -250,6 +318,21 @@ class SurrogateEngine:
             # D4 : dérivé, jamais stocké, donc jamais restauré au retour.
             return self._secret_reference(etype, value)
 
+        # APRÈS la classe SECRET, et c'est essentiel : `default`, `localhost`,
+        # `admin` sont parmi les mots de passe faibles les plus répandus. Tester
+        # l'allowlist d'abord les laissait sortir verbatim ET sautait la
+        # référence qu'exige D4. Un secret reste un secret même quand son
+        # contenu coïncide avec un jeton public.
+        if self.is_public(value):
+            # Entrée EXACTE de l'allowlist : une décision prise token par token,
+            # donc valable partout (round 9). Le détecteur l'écarte déjà ; on le
+            # refait ici pour qu'un détecteur en retard sur le fichier ne fasse
+            # pas TOMBER la requête. Le cas qui l'impose : `10.0.0.0/8` et
+            # `198.18.0.0/15` sont les plages mêmes où l'on tire les substituts,
+            # ils ne peuvent donc que se substituer à eux-mêmes — 64 tentatives
+            # refusées par la garde d'identité, puis 503.
+            return value
+
         # Clé d'unicité = forme CANONIQUE, pas (type, texte brut). Sans cela,
         # un même hôte vu comme HOSTNAME puis FQDN puis CERT_CN — ou écrit
         # `DB-01.acme.internal` puis `db-01.acme.internal` — recevait plusieurs
@@ -272,15 +355,18 @@ class SurrogateEngine:
         if known is not None:
             return known
 
+        identites = 0
         for attempt in range(MAX_ATTEMPTS):
             candidate = self._candidate(etype, value, attempt, canon)
             if candidate == value or candidate == stored:
+                identites += 1
                 continue  # jamais l'identité : ce serait une fuite silencieuse
             try:
                 surrogate = self.vault.bind(self.scope_key, key_type, stored, candidate)
             except SurrogateConflict:
                 continue
-            if self.policy is not None and source is None:
+            if self.policy is not None and source is None \
+                    and etype not in TYPES_COMPOSITION:
                 # Aucune règle ne couvrait cette valeur. Elle est DÉJÀ
                 # substituée : le substitut est alloué avant l'arbitrage, ce
                 # qui permet à la question de ne porter que lui — l'opérateur
@@ -294,6 +380,19 @@ class SurrogateEngine:
                             etype, klass.value, stored) is Decision.REVELER:
                         return value
             return surrogate
+
+        if identites == MAX_ATTEMPTS:
+            # Le générateur a rendu la valeur elle-même à CHAQUE tentative. Ce
+            # n'est pas une malchance : il n'y a rien à substituer, toutes les
+            # parties identifiantes sont publiques (`http://127.0.0.1/`,
+            # `https://claude.ai`, `10.0.0.0/8`). Refuser faisait tomber la
+            # requête ENTIÈRE en 503 — mesuré par `tests/phase3_e2e.sh`, deux
+            # fois, sur deux types différents.
+            # La distinction est ce qui rend la règle sûre : une seule collision
+            # RÉELLE (`SurrogateConflict`) suffit à retomber dans le refus. On
+            # ne rend jamais une valeur au motif qu'un substitut était pris.
+            return value
+
         raise SurrogateCollisionError(
             f"aucun substitut libre après {MAX_ATTEMPTS} tentatives "
             f"(type={etype!r}, portée={self.scope_key!r})"
@@ -353,7 +452,7 @@ class SurrogateEngine:
         if canon.kind == "ip":
             return self._fake_ip(canon, tweak)
         if canon.kind == "cidr":
-            return self._fake_cidr(canon)
+            return self._fake_cidr(canon, attempt)
         if canon.kind == "host":
             return self._fake_host(canon, value, attempt)
         if canon.kind == "email":
@@ -435,7 +534,7 @@ class SurrogateEngine:
             return f"{a}-{b}"
         return f"{a}-{b}{self._idx(f'{ns}-n', key, str(attempt)) % 900 + 100}"
 
-    def _fake_cidr(self, canon: Canonical) -> str:
+    def _fake_cidr(self, canon: Canonical, attempt: int = 0) -> str:
         """Réseau fictif — le MÊME que celui des adresses qu'il contient.
 
         La co-appartenance /24 est un attribut préservé (réponse §3.4) : le
@@ -444,18 +543,88 @@ class SurrogateEngine:
         la notation LISIBLE — sans quoi le modèle voit des adresses dans un
         réseau et une déclaration de réseau qui ne les contient pas.
         """
-        subnet, prefixlen = canon.attrs["subnet"], canon.attrs["prefixlen"]
-        faux = self._fake_ip(
-            Canonical(key=f"ip:{subnet}", kind="ip", normalized=subnet,
-                      attrs={"subnet": subnet, "private": canon.attrs["private"],
-                             "v": canon.attrs["v"]}),
-            "")
-        if canon.attrs["v"] == "6":
-            reseau = ipaddress.ip_network(f"{faux}/{prefixlen}", strict=False)
-        else:
-            a, b, c, _ = faux.split(".")
-            reseau = ipaddress.ip_network(f"{a}.{b}.{c}.0/{prefixlen}", strict=False)
-        return str(reseau)
+        subnet, prefixlen = canon.attrs["subnet"], int(canon.attrs["prefixlen"])
+        v = canon.attrs["v"]
+
+        if prefixlen == (64 if v == "6" else 24):
+            # La longueur À LAQUELLE la co-appartenance est définie : le réseau
+            # fictif EST celui des hôtes, déjà alloué comme attribut partagé.
+            faux = self._fake_ip(
+                Canonical(key=f"ip:{subnet}", kind="ip", normalized=subnet,
+                          attrs={"subnet": subnet,
+                                 "private": canon.attrs["private"], "v": v}),
+                "")
+            return str(ipaddress.ip_network(f"{faux}/{prefixlen}", strict=False))
+
+        # Toute autre longueur : dériver du /24 partagé n'a aucun sens, puisque
+        # le masque écarte justement les octets qui distinguent deux réseaux.
+        # Deux réseaux réels distincts retombaient sur le même substitut, et un
+        # réseau qui EST la base de l'espace fictif se substituait à lui-même —
+        # 64 tentatives identiques, donc 503. On tire un INDICE de sous-réseau :
+        # l'appartenance à l'espace réservé est garantie par construction, et la
+        # tentative fait varier le tirage.
+        return str(self._reseau_fictif(
+            v, canon.attrs["private"] == "True", prefixlen,
+            f"{subnet}/{prefixlen}", attempt))
+
+    #: Espaces où un réseau fictif peut vivre, par (version, privé). Tous
+    #: RÉSERVÉS : jamais alloués, jamais routés — un substitut ne doit jamais
+    #: désigner la machine d'un tiers (round 18). Le dernier de chaque liste est
+    #: le repli pour un préfixe trop court pour les précédents : `240.0.0.0/4`
+    #: (RFC 1112, classe E) accepte tout à partir de /4, au prix d'une
+    #: plausibilité moindre — un réseau plus large qu'un /15 public est rare.
+    _ESPACES_FICTIFS: dict[tuple[str, bool], tuple[str, ...]] = {
+        ("4", True): ("10.0.0.0/8", "240.0.0.0/4"),
+        ("4", False): ("198.18.0.0/15", "240.0.0.0/4"),
+        ("6", True): ("fc00::/7", "0100::/8"),
+        ("6", False): ("2001:db8::/32", "0100::/8"),
+    }
+
+    def _reseau_fictif(self, v: str, private: bool, prefixlen: int,
+                       reel: str, attempt: int) -> str:
+        vraie = ipaddress.ip_network(reel, strict=False)
+        # À sa PROPRE longueur de préfixe, un espace réservé ne contient qu'un
+        # seul réseau : le premier réseau réel le prend, et le second ne peut
+        # plus que collisionner — soixante-quatre fois, donc 503. Un espace à un
+        # seul emplacement n'est pas un espace.
+        espaces = [sup for sup in
+                   map(ipaddress.ip_network, self._ESPACES_FICTIFS[(v, private)])
+                   if prefixlen > sup.prefixlen]
+        # La TENTATIVE fait tourner l'espace, pas seulement le tirage à
+        # l'intérieur. Rendre toujours le premier espace valide plafonnait la
+        # capacité à celle de cet espace : `198.18.0.0/15` ne contient que DEUX
+        # /16, donc le troisième réseau public de cette taille tombait en 503
+        # alors que le repli `240.0.0.0/4` en offrait quatre mille.
+        for decalage in range(len(espaces)):
+            sup = espaces[(attempt + decalage) % len(espaces)]
+            index = int(self._digest("cidr", reel, str(attempt)).hex()[:32], 16)
+            index %= 1 << (prefixlen - sup.prefixlen)
+            adresse = int(sup.network_address) + (
+                index << (sup.max_prefixlen - prefixlen))
+            reseau = ipaddress.ip_network((adresse, prefixlen))
+            if v == "4" and str(reseau).startswith("255."):
+                # `gen4` écarte déjà 255.x pour les HÔTES : un réseau qui
+                # contient `255.255.255.255` ferait émettre une diffusion
+                # limitée à un outil qui prend le substitut au mot. Même
+                # intention, l'autre moitié de l'implémentation.
+                continue
+            if reseau == vraie:
+                # Un espace fictif ne peut pas se représenter LUI-MÊME : à sa
+                # propre longueur de préfixe il n'offre qu'un réseau, et c'est
+                # la valeur réelle. On passe à l'espace suivant plutôt que
+                # d'épuiser les 64 tentatives de l'appelant — même arbitrage
+                # qu'un `sha256:` sans corps au round 16 : une valeur dégénérée
+                # ne doit pas faire tomber la requête.
+                continue
+            return str(reseau)
+        # Aucun espace réservé n'admet un préfixe aussi COURT — `128.0.0.0/1`,
+        # `2000::/3`, `fd00::/7`. Refuser ici tuait la session pour une valeur
+        # qui ne désigne ni machine ni plan d'adressage : un réseau de cette
+        # largeur est une constante de routage. On le rend, et la garde
+        # d'identité de `substitute_value` en fait le même constat que pour
+        # `10.0.0.0/8`. Sortir de l'espace réservé, en revanche, nommerait le
+        # réseau d'un tiers — ce n'est jamais l'option.
+        return str(vraie)
 
     def _fake_ip(self, canon: Canonical, tweak: str) -> str:
         subnet = canon.attrs["subnet"]
@@ -494,9 +663,17 @@ class SurrogateEngine:
             # Trouvé par le MODÈLE en session, l'annonce activée.
             #
             # RFC 2544 (`198.18.0.0/15`) est réservé aux bancs d'essai : jamais
-            # routé, jamais alloué, et il offre 512 réseaux /24 — de quoi tenir
-            # la co-appartenance sans jamais sortir du réservé.
-            return f"198.{18 + ((n >> 8) % 2)}.{n % 256}.0"
+            # routé, jamais alloué, et il offre 512 réseaux /24.
+            if t < 32:
+                return f"198.{18 + ((n >> 8) % 2)}.{n % 256}.0"
+            # 512 réseaux suffisent à une session ordinaire, pas à un log
+            # d'analytics ni à l'audit d'un pare-feu : la 513e adresse publique
+            # d'un /24 distinct épuisait l'espace et tuait la session. Repli sur
+            # `240.0.0.0/4` (RFC 1112, classe E), réservé lui aussi, et qui
+            # offre un million de /24. Les 32 premières tentatives restent
+            # inchangées : un coffre existant garde ses allocations.
+            # 255.x est écarté : `255.255.255.255` est la diffusion limitée.
+            return f"{240 + (n % 15)}.{(n >> 8) % 256}.{(n >> 16) % 256}.0"
 
         net = self._alloc_shared(self._SUBNET4, subnet, gen4)
         host_idx = self._idx("ipv4-host", canon.key, tweak) % 254 + 1
@@ -523,7 +700,7 @@ class SurrogateEngine:
                     if zone.endswith(sfx) or zone.endswith(sfx.lstrip(".")):
                         return f"{org}{sfx}"
                 return f"{org}.internal"
-            tld = pick(self._tlds_externes(), self._idx("tld", zone))
+            tld = pick(self._tlds_externes(zone), self._idx("tld", zone))
             return f"{org}.{tld}"
 
         return self._alloc_shared(self._ZONE, zone, gen)
@@ -612,6 +789,153 @@ class SurrogateEngine:
                 return f"{scheme}://{h}/{org}/{name}" if sep else f"{h}/{org}/{name}"
         return f"{org}/{name}"
 
+    #: Plages de FICTION réservées par les régulateurs : elles ne sonnent chez
+    #: personne. Chaque entrée : (préfixes réels reconnus, préfixe fictif). La
+    #: correspondance se fait sur la chaîne de CHIFFRES, longueur comprise —
+    #: `06…` en France est un mobile, `+33 6…` le même numéro depuis l'étranger.
+    #: Même invariant qu'au round 18 pour les adresses : un substitut ne doit
+    #: JAMAIS désigner une entité du monde réel. Un numéro tiré au hasard sonne
+    #: chez quelqu'un, et c'est le modèle qui proposera de l'appeler.
+    _PLAGES_FICTIVES: tuple[tuple[tuple[str, ...], str], ...] = (
+        (("336", "337"), "3363998"),          # France mobile, international
+        (("06", "07"), "063998"),             # France mobile, national
+        (("331", "332", "333", "334", "335", "339"), "3319900"),  # France fixe
+        (("01", "02", "03", "04", "05", "09"), "019900"),
+        # Ofcom ne réserve que `020 7946 0xxx` : le zéro fait PARTIE du
+        # préfixe. Le laisser libre rendait `020 7946 5123`, un vrai numéro
+        # londonien — la même erreur qu'un troisième octet varié au round 18.
+        (("4420",), "442079460"),             # Londres, numéros de drame Ofcom
+        (("447",), "447700900"),              # Royaume-Uni mobile, 07700 900xxx
+        # NANP : c'est la LIGNE `01xx` de l'indicatif d'abonné `555` qui est
+        # réservée — et elle l'est pour N'IMPORTE QUEL indicatif régional
+        # (FCC). Figer `555` comme régional ne laissait que DEUX chiffres
+        # libres, donc cent numéros : un export de CRM ou un journal d'appels
+        # tuait la session au 98e. L'indicatif régional varie donc aussi, ce
+        # qui porte l'espace à quatre-vingt mille.
+        (("1",), "1{aaa}55501"),              # +1 AAA 555 01xx
+    )
+
+    #: Repli INTERNATIONAL : `210` n'est attribué à aucun pays (E.164), donc le
+    #: numéro ne joint personne où que ce soit. Composer `555…` derrière le
+    #: `+` fabriquait au contraire un indicatif RÉEL — `+49 …` sortait en
+    #: `+55 …`, c'est-à-dire le Brésil : un substitut désignait le téléphone
+    #: d'un tiers, la faute même que le round 18 a corrigée sur les adresses.
+    #: Prix assumé : le numéro n'est plus plausible pour son pays (D1). Entre
+    #: les deux, l'invariant tranche.
+    _PLAGE_INTERNATIONALE = "210"
+
+    #: Repli NATIONAL : `555 555 01xx` est réservé à la fiction dans le plan
+    #: NANP. RÉSIDU ASSUMÉ — hors NANP, un numéro national sans plan reconnu
+    #: n'a aucune plage prouvablement injoignable qui préserve sa longueur.
+    _PLAGE_PAR_DEFAUT = "{aaa}55501"
+
+    def _fake_phone(self, value: str, attempt: int) -> str:
+        """Numéro fictif de MÊME forme : longueur, indicatif, ponctuation.
+
+        Sans branche dédiée, `PHONE_NUMBER` tombait dans le générique et
+        sortait sous un MOT (`planner-tundra06`) : le modèle ne pouvait ni le
+        reconnaître, ni le formater, ni raisonner dessus.
+        """
+        chiffres = re.sub(r"\D", "", value)
+        if not chiffres:
+            return value
+
+        def rendu(gabarit: str) -> str:
+            if "{aaa}" not in gabarit:
+                return gabarit
+            # Un indicatif régional NANP commence par 2 à 9 (format NXX).
+            return gabarit.format(
+                aaa=200 + self._idx("phone-nanp", chiffres, str(attempt)) % 800)
+
+        prefixe = None
+        for debuts, gabarit in self._PLAGES_FICTIVES:
+            # Le gabarit est formaté AVANT la comparaison de longueur : mesurer
+            # `1{aaa}55501` comptait les accolades, donc le plan NANP paraissait
+            # trop long et tombait sur le repli international — un numéro
+            # américain sortait sous un indicatif non attribué.
+            if chiffres.startswith(debuts) and len(candidat := rendu(gabarit)) \
+                    < len(chiffres):
+                prefixe = candidat
+                break
+        if prefixe is None:
+            prefixe = rendu(
+                self._PLAGE_INTERNATIONALE if value.lstrip().startswith("+")
+                else self._PLAGE_PAR_DEFAUT)
+
+        reste = len(chiffres) - len(prefixe)
+        if reste <= 0:
+            # Plus court que sa propre plage de fiction : un poste, un code
+            # court. Tronquer le préfixe donnait une valeur CONSTANTE — aucune
+            # variation par tentative, donc deux postes distincts se
+            # disputaient un substitut et le second tombait en 503.
+            # Ces numéros-là ne joignent personne depuis l'extérieur : ils
+            # n'ont pas de plage de fiction à respecter, seulement une forme.
+            if attempt == 0:
+                faux = prefixe[:len(chiffres)]
+            else:
+                court = self._idx("phone-court", chiffres, str(attempt))
+                faux = f"{court % (10 ** len(chiffres)):0{len(chiffres)}d}"
+        else:
+            corps = self._idx("phone", chiffres, str(attempt)) % (10 ** reste)
+            faux = f"{prefixe}{corps:0{reste}d}"
+
+        suite = iter(faux)
+        return "".join(next(suite) if c.isdigit() else c for c in value)
+
+    #: Un IBAN : deux lettres de pays, deux chiffres de contrôle, puis le BBAN.
+    _IBAN_RE = re.compile(r"([A-Z]{2})(\d{2})([0-9A-Z]{6,30})")
+
+    #: Positions du BBAN mises à ZÉRO — l'identifiant d'établissement. Un IBAN
+    #: valide tiré au hasard désigne le compte de QUELQU'UN ; à zéro, la banque
+    #: n'est allouée nulle part. Même arbitrage que la RFC 2544 pour les
+    #: adresses et les plages de fiction pour les numéros (round 18).
+    _IBAN_BANQUE = 5
+
+    def _fake_iban(self, value: str, attempt: int) -> str | None:
+        """IBAN fictif de MÊME forme, à clé de contrôle VALIDE.
+
+        Sans branche dédiée, `IBAN_CODE` tombait dans le générique et sortait
+        sous un MOT (`registry-kestrel76`) ou sous une empreinte hexadécimale.
+        Le modèle l'a signalé deux fois en session réelle : « un IBAN français
+        fait 27 caractères, celui-ci en compte 30 ». Il avait raison, et une
+        forme cassée coûte double — le modèle commente le gabarit au lieu de
+        travailler, et il reformate la valeur, ce qui fait échouer la
+        restauration par correspondance exacte.
+
+        Rend None si la valeur n'a pas la forme d'un IBAN : le détecteur se
+        trompe parfois, et fabriquer un faux IBAN à partir d'autre chose serait
+        pire que de laisser le générique faire son travail.
+        """
+        brut = re.sub(r"[^0-9A-Za-z]", "", value).upper()
+        forme = self._IBAN_RE.fullmatch(brut)
+        if forme is None:
+            return None
+        pays, _, bban = forme.groups()
+
+        h = self._digest("iban", brut, str(attempt)).hex().upper()
+        corps = []
+        for i, c in enumerate(bban):
+            chiffre = int(h[i % len(h)], 16)
+            if i < self._IBAN_BANQUE:
+                # Les deux classes : un BBAN britannique porte son code banque
+                # en LETTRES (`BUKB`). N'en neutraliser qu'une laissait un code
+                # d'établissement réel — `ZZZZ` n'est attribué à aucun BIC.
+                corps.append("0" if c.isdigit() else "Z")
+            elif c.isdigit():
+                corps.append(str(chiffre % 10))
+            else:
+                corps.append(chr(ord("A") + chiffre % 26))
+        bban = "".join(corps)
+
+        # ISO 13616 : les quatre premiers caractères passent à la fin, chaque
+        # lettre vaut sa position + 9, et le tout doit valoir 1 modulo 97.
+        reste = int("".join(str(int(c, 36)) for c in f"{bban}{pays}00")) % 97
+        faux = f"{pays}{98 - reste:02d}{bban}"
+
+        # Le GABARIT d'origine est rendu tel quel : espaces aux mêmes places.
+        suite = iter(faux)
+        return "".join(next(suite) if c.isalnum() else c for c in value)
+
     def _fake_image(self, canon: Canonical, value: str, attempt: int) -> str:
         v = value.strip().lower()
         ref, _, tag = v.partition(":")
@@ -695,6 +1019,12 @@ class SurrogateEngine:
                 return ".".join(flat[i:i + 4] for i in range(0, 12, 4))
             sep = ":" if ":" in v else "-"
             return sep.join(octets)
+
+        if etype == "PHONE_NUMBER":
+            return self._fake_phone(value, attempt)
+
+        if etype == "IBAN_CODE" and (faux := self._fake_iban(value, attempt)):
+            return faux
 
         if etype in ("FILE_PATH", "USER_PATH"):
             return self._fake_path(v, attempt)
@@ -785,6 +1115,21 @@ class SurrogateEngine:
         if hostport.startswith("["):  # littéral IPv6 : [fd00::1]:8443
             literal, sep, after = hostport.partition("]")
             fake = self.substitute_value("IP_ADDRESS", literal[1:])
+            # MÊME règle que pour la forme `host:port` plus bas : ce qui suit
+            # le « : » n'est un port que si c'est un nombre. Ne corriger qu'une
+            # des deux branches laissait `http://[fd00::1]:db-master.acme.
+            # internal/` sortir avec son identifiant intact.
+            # RFC 3986 : après le « ] », SEUL `:port` est valide. Tout le reste
+            # est un identifiant en fin d'autorité. Ne traiter que la forme
+            # `:port` laissait `[fd00::1]tenant-acme-nda/` sortir intact — la
+            # même correction, appliquée à une branche sur deux, deux tours de
+            # suite.
+            if sep and after:
+                if after.startswith(":"):
+                    if not _porte_un_port(after[1:]):
+                        after = f":{self.substitute_value('HOSTNAME', after[1:])}"
+                else:
+                    after = self.substitute_value("HOSTNAME", after)
             return f"{prefix}[{fake}]", (after if sep else "")
 
         if hostport.count(":") > 1:
@@ -798,7 +1143,17 @@ class SurrogateEngine:
         # coffre laissait son substitut libre, et un autre hôte réel pouvait
         # ensuite obtenir le même — la restauration désignait alors la mauvaise
         # machine (D6).
-        return f"{prefix}{self.substitute_value('HOSTNAME', host)}", (f":{port}" if sep else "")
+        # Ce qui suit le « : » n'est un PORT que si c'est un nombre (RFC 3986).
+        # Il était recopié verbatim quoi qu'il porte, donc
+        # `https://hote.reel:tenant-acme-nda` sortait avec son identifiant
+        # intact — sans entrée de coffre ni substitut non résolu pour le
+        # signaler. Et si l'hôte est PUBLIC, l'URL entière devenait sa propre
+        # identité, donc rendue telle quelle : la fuite la plus silencieuse que
+        # le système sache produire.
+        if sep and not _porte_un_port(port):
+            port = self.substitute_value("HOSTNAME", port)
+        return (f"{prefix}{self.substitute_value('HOSTNAME', host)}",
+                f":{port}" if sep else "")
 
     def _fake_query(self, tail: str, attempt: int) -> str:
         """Substitue les VALEURS d'une query string ou d'un fragment.

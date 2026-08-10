@@ -43,6 +43,15 @@ CLASS_OF: dict[str, DataClass] = {
     "COOKIE_SESSION": DataClass.SECRET,
     "API_KEY": DataClass.SECRET,
     "CREDIT_CARD": DataClass.SECRET,
+    # IBAN : PII financière, PAS un secret — et la distinction avec la carte
+    # juste au-dessus est celle du POUVOIR D'AGIR. Un numéro de carte permet de
+    # payer : le restaurer remettrait un moyen de paiement vivant dans une
+    # commande générée, ce que D4 interdit. Un IBAN, seul, ne permet rien —
+    # un prélèvement demande un mandat. Le classer SECRET priverait l'opérateur
+    # de sa propre valeur dans un résumé d'incident, qui est exactement l'usage
+    # mesuré : il est donc substitué (par un IBAN fictif bien formé, à banque
+    # non allouée) et RESTAURÉ au retour.
+    "IBAN_CODE": DataClass.PII,
     # noms de motifs individuels : jamais émis tels quels, conservés au cas où
     # une configuration les exposerait directement.
     "JWT": DataClass.SECRET,

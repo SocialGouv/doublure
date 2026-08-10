@@ -38,6 +38,11 @@ class Settings:
     #: Identifiant de session : la portée la plus proche, celle qui prime.
     #: Absent = deux couches seulement (global → projet).
     session_id: str | None
+    #: Chemin ABSOLU du projet, exporté par le lanceur. Il dit où se trouve le
+    #: nom du dépôt — que la substitution de chemins DEVINAIT par sa position,
+    #: donc laissait en clair dès que le projet n'était pas directement sous le
+    #: home. Absent = repli sur ce pari de position.
+    projet: str | None
 
     @staticmethod
     def from_env() -> "Settings":
@@ -64,6 +69,7 @@ class Settings:
             ),
             policy_dir=Path(os.environ.get("ANONPROXY_POLICY_DIR", STATE_DIR / "policy")),
             session_id=os.environ.get("ANONPROXY_SESSION") or None,
+            projet=os.environ.get("ANONPROXY_PROJECT") or None,
         )
 
 
