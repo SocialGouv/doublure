@@ -104,6 +104,31 @@ def test_un_meme_token_garde_une_seule_identite(moteur):
     assert par_segment in m.substitute_value("FILE_PATH", "/home/jo/x").split("/")
 
 
+@pytest.mark.parametrize("chemin", [
+    "/home/./jo/lab/ai/anonproxy-demo/infra",
+    "/home/../jo/lab/ai/anonproxy-demo/infra",
+    "/./home/jo/lab/ai/anonproxy-demo/infra",
+    "/home/jo/../jo/lab/ai/anonproxy-demo/infra",
+])
+def test_un_segment_point_ne_decale_pas_la_regle(moteur, chemin):
+    """DEUX défauts qui se composaient, et le résultat était le pire possible.
+
+    `.` et `..` sont des segments comme les autres pour `split`, donc un `.`
+    à l'indice 1 décalait l'utilisateur à l'indice 2 — une position CONSERVÉE.
+    Et comme un `.` n'a aucun caractère alphanumérique, il se substitue à
+    lui-même : le chemin reconstruit devenait IDENTIQUE à l'original, les 64
+    tentatives tombaient toutes en identité, et la garde qui rend une valeur
+    « sans rien à cacher » rendait le chemin ENTIER — utilisateur et nom de
+    dépôt compris, sans une seule entrée de coffre pour le signaler.
+
+    Un chemin absolu qui porte `.` ou `..` est ANORMAL : c'est exactement le
+    moment de fermer, pas d'appliquer une règle de position."""
+    rendu = moteur().substitute_value("FILE_PATH", chemin)
+    assert rendu != chemin, rendu
+    assert "jo" not in segments(rendu), rendu
+    assert "anonproxy-demo" not in segments(rendu), rendu
+
+
 def test_les_repertoires_intermediaires_restent(moteur):
     """`lab` et `ai` n'identifient personne : les masquer coûte de la lisibilité
     au modèle sans rien protéger."""

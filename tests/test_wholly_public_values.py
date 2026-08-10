@@ -114,6 +114,28 @@ def test_a_secret_stays_a_secret_even_when_it_reads_as_public(
     assert engine.substitute_value(etype, value) != value
 
 
+@pytest.mark.parametrize("value,secret", [
+    ("git@user:pass@github.com:org/name.git", "pass"),
+    ("git@alice-payments-svc:TOKEN@github.com:org/name.git",
+     "alice-payments-svc"),
+    ("git@oauth2:ghp_realtoken1234567890@github.com:org/name.git",
+     "ghp_realtoken1234567890"),
+])
+def test_ssh_credentials_never_ride_out_as_the_host(engine, value, secret):
+    """Découper sur le PREMIER `@` prenait l'identifiant pour l'hôte et le
+    recopiait tel quel — alors que la canonicalisation l'avait justement retiré
+    de la clé de coffre. C'est le dernier `@` qui sépare l'autorité, et un
+    identifiant est un secret : il ne se recopie jamais (D4)."""
+    assert secret not in engine.substitute_value("REPO", value)
+
+
+def test_a_plain_ssh_repo_keeps_its_shape(engine):
+    """Le pendant : sans identifiant, la forme SSH reste lisible."""
+    rendu = engine.substitute_value("REPO", "git@github.com:acmecorp/api.git")
+    assert rendu.startswith("git@github.com:") and rendu.endswith(".git")
+    assert "acmecorp" not in rendu
+
+
 def test_a_taken_surrogate_still_refuses(engine, monkeypatch):
     """The rule must not become 'after 64 failures, hand back the real value'.
     A CONFLICT is real contention: the request stays refused, fail-closed."""

@@ -218,7 +218,15 @@ class SurrogateEngine:
                    else CHEMINS_UTILISATEUR_PROJET)
         # Un chemin RELATIF ne dit pas où commence le projet, et une racine
         # inconnue n'est pas une racine : dans les deux cas on ferme.
-        if reglage == CHEMINS_COMPLET or not absolu or parts[0] not in self._RACINES:
+        # Un segment `.` ou `..` non plus : il DÉCALE les positions, et comme il
+        # se substitue à lui-même (aucun caractère alphanumérique), le chemin
+        # reconstruit devenait identique à l'original — les 64 tentatives
+        # tombaient en identité et la garde rendait le chemin ENTIER, nom
+        # d'utilisateur et de dépôt compris, sans entrée de coffre. Un chemin
+        # absolu qui en porte est ANORMAL : c'est le moment de fermer.
+        if reglage == CHEMINS_COMPLET or not absolu \
+                or parts[0] not in self._RACINES \
+                or any(p in (".", "..") for p in parts):
             return set()
         if parts[0] in self._RACINES_HOME:
             # `/home` reste · l'utilisateur sort · le nom du PROJET sort selon
@@ -779,7 +787,13 @@ class SurrogateEngine:
         name = self._fake_repo_name(canon.attrs["name"], attempt)
         v = value.strip()
         if v.lower().startswith("git@"):
-            host = v.split("@", 1)[1].split(":", 1)[0]
+            # Le DERNIER `@` sépare l'autorité : découper sur le PREMIER
+            # rendait l'identifiant en position d'hôte, donc en clair —
+            # `git@alice-payments-svc:JETON@github.com:org/dépôt.git` sortait
+            # en `git@alice-payments-svc:…`, alors que la canonicalisation
+            # avait pourtant bien retiré ces identifiants de la clé de coffre.
+            # Un identifiant est un SECRET, il ne se recopie jamais (D4).
+            host = v.rsplit("@", 1)[1].split(":", 1)[0]
             return f"git@{host}:{org}/{name}.git"
         # La reconnaissance est insensible à la casse comme `_extract_repo`, et
         # le SCHÉMA d'origine est conservé : `https://GitHub.com/…` retombait
