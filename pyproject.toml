@@ -1,7 +1,10 @@
 [project]
-name = "anonproxy"
+# Distribution name; the import namespace stays `anonproxy`, because the state
+# directory and the environment variables derive from it and renaming them
+# would orphan every vault already written.
+name = "doublure"
 version = "0.1.0"
-description = "Proxy de pseudonymisation bidirectionnelle Claude Code ↔ API Anthropic"
+description = "Bidirectional pseudonymisation proxy between Claude Code and the Anthropic API"
 requires-python = ">=3.12"
 dependencies = [
     "cryptography>=50.0.0",

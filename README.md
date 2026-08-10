@@ -1,9 +1,16 @@
-# Pseudonymisation proxy — Claude Code ↔ Anthropic API
+# doublure
+
+**Pseudonymisation proxy between Claude Code and the Anthropic API.**
 
 Sensitive identifiers (hosts, IPs, repositories, accounts, images, secrets) are
 replaced by **plausible** surrogates before they leave the machine, and
 restored on the way back. The operator always sees the real thing; the model
 provider sees none of it.
+
+The name is the mechanism. A *doublure* is the stand-in who takes the hits in
+the actor's place — and the lining sewn inside a coat. Surrogates are plausible
+on purpose (decision D1): never `[HOST_1]`, always something the model can
+still reason with.
 
 ```
 claude ──ANTHROPIC_BASE_URL──► proxy :8090 ──► api.anthropic.com
