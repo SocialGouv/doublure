@@ -1315,10 +1315,12 @@ reversible.</p>
         AN --&gt;|SSE stream| PX
         PX --&gt;|real values back| CC
     end
-    subgraph c2["Channel 2 — tools, NOT reversible"]
+    subgraph c2["Channel 2 — tools: blocked, or proxied"]
         direction LR
-        CC2[Claude Code] --&gt; HK{PreToolUse hook}
-        HK --&gt;|allow| TL[Bash · WebFetch · MCP]
+        CC2[Claude Code] --&gt;|Bash| HK{PreToolUse hook}
+        CC2 --&gt;|remote MCP · WebFetch| FW[forward proxy]
+        FW --&gt;|pseudonymised or refused| TL[tools]
+        HK --&gt;|allow| TL
         HK --&gt;|deny + trace| X[refused before execution]
     end
     PX --- DT[AnonShield /detect]
@@ -1357,10 +1359,15 @@ impossible; the index reveals equality and nothing else.</p>
 <p>A wrong key yields <code>VaultUnavailableError</code> — never a guessed value. A store in
 an older format is refused rather than read.</p>
 <h2 id="channel-2-the-hook">Channel 2 — the hook<a class="headerlink" href="#channel-2-the-hook" title="Permanent link">&para;</a></h2>
-<p>Bash, WebFetch and MCP calls do not go through the proxy: they run on the
-operator's machine, against the real world. There is nothing to pseudonymise —
-a <code>kubectl</code> command has to reach the real cluster. So the hook <strong>blocks</strong>
-rather than substitutes, before execution, and traces its reason.</p>
+<p><strong>Bash</strong> runs on the operator's machine, against the real world, and there is
+nothing to pseudonymise: a <code>kubectl</code> command has to reach the real cluster. So
+the hook <strong>blocks</strong> rather than substitutes, before execution, and traces its
+reason.</p>
+<p><strong>Remote MCP and WebFetch</strong> are a different case, and no longer belong in that
+sentence: they speak HTTP, so the forward proxy sees them. Under
+<code>task forward -- &lt;agent&gt;</code> their bodies are pseudonymised and restored like the
+model API's. The hook still guards them — two controls on one channel, and
+removing either opens it.</p>
 <p>Deciding what a command actually runs is a parsing problem, not a keyword
 problem. See <a href="../hook-parser/">the command grammar</a>.</p>
 <h2 id="forward-mode-the-channel-a-base-url-cannot-reach">Forward mode — the channel a base URL cannot reach<a class="headerlink" href="#forward-mode-the-channel-a-base-url-cannot-reach" title="Permanent link">&para;</a></h2>

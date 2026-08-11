@@ -1168,7 +1168,9 @@ the actor's place — and the lining sewn inside a coat.</p>
     P --&gt;|restored| A
     P &lt;--&gt;|/detect| D[AnonShield :9000&lt;br/&gt;separate process, GPL]
     P &lt;--&gt; V[(vault&lt;br/&gt;encrypted at rest)]
-    A --&gt;|Bash · WebFetch · MCP| H{PreToolUse hook}
+    A --&gt;|Bash| H{PreToolUse hook}
+    A --&gt;|remote MCP · WebFetch| F[forward proxy&lt;br/&gt;HTTPS_PROXY]
+    F --&gt;|pseudonymised or refused| T
     H --&gt;|blocked or allowed| T[tools]</code></pre>
 <div class="grid cards">
 <ul>
@@ -1266,10 +1268,14 @@ behave is the anti-pattern this project was built against: protection never
 depends on the model cooperating.</p>
 <div class="admonition warning">
 <p class="admonition-title">Read the limits before you rely on it</p>
-<p>Bash, WebFetch and MCP do not go through the proxy. The hook blocks
-there — it does not pseudonymise. And on a workstation the proxy is not
-the only network path: the egress harness <em>detects</em>, it does not
-<em>prevent</em>. See <a href="limits/">Known limits</a>.</p>
+<p><strong>Bash</strong> does not go through any proxy and cannot: a <code>kubectl</code> command
+has to reach the real cluster. The hook blocks there — it does not
+pseudonymise.</p>
+<p><strong>Remote MCP and WebFetch</strong> do, under <code>task forward -- &lt;agent&gt;</code> — but that
+is not the default path, and it has not yet been exercised by a real
+session. And on a workstation the proxy is still not the only network
+path: the egress harness <em>detects</em>, it does not <em>prevent</em>. See
+<a href="limits/">Known limits</a>.</p>
 </div>
 
 

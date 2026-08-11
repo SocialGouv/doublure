@@ -939,10 +939,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#channel-2-is-not-reversible" class="md-nav__link">
+  <a href="#channel-2-bash-is-not-reversible-the-rest-now-is" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Channel 2 is not reversible
+        Channel 2: Bash is not reversible, the rest now is
       
     </span>
   </a>
@@ -1180,10 +1180,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#channel-2-is-not-reversible" class="md-nav__link">
+  <a href="#channel-2-bash-is-not-reversible-the-rest-now-is" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Channel 2 is not reversible
+        Channel 2: Bash is not reversible, the rest now is
       
     </span>
   </a>
@@ -1297,12 +1297,11 @@
 this page and the
 <a href="../re-identification-analysis/">re-identification analysis</a> are the two you
 need.</p>
-<h2 id="channel-2-is-not-reversible">Channel 2 is not reversible<a class="headerlink" href="#channel-2-is-not-reversible" title="Permanent link">&para;</a></h2>
-<p>Bash, WebFetch and MCP do not go through the proxy. The hook <strong>blocks</strong>; it does
-not pseudonymise. Anything you deliberately allow through on that channel goes
-out as itself.</p>
-<p>For Bash this is inherent — a <code>kubectl</code> command has to reach the real cluster,
-so there is nothing to substitute.</p>
+<h2 id="channel-2-bash-is-not-reversible-the-rest-now-is">Channel 2: Bash is not reversible, the rest now is<a class="headerlink" href="#channel-2-bash-is-not-reversible-the-rest-now-is" title="Permanent link">&para;</a></h2>
+<p><strong>Bash</strong> does not go through any proxy and cannot: a <code>kubectl</code> command has to
+reach the real cluster, so there is nothing to substitute. The hook <strong>blocks</strong>
+before execution; anything you deliberately allow through goes out as itself.
+That is inherent, and it will not change.</p>
 <p>For <strong>remote MCP it is no longer the case</strong>: <code>task forward -- &lt;agent&gt;</code> runs any
 agent behind a forward proxy that terminates TLS, pseudonymises JSON-RPC bodies
 on the way out and restores them on the way back. Destinations come from a list
@@ -1327,8 +1326,9 @@ through the proxy.</p>
 <p>Those same four were <strong>captured through mitmproxy</strong> by the Phase 0 harness,
 with <code>HTTPS_PROXY</code> and <code>NODE_EXTRA_CA_CERTS</code>. So they honour an explicit
 forward proxy; what they ignore is one API client's base-URL setting. A
-forward-proxy mode would bring remote MCP — JSON-RPC, which the walker
-already knows how to traverse — into the reversible channel.</p>
+forward-proxy mode brings remote MCP — JSON-RPC, which the walker already
+knows how to traverse — into the reversible channel. That is what
+<code>task forward</code> now does.</p>
 </div>
 <p>A local firewall cannot fix it either way, because <code>api.anthropic.com</code> and
 <code>mcp-proxy.anthropic.com</code> resolve to the <strong>same address</strong>.</p>

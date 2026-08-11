@@ -1344,9 +1344,14 @@ MVP is in service.</p>
 <td>PreToolUse hook (<code>hooks/pretooluse_guard.py</code>) refuses any access to the vault path and to the key; tested (<code>test_pretooluse_hook.py</code>). A dedicated Unix account would close the gap.</td>
 </tr>
 <tr>
-<td><strong>Channel 2</strong> (Bash, WebFetch, MCP calling the network)</td>
-<td>Partially handled</td>
-<td>The hook blocks direct network outputs and secret dumps. It does not pseudonymize: by construction (§7), there is no return path. Definitive answer = D9 (firewall).</td>
+<td><strong>Channel 2 — Bash</strong></td>
+<td>Blocked, never pseudonymized</td>
+<td>A command must reach the real cluster, so there is no return path. The hook refuses direct network egress and secret dumps before execution. Inherent; the definitive answer is D9 (deployment isolation).</td>
+</tr>
+<tr>
+<td><strong>Channel 2 — remote MCP, WebFetch</strong></td>
+<td>Pseudonymized under <code>task forward</code></td>
+<td>They speak HTTP, so the forward proxy terminates TLS and rewrites JSON-RPC bodies both ways, with the same vault. <strong>Not the default path</strong>, and not yet exercised by a real session — treat the guarantee as untested until it has been.</td>
 </tr>
 <tr>
 <td><strong>Remote MCP servers and connectors</strong> do not go through <code>ANTHROPIC_BASE_URL</code></td>
