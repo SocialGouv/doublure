@@ -4,12 +4,27 @@ Detection answers one question: **which spans of this text identify
 something?** It runs in a separate process (D7) and returns spans with types
 and scores. What happens next — substitute, keep, ask — is decided on our side.
 
-## Two paths
+## Two detectors, composed
+
+| Detector | Covers | Where |
+|---|---|---|
+| infrastructure (AnonShield) | hosts, addresses, images, secrets, 33 cyber labels | separate process, GPL side |
+| personal data | **`PERSON`** — no cyber NER has that class | separate process, Apache-2.0 side |
+
+Neither subsumes the other, and an outage of **either** is a refusal. Carrying
+on without the personal-data pass would silently restore the state in which
+three names left a real session with nothing to count.
+
+The second model returns entities in pieces — `Ines Ferreira-K` then `onate`.
+They are reassembled by offset before anything else sees them: substituting the
+pieces would store half a name and let the other half leave, which is a leak
+wearing the shape of a substitution.
 
 | Path | When | Cost |
 |---|---|---|
 | transformer NER + regex recognizers | normal traffic | P95 **100.6 ms** on 2 KB (GPU) |
 | regex only | above `ANONPROXY_REGEX_THRESHOLD` (8000 chars) | 2.1 ms |
+| personal data | every request | ~1.1 s on 2 KB, measured |
 
 The regex recognizers are what actually fire on infrastructure text — on
 synthetic log material the raw NER returned zero entities and every detection

@@ -88,6 +88,8 @@ session. Three defects were only ever found by them, never by the unit suites.
 | `ANONPROXY_MODE` | `auto` | `auto` \| `consciencieux` \| `ferme` — a mode is a set of settings |
 | `ANONPROXY_REGEX_THRESHOLD` | `8000` | Above this, regex detection (large volumes) |
 | `ANON_DEVICE` | `auto` | `cuda` \| `cpu` — `cuda` fails if unavailable |
+| `ANONPROXY_PII_URL` | `http://127.0.0.1:9100` | Personal-data detector — the only source of `PERSON` |
+| `ANONPROXY_PII` | *(unset)* | `off` disables it explicitly; an outage is a 503, never a silent gap |
 | `ANON_ALLOWLIST_FILE` | `config/allowlist.txt` | Read by both sides of the D7 boundary |
 | `ANON_CUSTOM_PATTERNS_FILE` | `config/custom_patterns.json` | Read by both sides too |
 | `ANON_INVENTORY_FILE` | `config/inventory.txt` | "What is ours" — keep the real one out of the tree |

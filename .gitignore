@@ -22,3 +22,6 @@ dist/
 
 # Site de documentation construit (publié par la CI sur gh-pages)
 site/
+
+# Venv du service de données personnelles (transformers >= 5, hors du lock projet)
+services/pii/.venv/

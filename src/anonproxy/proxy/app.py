@@ -103,6 +103,19 @@ class ProxyState:
         self.detector = DetectClient(
             settings.detect_url, regex_threshold=settings.regex_threshold
         )
+        if settings.pii_url:
+            from ..pii.client import PiiClient
+            from ..pii.composite import CompositeDetector
+            self.detector = CompositeDetector(
+                self.detector, PiiClient(settings.pii_url))
+        else:
+            # Dit à voix haute : sans ce passage, AUCUN nom de personne n'est
+            # détecté, et l'absence ne laisse aucune trace — ni entrée au
+            # coffre, ni substitut non résolu, ni ligne dans `public_by_shape`.
+            logger.warning(
+                "détection des données personnelles DÉSACTIVÉE "
+                "(ANONPROXY_PII=off) : aucun nom de personne ne sera "
+                "substitué, et rien ne le comptera")
         self.pseudonymizer = Pseudonymizer(
             self.detector, self.engine, cache_size=settings.cache_size
         )

@@ -19,6 +19,15 @@ class Settings:
     scope_key: str
     upstream_base: str
     detect_url: str
+    #: Détecteur de DONNÉES PERSONNELLES, second processus (Apache-2.0, donc
+    #: hors de la frontière GPL ; `transformers >= 5`, donc hors du venv épinglé
+    #: d'AnonShield). Le NER d'infrastructure n'a pas de classe `PERSON` : sans
+    #: ce service, aucun nom n'est détecté, et rien ne le compte.
+    #:
+    #: `ANONPROXY_PII=off` le désactive EXPLICITEMENT — une décision d'opérateur,
+    #: tracée au démarrage. Une panne, elle, ne décide de rien : elle se solde
+    #: par un 503, comme pour l'autre détecteur.
+    pii_url: str | None
     vault_path: Path
     master_key_file: Path
     listen_host: str
@@ -53,6 +62,9 @@ class Settings:
             scope_key=scope,
             upstream_base=os.environ.get("ANONPROXY_UPSTREAM", "https://api.anthropic.com"),
             detect_url=os.environ.get("ANONPROXY_DETECT_URL", "http://127.0.0.1:9000"),
+            pii_url=(None if os.environ.get("ANONPROXY_PII", "").lower() == "off"
+                     else os.environ.get("ANONPROXY_PII_URL",
+                                         "http://127.0.0.1:9100")),
             vault_path=Path(os.environ.get("ANONPROXY_VAULT", STATE_DIR / "vault.db")),
             master_key_file=Path(
                 os.environ.get("ANONPROXY_MASTER_KEY_FILE", STATE_DIR / "anon_secret_key")

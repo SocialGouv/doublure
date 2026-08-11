@@ -61,32 +61,32 @@ re-identification attempt would correlate on.
 
 ## Detection gaps
 
-**No person is detected. None.** Not a customer, not the on-call engineer, not
-the reporter of a ticket — in any language. The detection model is a
-**cyber-security** NER: its 33 labels include `MALWARE`, `THREAT_ACTOR`,
-`CVE_ID`, `LOCATION` and `ORGANIZATION`, and **`PERSON` is not among them**.
-Measured, not inferred: `Barack Obama met Angela Merkel in Berlin` returns one
-span, `Berlin`.
+**Dates and postal addresses are not detected.** An end-to-end test asserts the
+date gap *inverted*, and will fail the day it closes.
 
-Dates and postal addresses are not detected either.
+Person names **were** in that list until a real session put three of them —
+the reporter, the on-call engineer and a customer — in front of a model that
+has no class for them. The infrastructure detector is a **cyber-security** NER:
+33 labels, `MALWARE`, `THREAT_ACTOR`, `CVE_ID`, `LOCATION`, `ORGANIZATION`, and
+no `PERSON`. `Barack Obama met Angela Merkel in Berlin` returned one span:
+`Berlin`.
 
-!!! danger "This gap leaves no trace"
+They are now covered by a **second detector**, in its own process, on the
+Apache-2.0 side. It must be running: if it is unreachable the proxy returns
+503, exactly as for the other one. `ANONPROXY_PII=off` disables it — an
+operator decision, printed at startup — because an outage must not decide that
+for you.
 
-    A value nobody detected produces no vault entry, no unresolved surrogate,
+!!! danger "Why this gap deserved its own service"
+
+    A value nobody detects produces no vault entry, no unresolved surrogate,
     and no `public_by_shape` line — that list counts what a *form rule* opened,
-    not what was never seen. So nothing in the logs distinguishes "there was no
+    not what was never seen. Nothing in the logs distinguished "there was no
     name in that file" from "three names went out in the clear". The only way
-    to know is to ask the detector, which is how this was found.
+    to find it was to ask the detector.
 
-    For a GDPR assessment, say it plainly: the most directly identifying
-    category in an incident ticket is the one that is not covered.
-
-The surrogate engine **can** substitute a person — it has a dedicated branch
-that preserves the word count, so `Marie-Anne De La Fontaine` does not come
-back as two tokens. Nothing ever feeds it.
-
-An end-to-end test asserts the date gap *inverted*, and will fail the day it
-closes.
+    That is the shape to look for in whatever remains: not the errors, the
+    silences.
 
 ## Residuals that are counted
 

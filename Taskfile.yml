@@ -33,8 +33,15 @@ tasks:
     cmds:
       - services/anonshield/wrapper/run.sh
 
+  detector:pii:
+    desc: Personal-data detection service — port 9100, keep it running
+    cmds:
+      # Its own virtualenv: the model needs transformers >= 5, and the
+      # AnonShield environment is pinned and fragile.
+      - services/pii/run.sh
+
   proxy:
-    desc: Pseudonymisation proxy — port 8090, needs the detector
+    desc: Pseudonymisation proxy — port 8090, needs BOTH detectors
     cmds:
       - scripts/run-proxy.sh
 
