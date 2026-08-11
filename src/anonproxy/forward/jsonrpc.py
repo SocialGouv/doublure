@@ -23,6 +23,9 @@ suspended because a call is inconvenient.
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import gzip
 import json
 from typing import Callable
 
@@ -32,6 +35,14 @@ _ENVELOPPE = frozenset({"jsonrpc", "id", "method"})
 _ROUTAGE = frozenset({"name"})
 #: Sous-arbres de données libres d'un message JSON-RPC.
 _DONNEES = frozenset({"params", "result", "error"})
+#: Champs où MCP range une charge encodée, et la clé qui dit ce qu'elle
+#: contient. `mimeType` est la forme camelCase du protocole MCP.
+_CHARGES = ("blob", "data", "content")
+_TYPES_MIME = ("mimeType", "mime_type", "media_type", "mimetype")
+#: Seul un type MIME TEXTUEL autorise la traversée : décoder puis ré-encoder
+#: un PNG le corrigerait. Même arbitrage que le walker Anthropic (round 12).
+_MIME_TEXTUELS = ("text/", "application/json", "application/xml",
+                  "application/yaml", "application/x-yaml")
 
 
 class BinaryBody(RuntimeError):
@@ -53,16 +64,32 @@ class JsonRpcTransform:
     # ------------------------------------------------------------------ sens
 
     def outgoing(self, host: str, headers: dict[str, str], body: bytes) -> bytes:
-        return self._appliquer(body, self._sortant)
+        return self._appliquer(body, self._sortant, headers)
 
     def incoming(self, host: str, headers: dict[str, str], body: bytes) -> bytes:
-        return self._appliquer(body, self._entrant)
+        return self._appliquer(body, self._entrant, headers)
 
     # --------------------------------------------------------------- moteur
 
-    def _appliquer(self, body: bytes, transformer: Callable[[str], str]) -> bytes:
+    def _appliquer(self, body: bytes, transformer: Callable[[str], str],
+                   headers: dict[str, str] | None = None) -> bytes:
         if not body:
             return body
+        # Un corps gzipé est du TEXTE compressé. Sans le détendre, il levait
+        # `BinaryBody` — que l'échange ne rattrape pas — et la connexion
+        # mourait sans 502, sur une réponse parfaitement ordinaire.
+        comprime = (headers or {}).get("content-encoding", "").lower() in (
+            "gzip", "x-gzip")
+        if comprime:
+            try:
+                body = gzip.decompress(body)
+            except (OSError, EOFError) as exc:
+                raise BinaryBody(f"corps gzip illisible : {exc}") from exc
+        rendu = self._appliquer_clair(body, transformer)
+        return gzip.compress(rendu) if comprime else rendu
+
+    def _appliquer_clair(self, body: bytes,
+                         transformer: Callable[[str], str]) -> bytes:
         try:
             texte = body.decode("utf-8")
         except UnicodeDecodeError as exc:
@@ -75,15 +102,17 @@ class JsonRpcTransform:
             # Un corps tronqué ou un format tiers reste du TEXTE : le protéger
             # entier est le sens sûr, et ça ne tue pas la connexion.
             return transformer(texte).encode("utf-8")
-        rendu = self._message(message, transformer)
+        # UN seul niveau de lot, ce que dit la spec. En descendant plus loin,
+        # tout dict interne recevait le traitement d'enveloppe — `id` et
+        # `method` verbatim, alors que ce sont des données à cette profondeur.
+        if isinstance(message, list):
+            rendu = [self._message(m, transformer) for m in message]
+        else:
+            rendu = self._message(message, transformer)
         return json.dumps(rendu, ensure_ascii=False).encode("utf-8")
 
     def _message(self, noeud, transformer):
         """Niveau MESSAGE : l'enveloppe est du protocole, le reste des données."""
-        if isinstance(noeud, list):
-            # JSON-RPC autorise un lot ; ne traiter que la racine laisserait
-            # passer tout un lot en clair.
-            return [self._message(m, transformer) for m in noeud]
         if not isinstance(noeud, dict):
             return self._libre(noeud, transformer)
         rendu = {}
@@ -107,11 +136,35 @@ class JsonRpcTransform:
             for cle, valeur in noeud.items()
         }
 
+    def _charge_encodee(self, source: dict, rendu: dict, transformer):
+        """Traverse une charge base64 quand une CLÉ VOISINE la dit textuelle.
+
+        Un serveur MCP range le contenu d'une ressource sous `blob`, avec son
+        type MIME à côté. Traité comme une chaîne opaque, le fichier traversait
+        VERBATIM dans les deux sens — la lecture d'une ressource rendait le
+        document brut à l'agent, et son écriture le sortait tel quel.
+        """
+        mime = next((str(source[c]) for c in _TYPES_MIME if c in source), "")
+        if not mime.lower().startswith(_MIME_TEXTUELS):
+            return rendu
+        for champ in _CHARGES:
+            valeur = source.get(champ)
+            if not isinstance(valeur, str):
+                continue
+            try:
+                clair = base64.b64decode(valeur, validate=True).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                continue  # pas du base64 textuel : la chaîne a déjà été traitée
+            rendu[transformer(champ)] = base64.b64encode(
+                transformer(clair).encode("utf-8")).decode("ascii")
+        return rendu
+
     def _libre(self, noeud, transformer):
         """Données libres : la clé est une valeur comme une autre."""
         if isinstance(noeud, dict):
-            return {transformer(c): self._libre(v, transformer)
-                    for c, v in noeud.items()}
+            rendu = {transformer(c): self._libre(v, transformer)
+                     for c, v in noeud.items()}
+            return self._charge_encodee(noeud, rendu, transformer)
         if isinstance(noeud, list):
             return [self._libre(v, transformer) for v in noeud]
         if isinstance(noeud, str):

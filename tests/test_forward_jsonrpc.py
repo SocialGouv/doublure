@@ -138,3 +138,65 @@ def test_a_binary_body_is_refused_rather_than_relayed(transform):
 
 def test_an_empty_body_is_left_alone(transform):
     assert transform.outgoing("h", {}, b"") == b""
+
+
+# --------------------------------------------------------------------------- #
+# Tour 6-7 — ce qu'un corps encodé transporte
+# --------------------------------------------------------------------------- #
+
+
+def test_a_textual_payload_hidden_in_base64_is_still_protected(transform):
+    """Le walker Anthropic décode déjà le base64 quand le type MIME est
+    textuel (round 12). La logique n'était pas répliquée ici : une lecture de
+    ressource MCP transportait le fichier VERBATIM, encodé, dans les deux
+    sens."""
+    import base64
+
+    charge = base64.b64encode(
+        b"log: connect to db-01.acme.internal on 5432").decode()
+    corps = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+        "params": {"arguments": {"mimeType": "text/plain", "blob": charge}}}
+    ).encode()
+    rendu = json.loads(transform.outgoing("h", {}, corps))
+    dedans = base64.b64decode(rendu["params"]["arguments"]["blob"]).decode()
+    assert "db-01.acme.internal" not in dedans, dedans
+    assert "hote-fictif.test" in dedans
+
+
+def test_a_binary_payload_is_left_alone(transform):
+    """Décoder, substituer et ré-encoder un PNG le CORRIGE. Seul un type MIME
+    textuel autorise la traversée — même arbitrage que le walker."""
+    import base64
+
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n\x00\xff\xfe").decode()
+    corps = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "x",
+        "params": {"arguments": {"mimeType": "image/png", "blob": png}}}).encode()
+    rendu = json.loads(transform.outgoing("h", {}, corps))
+    assert rendu["params"]["arguments"]["blob"] == png
+
+
+def test_a_nested_batch_does_not_forge_an_envelope(transform):
+    """JSON-RPC autorise UN niveau de lot. En descendant plus loin, tout dict
+    interne recevait le traitement d'enveloppe — `id` et `method` verbatim,
+    alors que ce sont des données à cette profondeur. Même motif que les
+    rounds 4, 6, 10 et 11 : une sémantique de protocole propagée au-delà de sa
+    portée."""
+    lot = [[{"jsonrpc": "2.0", "id": "db-01.acme.internal", "method": "x",
+             "params": {}}]]
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(lot).encode()))
+    assert "db-01.acme.internal" not in json.dumps(rendu)
+
+
+def test_a_gzipped_body_is_read_instead_of_killing_the_connection(transform):
+    """`BinaryBody` n'est pas rattrapée par l'échange : la connexion mourait
+    sans 502. Un corps gzipé est du texte, il suffit de le détendre."""
+    import gzip
+
+    clair = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {"hote": "db-01.acme.internal"}}).encode()
+    sortie = transform.outgoing("h", {"content-encoding": "gzip"},
+                                gzip.compress(clair))
+    assert b"db-01.acme.internal" not in gzip.decompress(sortie)
+    assert b"hote-fictif.test" in gzip.decompress(sortie)
