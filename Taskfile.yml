@@ -145,6 +145,22 @@ tasks:
     cmds:
       - uv run python tests/ab_decoupage.py
 
+  # -------------------------------------------------------------------- docs
+  #
+  # --no-project: the site does not import the package, so rendering it has no
+  # reason to install a web framework and a bash grammar. The CI publishes with
+  # exactly these commands.
+
+  docs:
+    desc: Serve the documentation site locally on :8000
+    cmds:
+      - uv run --no-project --with mkdocs-material mkdocs serve
+
+  docs:build:
+    desc: Build the documentation site into site/
+    cmds:
+      - uv run --no-project --with mkdocs-material mkdocs build --strict
+
   # -------------------------------------------------------------------- demo
 
   # A project holds only its own content. The chain, the state and the scripts

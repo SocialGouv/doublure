@@ -19,3 +19,6 @@ __pycache__/
 # devbox — environnement local (nix), jamais committé
 .devbox/
 dist/
+
+# Site de documentation construit (publié par la CI sur gh-pages)
+site/

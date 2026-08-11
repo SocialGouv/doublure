@@ -12,6 +12,9 @@ the actor's place — and the lining sewn inside a coat. Surrogates are plausibl
 on purpose (decision D1): never `[HOST_1]`, always something the model can
 still reason with.
 
+📖 **[Documentation](https://socialgouv.github.io/doublure/)** — design,
+operation, known limits and the adversarial record.
+
 ```
 claude ──ANTHROPIC_BASE_URL──► proxy :8090 ──► api.anthropic.com
                                   │

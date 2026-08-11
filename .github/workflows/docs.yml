@@ -1,0 +1,43 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# gh-deploy pushes the built site to the gh-pages branch.
+permissions:
+  contents: write
+
+# A second push while the first is deploying would race on the same branch.
+concurrency:
+  group: docs
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gh-deploy commits on top of gh-pages: it needs its history.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build the site
+        # --no-project: the docs do not import the package, so there is no
+        # reason to install fastapi, uvicorn and a bash grammar to render them.
+        run: uv run --no-project --with mkdocs-material mkdocs build --strict
+
+      - name: Publish to gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          uv run --no-project --with mkdocs-material mkdocs gh-deploy --force

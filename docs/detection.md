@@ -1,0 +1,108 @@
+# Detection and lists
+
+Detection answers one question: **which spans of this text identify
+something?** It runs in a separate process (D7) and returns spans with types
+and scores. What happens next — substitute, keep, ask — is decided on our side.
+
+## Two paths
+
+| Path | When | Cost |
+|---|---|---|
+| transformer NER + regex recognizers | normal traffic | P95 **100.6 ms** on 2 KB (GPU) |
+| regex only | above `ANONPROXY_REGEX_THRESHOLD` (8000 chars) | 2.1 ms |
+
+The regex recognizers are what actually fire on infrastructure text — on
+synthetic log material the raw NER returned zero entities and every detection
+came from a pattern. The model earns its place on prose, not on logs.
+
+## Three lists, three different jobs
+
+```mermaid
+flowchart LR
+    T[token] --> A{allowlist<br/>this FORM is public}
+    A -->|no| S[substitute]
+    A -->|yes| I{inventory<br/>this NAME is ours}
+    I -->|yes| S
+    I -->|no| K[keep readable]
+```
+
+### `config/allowlist.txt` — what is public
+
+Two kinds of entry, and the difference is load-bearing:
+
+- an **exact** entry is a decision taken token by token (`localhost`,
+  `monitoring`, a specific public dependency). It holds everywhere, including
+  inside a composite value;
+- a **`re:` rule** is a form rule. It holds only where the context justifies
+  it, because a form has no context: `README.md` and `acme.md` are
+  indistinguishable to it.
+
+An entry written all lowercase means case does not matter. An entry carrying a
+capital means it meant it — `Mail.Read` is a permission, not a word. The
+entry's own casing declares the rule; nothing has to be classified by hand.
+
+!!! danger "The only rule that widens the public set"
+
+    Everything else in this system fails loudly — a 400, a 503, a refused
+    command. The allowlist is the one place where a mistake fails **silently**,
+    by letting a value out with no vault entry and nothing to count. A rule
+    that widens it deserves its own test before it is written. Two attempts at
+    declaring common words public were shipped and withdrawn; the reasons are
+    in [the adversarial record](rounds.md).
+
+### `config/inventory.txt` — what is ours
+
+The exact inverse, and it **primes**: `org.apache.kafka.acme.PaymentsClient`
+and `org.apache.kafka.clients.KafkaProducer` have the same form, and only
+knowing that `acme` is yours separates them. A form rule cannot decide that; an
+inventory can, without probability.
+
+An identifier is yours as soon as one of its **segments** matches, so declaring
+`acme` covers `tenant-acme-nda`, `registry.k8s.io/acme-billing` and
+`vnd.acme.billing+json` at once.
+
+This list only ever raises protection, so it cannot introduce a silent leak —
+which is why it is the right place to resolve doubts.
+
+!!! warning "Keep the real one out of the tree"
+
+    This file names your organisation, your zones and your team prefixes. Point
+    `ANON_INVENTORY_FILE` at a path outside the working tree. A path you ask
+    for and that does not exist is an **error**, never an empty inventory:
+    reading it as empty would silently re-open the names it was meant to close.
+
+!!! bug "Current gap: the inventory does not prime over an *exact* allowlist entry"
+
+    The diagram above is the design. In the code, the detection service drops a
+    span covered by an exact allowlist entry before returning it, so the engine
+    — where the inventory is applied — never sees that token. Declaring in your
+    inventory a name that also sits in the allowlist as an exact entry
+    therefore protects it in the unit tests and **not in a session**.
+
+    It matters for the handful of generic words the allowlist opens
+    (`monitoring` is one). The fix is to mirror the inventory on the detection
+    side, exactly as the allowlist already is; it is tracked, not done.
+
+### `config/custom_patterns.json` — your conventions
+
+Regex recognizers for the identifier shapes your environment uses that no
+general model knows: ticket references, internal naming schemes, service
+account formats.
+
+## The lists are shared, the parser is duplicated
+
+Both the detection service (GPL side) and the surrogate engine (MIT side) read
+the same files. The ten-line parser exists twice, on purpose: it is the
+**list** that must be maintained once, not the code that reads it, and
+sharing code across the boundary would mean sharing a licence.
+
+## Counting what the lists let through
+
+`/detect` returns `public_by_shape`: the deduplicated tokens a **form** rule
+made public, with their span types and the rule responsible. An exact entry
+never appears there — it was a decision, not a heuristic.
+
+This exists because the alternative is a leak with no trace at all: no vault
+entry, no unresolved surrogate, nothing for the egress harness or the corpus to
+count. An accepted residual has to be countable, or it is not accepted, just
+unnoticed.

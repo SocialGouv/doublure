@@ -1,0 +1,103 @@
+site_name: doublure
+site_description: >-
+  Bidirectional pseudonymisation proxy between Claude Code and the Anthropic
+  API — sensitive identifiers leave as plausible surrogates and come back real.
+site_url: https://socialgouv.github.io/doublure/
+repo_url: https://github.com/SocialGouv/doublure
+repo_name: SocialGouv/doublure
+edit_uri: edit/main/docs/
+copyright: MIT — SocialGouv and contributors. Detection engine under GPL-3.0.
+
+theme:
+  name: material
+  language: en
+  icon:
+    logo: material/drama-masks
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Start: start.md
+  - Design:
+      - Philosophy: philosophy.md
+      - Architecture: architecture.md
+      - Locked decisions: decisions.md
+      - Surrogates: surrogates.md
+  - Operate:
+      - Detection and lists: detection.md
+      - Policy and arbitration: policy.md
+      - The hook (channel 2): hook.md
+      - Command grammar: hook-parser.md
+  - Assurance:
+      - Known limits: limits.md
+      - Re-identification analysis: re-identification-analysis.md
+      - Network isolation (D9): d9-network-isolation.md
+      - Adversarial record: rounds.md
+  - Licensing: licensing.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/SocialGouv/doublure
+      name: doublure on GitHub
