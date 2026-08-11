@@ -120,18 +120,32 @@ def test_a_low_score_fragment_is_judged_after_reassembly():
 # --------------------------------------------------------------------------- #
 
 
-def test_a_span_starting_at_the_line_number_is_cut_too():
-    """La coupure ne traitait que la span qui TRAVERSE l'échafaudage. Celle
-    qui COMMENCE dessus — la première ligne d'un `Read` — passait entière, et
-    le générateur d'adresses réécrivait le numéro."""
+def test_a_span_starting_at_a_number_is_NOT_cut(m):
+    """ATTENTE RETOURNÉE au tour 8, et c'est une décision.
+
+    J'ai voulu retirer le numéro de ligne d'une span qui commence dessus. Un
+    numéro de ligne et un matricule métier ont la MÊME forme — chiffres,
+    tabulation, début de ligne, parfois alignés. J'ai tenté deux discriminants
+    (« au moins une espace », puis « le padding précède la span ») et les deux
+    fois un identifiant RÉEL est sorti en clair, sans rien pour le compter.
+
+    Le discriminant n'existe pas dans le contexte local. La span n'est donc
+    plus coupée en tête : le numéro de la PREMIÈRE ligne se fera substituer
+    avec l'entité, et la numérotation y sera fausse d'une ligne.
+
+    C'est l'arbitrage de tout le projet : une numérotation abîmée est VISIBLE
+    — le modèle la signale, on l'a vu faire — un matricule qui part ne l'est
+    pas.
+    """
     texte = "     3\t42 rue de la Paix\n     4\t75001 Paris\n"
     debut = texte.index("3\t42")
     span = {"type": "ADDRESS", "value": "3\t42 rue de la Paix",
             "start": debut, "end": debut + len("3\t42 rue de la Paix"),
             "score": 0.99}
-    (coupe,) = couper_echafaudage([span], texte)
-    assert coupe["value"] == "42 rue de la Paix"
-    assert texte[coupe["start"]:coupe["end"]] == coupe["value"]
+    (rendu,) = couper_echafaudage([span], texte)
+    assert rendu["value"] == "3\t42 rue de la Paix"
+    # Et ce qui compte : substitué, le numéro ne part PAS en clair.
+    assert "3\t42" not in m.substitute_value("ADDRESS", rendu["value"])
 
 
 # --------------------------------------------------------------------------- #
@@ -156,14 +170,16 @@ def test_a_tab_separated_id_is_not_mistaken_for_a_line_number(prefixe):
     assert prefixe in rendu["value"], rendu["value"]
 
 
-def test_a_padded_line_number_is_still_cut():
-    """Le pendant : sans lui, le correctif ci-dessus se satisferait de ne
-    jamais rien couper."""
-    texte = "     7\t42 rue de la Paix"
+def test_a_span_crossing_a_line_end_is_still_cut():
+    """Le pendant qui tient encore : une span qui TRAVERSE une fin de ligne
+    est nécessairement dans une sortie numérotée — le `\n` le prouve, et lui
+    seul. C'est la seule coupure qui reste."""
+    texte = "42 rue de la Paix,\n     4\t75001 Paris"
     span = {"type": "ADDRESS", "value": texte, "start": 0,
             "end": len(texte), "score": 0.99}
-    (rendu,) = couper_echafaudage([span], texte)
-    assert rendu["value"] == "42 rue de la Paix"
+    morceaux = couper_echafaudage([span], texte)
+    assert [x["value"] for x in morceaux] == ["42 rue de la Paix",
+                                              "75001 Paris"]
 
 
 @pytest.mark.parametrize("sans, avec", [

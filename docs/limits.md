@@ -138,6 +138,22 @@ the day the gap closed, which is what it was written to do.
     That is the shape to look for in whatever remains: not the errors, the
     silences.
 
+## Two shapes that cannot be told apart
+
+**A line number and a business identifier are the same string.** Digits, a tab,
+at the start of a line, sometimes right-aligned by spaces. Tool output numbers
+its lines that way; a padded TSV numbers its rows that way. Two attempts at a
+local discriminant both let a real identifier out in the clear, so the entity a
+span covers is no longer trimmed at its head: on the FIRST line of a numbered
+output, the number is substituted along with the entity, and the numbering is
+wrong by one line there.
+
+Damaged numbering is visible — the model says so, we have watched it do it. An
+identifier that leaves is not.
+
+**An upstream that goes silent mid-body has no deadline.** Distinct from one
+that truncates, which answers 502 since round 8. A stalled exchange waits.
+
 ## Residuals that are counted
 
 | Residual | Why it stays |

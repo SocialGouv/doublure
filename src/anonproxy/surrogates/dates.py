@@ -86,7 +86,10 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
         if mois is None:
             return None
         table = MOIS_FR if _sans_accent(m[3]) in _MOIS_FR_NUS else MOIS_EN
-        capitale = m[3][:1].isupper()
+        # Trois cas, pas deux : `m[3][:1].isupper()` mettait `Mars` et `MARS`
+        # dans le même seau, et `12 MARS 2020` revenait `6 Janvier 2021`.
+        casse = ("haut" if m[3].isupper() else
+                 "titre" if m[3][:1].isupper() else "bas")
         try:
             jour = dt.date(int(m[4]), mois, int(m[1]))
         except ValueError:
@@ -94,7 +97,11 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
 
         def rendre(d: dt.date) -> str:
             nom = table[d.month - 1]
-            return f"{d.day} {nom.capitalize() if capitale else nom} {d.year}"
+            if casse == "haut":
+                nom = nom.upper()
+            elif casse == "titre":
+                nom = nom.capitalize()
+            return f"{d.day} {nom} {d.year}"
 
         return jour, rendre
 

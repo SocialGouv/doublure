@@ -107,16 +107,22 @@ _ECHAFAUDAGE = re.compile(r"\n[ \t]*\d+\t")
 #: d'outil, le modèle commence au numéro et non au saut de ligne qui le
 #: précède, donc le motif ci-dessus ne matche pas et le numéro se fait
 #: réécrire.
-_TETE_ECHAFAUDAGE = re.compile(r"^( *)\d+\t")
-#: Le PADDING de `Read`, qui précède la span : les numéros sont alignés à
-#: droite, donc adossés à un début de ligne par des espaces. Le modèle commence
-#: sa span AU chiffre, pas aux espaces — le discriminant est donc dans le
-#: texte, pas dans la span.
+#: PAS de coupure en TÊTE de span — et c'est une décision, pas un oubli.
 #:
-#: Sans lui, `12345\t…` d'un fichier tabulé passait pour un numéro de ligne :
-#: le matricule sortait de la span et partait EN CLAIR, sans entrée de coffre
-#: ni rien à compter.
-_PADDING_AVANT = re.compile(r"(?:^|\n) +$")
+#: Un numéro de ligne et un matricule métier ont la MÊME forme : des chiffres
+#: suivis d'une tabulation, en tête de ligne, parfois alignés par des espaces.
+#: Le discriminant n'existe pas dans le contexte local. J'ai essayé deux fois
+#: — « au moins une espace », puis « le padding précède la span » — et les deux
+#: fois un identifiant réel est sorti EN CLAIR, sans entrée de coffre ni rien à
+#: compter.
+#:
+#: Ne coupe donc que `_ECHAFAUDAGE`, qui exige un `\n` devant : une span qui
+#: TRAVERSE une fin de ligne est nécessairement dans une sortie numérotée.
+#: Reste le cas de la PREMIÈRE ligne, dont le numéro se fera substituer avec
+#: l'entité — la numérotation y sera fausse d'une ligne.
+#:
+#: L'arbitrage est celui de tout le projet : une numérotation abîmée est
+#: VISIBLE, le modèle la signale ; un matricule qui part ne l'est pas.
 
 
 def couper_echafaudage(spans: list[dict], text: str) -> list[dict]:
@@ -145,16 +151,7 @@ def couper_echafaudage(spans: list[dict], text: str) -> list[dict]:
         for a, b in morceaux:
             if (ajuste := _ajuster({**span, "start": a, "end": b}, text)):
                 sortie.append(ajuste)
-    return [_sans_tete(s, text) for s in sortie]
-
-
-def _sans_tete(span: dict, text: str) -> dict:
-    tete = _TETE_ECHAFAUDAGE.match(span.get("value", ""))
-    if tete is None:
-        return span
-    if not tete.group(1) and not _PADDING_AVANT.search(text[:span["start"]]):
-        return span  # pas de padding : c'est un identifiant, pas un numéro
-    return _ajuster({**span, "start": span["start"] + tete.end()}, text) or span
+    return sortie
 
 
 #: Vocabulaire de voie : sa présence suffit à faire une adresse d'un seul mot
@@ -205,6 +202,14 @@ def merge_fragments(spans: list[dict], text: str) -> list[dict]:
     """Fusionne les fragments voisins de MÊME type en entités entières."""
     if not spans:
         return []
+    # Une span hors bornes — service en panne, réponse tronquée, course —
+    # faisait un `IndexError` dans le recalage, que le client ne rattrape pas :
+    # 500 non structuré, alors que le contrat promet un refus fail-closed.
+    for span in spans:
+        if not 0 <= span["start"] <= span["end"] <= len(text):
+            raise ValueError(
+                f"span hors du texte : [{span['start']}, {span['end']}] "
+                f"pour {len(text)} caractères")
     # Le modèle ne garantit pas l'ordre : trier fait partie de la fusion, sinon
     # deux fragments consécutifs ne se voient pas.
     restants = sorted(spans, key=lambda s: (s["start"], s["end"]))
