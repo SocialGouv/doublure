@@ -120,6 +120,7 @@ tasks:
       - task: proof:policy
       - task: proof:control
       - task: proof:phase4
+      - task: proof:forward
       - task: proof:phase3
 
   proof:policy:
@@ -131,6 +132,11 @@ tasks:
     desc: Go control service, socket and event stream
     cmds:
       - bash tests/control_e2e.sh
+
+  proof:forward:
+    desc: Real session BEHIND the forward proxy — third parties refused
+    cmds:
+      - bash tests/forward_e2e.sh
 
   proof:phase3:
     desc: Real session — no real value in the captured egress

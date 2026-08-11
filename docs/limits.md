@@ -33,16 +33,30 @@ agent behind a forward proxy that terminates TLS, pseudonymises JSON-RPC bodies
 on the way out and restores them on the way back. Destinations come from a list
 the operator writes in the state directory, and an unlisted one is refused.
 
-!!! warning "New, and never yet run in a real session"
+!!! success "Proven by a real session"
 
-    The forward mode is covered by tests, including interception proven against
-    a client that trusts only our authority. It has not been exercised by a
-    real agent for a full session — and in this project, that is the step that
-    has found what tests did not, four times.
+    `tests/forward_e2e.sh` runs a real Claude Code session under the launcher.
+    The agent works, its model traffic is seen by the proxy — and the
+    destinations Phase 0 measured as escaping are **refused, with no socket
+    opened**:
+
+    ```
+    api.githubcopilot.com:443 -> refuse (destination non déclarée)
+    registry.npmjs.org:443    -> refuse (destination non déclarée)
+    mcp.context7.com:443      -> refuse (destination non déclarée)
+    api.anthropic.com:443     -> tunnel
+    ```
+
+    And the session still completes. A chokepoint that stopped the agent
+    working would be a wall, not a control.
 
 ## D9 is not met on a workstation
 
-**The egress harness detects; it does not prevent.** Say exactly that to a DPO.
+**On the default path, the egress harness detects; it does not prevent.** Under
+`task forward`, it *does* prevent — measured above — but only for what honours
+`HTTPS_PROXY`. A process opening a raw socket ignores it, so the deployment
+shape (an `internal` network, the proxy alone straddling both sides) remains
+the only enforcement. Say exactly that to a DPO.
 
 Measured on one real session: four destinations out of five escape
 `ANTHROPIC_BASE_URL` — `mcp-proxy.anthropic.com` (×12), `mcp.context7.com`
