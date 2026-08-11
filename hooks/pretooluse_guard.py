@@ -1681,14 +1681,31 @@ def _is_local_url(url: str) -> bool:
 
 
 #: Domaines que l'opérateur a explicitement ouverts à la lecture directe.
-#: Le message de refus promettait cette possibilité sans qu'elle existe.
-_DOMAINES_OUVERTS = _RACINE / "config" / "domaines_ouverts.txt"
+#:
+#: La liste vit dans le RÉPERTOIRE D'ÉTAT, hors de portée de l'agent — le hook
+#: lui refuse ce chemin. C'est la seule règle du système qui OUVRE une
+#: destination réseau : si l'agent peut l'écrire, il s'ouvre sa propre sortie,
+#: et « seul l'opérateur ouvre » n'est plus qu'une phrase.
+#:
+#: La copie du dépôt (`config/domaines_ouverts.txt`) est une PROPOSITION : elle
+#: n'ouvre rien. Un dépôt peut suggérer une liste, l'opérateur la reprend s'il
+#: la veut. Elle était lue à égalité, ce qui rendait la garde décorative.
+_ENV_DOMAINES_OUVERTS = "ANONPROXY_OPEN_DOMAINS"
+_DOMAINES_OUVERTS = STATE_DIR / "open-domains.txt"
+_DOMAINES_PROPOSES = _RACINE / "config" / "domaines_ouverts.txt"
+
+
+def _fichier_domaines_ouverts() -> Path:
+    """Un seul fichier fait autorité, et il n'est pas dans le dépôt."""
+    demande = os.environ.get(_ENV_DOMAINES_OUVERTS)
+    return Path(demande) if demande else _DOMAINES_OUVERTS
 
 
 def _domaines_ouverts() -> set[str]:
     """Lu à chaque appel : retirer une ligne referme le domaine tout de suite."""
     try:
-        lignes = _DOMAINES_OUVERTS.read_text(encoding="utf-8").splitlines()
+        lignes = _fichier_domaines_ouverts().read_text(
+            encoding="utf-8").splitlines()
     except OSError:
         return set()  # pas de fichier = rien d'ouvert
     return {l.strip().lower() for l in lignes
@@ -1753,8 +1770,11 @@ def evaluate(event: dict) -> tuple[dict, str | None]:
             if url and not _is_local_url(url) and not _hote_ouvert(url):
                 reason = ("sortie réseau directe hors du proxy (D9) — "
                           "aucune pseudonymisation n'est possible sur ce chemin")
-        hint = ("Passe par le proxy, ou demande-moi d'ouvrir le domaine — "
-                "je l'ajoute à config/domaines_ouverts.txt.")
+        # Le chemin est nommé parce que l'opérateur doit l'écrire LUI-MÊME :
+        # l'agent n'a pas accès au répertoire d'état, et c'est exactement ce
+        # qui fait tenir « seul l'opérateur ouvre ».
+        hint = (f"Passe par le proxy, ou ouvre le domaine toi-même : "
+                f"ajoute-le à {_fichier_domaines_ouverts()}.")
     else:
         # Tout autre outil (Task, MCP…). Un serveur MCP expose couramment un
         # champ qui EST une commande : l'inspecter comme telle, sinon

@@ -13,12 +13,18 @@ var pathTools = set("Read", "Edit", "Write", "MultiEdit", "NotebookEdit",
 	"NotebookRead", "Glob", "Grep", "LS")
 
 const (
-	hintBash    = "Reformule sans exposer la valeur (référence, agrégat, ou --dry-run)."
-	hintPath    = "Ce chemin est hors de portée de l'agent par conception."
-	hintNetwork = "Passe par le proxy, ou demande-moi d'ouvrir le domaine — " +
-		"je l'ajoute à config/domaines_ouverts.txt."
+	hintBash  = "Reformule sans exposer la valeur (référence, agrégat, ou --dry-run)."
+	hintPath  = "Ce chemin est hors de portée de l'agent par conception."
 	hintOther = "Cette cible est hors de portée de l'agent par conception."
 )
+
+// hintNetwork names the file the OPERATOR writes: the agent has no access to
+// the state directory, and that is exactly what makes "only the operator
+// opens" hold.
+func hintNetwork() string {
+	return "Passe par le proxy, ou ouvre le domaine toi-même : ajoute-le à " +
+		openDomainsPath() + "."
+}
 
 // Value mirrors a decoded JSON value, PRESERVING the order of object keys.
 //
@@ -181,16 +187,16 @@ func Evaluate(tool string, payload Value) (reason, hint string, err error) {
 	case tool == "WebFetch" || tool == "WebSearch":
 		text := PayloadText(payload)
 		if reason := firstReason(text); reason != "" {
-			return reason, hintNetwork, nil
+			return reason, hintNetwork(), nil
 		}
 		raw := payload.Field("url").Text()
 		// A domain OPENED by the operator stays subject to the checks above:
 		// what is allowed is a READ, not an exit channel.
 		if raw != "" && !isLocalURL(raw) && !openHost(raw) {
 			return "sortie réseau directe hors du proxy (D9) — aucune " +
-				"pseudonymisation n'est possible sur ce chemin", hintNetwork, nil
+				"pseudonymisation n'est possible sur ce chemin", hintNetwork(), nil
 		}
-		return "", hintNetwork, nil
+		return "", hintNetwork(), nil
 	}
 
 	// Any other tool (Task, MCP…). An MCP server commonly exposes a field that
@@ -236,32 +242,32 @@ func firstReason(text string) string {
 // domain and then read it — measured, not assumed. "Only the operator opens.
 // Never the model."
 //
-// The project copy is still read, and stays SECOND: it lets a repository ship a
-// suggested list, but a session that writes it opens nothing that the state
-// directory has not already opened.
+// The project copy (`config/domaines_ouverts.txt`) is a PROPOSAL and opens
+// nothing. It used to be read on equal terms, and the comment here claimed the
+// state directory gated it — it did not: the two were unioned, so anything able
+// to write the repository could open its own egress. A guard that documents a
+// property it does not have is worse than no guard, because decisions get taken
+// on it.
 const (
-	openDomainsEnv     = "ANONPROXY_OPEN_DOMAINS"
-	openDomainsFile    = "open-domains.txt"
-	openDomainsProject = "config/domaines_ouverts.txt"
+	openDomainsEnv  = "ANONPROXY_OPEN_DOMAINS"
+	openDomainsFile = "open-domains.txt"
 )
+
+func openDomainsPath() string {
+	if path := os.Getenv(openDomainsEnv); path != "" {
+		return path
+	}
+	if dir := StateDir(); dir != "" {
+		return filepath.Join(dir, openDomainsFile)
+	}
+	return openDomainsFile
+}
 
 // openDomains is read on EVERY call: removing a line closes the domain at once.
 func openDomains() map[string]bool {
-	var paths []string
-	if path := os.Getenv(openDomainsEnv); path != "" {
-		paths = []string{path}
-	} else {
-		if dir := StateDir(); dir != "" {
-			paths = append(paths, filepath.Join(dir, openDomainsFile))
-		}
-		paths = append(paths, openDomainsProject)
-	}
 	domains := map[string]bool{}
-	for _, path := range paths {
-		content, err := os.ReadFile(path)
-		if err != nil {
-			continue // no file means nothing open from there
-		}
+	content, err := os.ReadFile(openDomainsPath())
+	if err == nil {
 		for line := range strings.SplitSeq(string(content), "\n") {
 			if trimmed := strings.TrimSpace(line); trimmed != "" &&
 				!strings.HasPrefix(line, "#") {
