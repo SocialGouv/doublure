@@ -132,3 +132,49 @@ def test_a_span_starting_at_the_line_number_is_cut_too():
     (coupe,) = couper_echafaudage([span], texte)
     assert coupe["value"] == "42 rue de la Paix"
     assert texte[coupe["start"]:coupe["end"]] == coupe["value"]
+
+
+# --------------------------------------------------------------------------- #
+# Tour 7 — deux régressions de mes propres correctifs du tour 6
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("prefixe", ["12345", "999888", "42"])
+def test_a_tab_separated_id_is_not_mistaken_for_a_line_number(prefixe):
+    """RÉGRESSION du tour 6, et elle FUIT en silence.
+
+    Ma coupure d'en-tête acceptait zéro espace devant le numéro, donc elle
+    prenait `12345\tadresse` d'un fichier tabulé pour un numéro de ligne :
+    le matricule sortait du span et partait EN CLAIR, sans entrée de coffre ni
+    ligne à compter. `Read` aligne ses numéros à droite ; un TSV natif n'a pas
+    de padding, et cette espace est ce qui les distingue.
+    """
+    texte = f"{prefixe}\t42 rue de la Paix, 75001 Paris"
+    span = {"type": "ADDRESS", "value": texte, "start": 0,
+            "end": len(texte), "score": 0.99}
+    (rendu,) = couper_echafaudage([span], texte)
+    assert prefixe in rendu["value"], rendu["value"]
+
+
+def test_a_padded_line_number_is_still_cut():
+    """Le pendant : sans lui, le correctif ci-dessus se satisferait de ne
+    jamais rien couper."""
+    texte = "     7\t42 rue de la Paix"
+    span = {"type": "ADDRESS", "value": texte, "start": 0,
+            "end": len(texte), "score": 0.99}
+    (rendu,) = couper_echafaudage([span], texte)
+    assert rendu["value"] == "42 rue de la Paix"
+
+
+@pytest.mark.parametrize("sans, avec", [
+    ("3 fevrier 2026", "3 février 2026"),
+    ("10 aout 2020", "10 août 2020"),
+    ("1 decembre 2020", "1 décembre 2020"),
+])
+def test_an_unaccented_french_month_is_still_a_date(m, sans, avec):
+    """Un log ASCII écrit `fevrier`. Refusé, il retombait sur la substitution
+    générique : un mot d'hôte là où le document annonce une date, et le modèle
+    cesse de pouvoir répondre « quand »."""
+    assert dates.parse(sans) is not None
+    assert dates.parse(sans)[0] == dates.parse(avec)[0]
+    assert re.match(r"^\d{1,2} [a-zéûîà]+ \d{4}$", m.substitute_value("DATE", sans))

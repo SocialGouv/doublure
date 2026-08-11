@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import unicodedata
 from typing import Callable
 
 MOIS_FR = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet",
@@ -31,11 +32,24 @@ _NUMERIQUE = re.compile(r"^(\d{1,2})([/.\-])(\d{1,2})\2(\d{4})$")
 _LITTERAL = re.compile(r"^(\d{1,2})(er)? ([^\W\d_]+) (\d{4})$", re.UNICODE)
 
 
+def _sans_accent(mot: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", mot.lower())
+                   if unicodedata.category(c) != "Mn")
+
+
+_MOIS_FR_NUS = tuple(_sans_accent(m) for m in MOIS_FR)
+
+
 def _mois_index(nom: str) -> int | None:
-    nom = nom.lower()
-    for table in (MOIS_FR, MOIS_EN):
-        if nom in table:
-            return table.index(nom) + 1
+    """Comparé SANS accent : `fevrier` et `aout` sont la norme dans un log
+    ASCII, et les refuser faisait retomber la date sur la substitution
+    générique — un mot d'hôte là où le document annonce une date, donc la
+    nature perdue sur la moitié des documents français."""
+    nu = _sans_accent(nom)
+    if nu in _MOIS_FR_NUS:
+        return _MOIS_FR_NUS.index(nu) + 1
+    if nu in MOIS_EN:
+        return MOIS_EN.index(nu) + 1
     return None
 
 
@@ -71,7 +85,7 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
         mois = _mois_index(m[3])
         if mois is None:
             return None
-        table = MOIS_FR if m[3].lower() in MOIS_FR else MOIS_EN
+        table = MOIS_FR if _sans_accent(m[3]) in _MOIS_FR_NUS else MOIS_EN
         capitale = m[3][:1].isupper()
         try:
             jour = dt.date(int(m[4]), mois, int(m[1]))

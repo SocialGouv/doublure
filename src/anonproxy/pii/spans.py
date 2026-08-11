@@ -107,7 +107,16 @@ _ECHAFAUDAGE = re.compile(r"\n[ \t]*\d+\t")
 #: d'outil, le modèle commence au numéro et non au saut de ligne qui le
 #: précède, donc le motif ci-dessus ne matche pas et le numéro se fait
 #: réécrire.
-_TETE_ECHAFAUDAGE = re.compile(r"^[ \t]*\d+\t")
+_TETE_ECHAFAUDAGE = re.compile(r"^( *)\d+\t")
+#: Le PADDING de `Read`, qui précède la span : les numéros sont alignés à
+#: droite, donc adossés à un début de ligne par des espaces. Le modèle commence
+#: sa span AU chiffre, pas aux espaces — le discriminant est donc dans le
+#: texte, pas dans la span.
+#:
+#: Sans lui, `12345\t…` d'un fichier tabulé passait pour un numéro de ligne :
+#: le matricule sortait de la span et partait EN CLAIR, sans entrée de coffre
+#: ni rien à compter.
+_PADDING_AVANT = re.compile(r"(?:^|\n) +$")
 
 
 def couper_echafaudage(spans: list[dict], text: str) -> list[dict]:
@@ -143,6 +152,8 @@ def _sans_tete(span: dict, text: str) -> dict:
     tete = _TETE_ECHAFAUDAGE.match(span.get("value", ""))
     if tete is None:
         return span
+    if not tete.group(1) and not _PADDING_AVANT.search(text[:span["start"]]):
+        return span  # pas de padding : c'est un identifiant, pas un numéro
     return _ajuster({**span, "start": span["start"] + tete.end()}, text) or span
 
 
