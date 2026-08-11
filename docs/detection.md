@@ -15,16 +15,22 @@ Neither subsumes the other, and an outage of **either** is a refusal. Carrying
 on without the personal-data pass would silently restore the state in which
 three names left a real session with nothing to count.
 
-The second model returns entities in pieces — `Ines Ferreira-K` then `onate`.
-They are reassembled by offset before anything else sees them: substituting the
-pieces would store half a name and let the other half leave, which is a leak
-wearing the shape of a substitution.
+The personal-data model is asked for its types **in natural language**, which
+makes their wording part of the detection: `address` finds what
+`postal address` does not, on the same text and the same model.
+
+Spans are still reassembled by offset and checked for shape before anything
+else sees them — a fragment would store half a name and let the other half
+leave, and a ticket number classed as an address turns the document the model
+reads into one about a different incident. Both were measured on a real file;
+the guards stay as a net even though the current model returns whole
+entities.
 
 | Path | When | Cost |
 |---|---|---|
 | transformer NER + regex recognizers | normal traffic | P95 **100.6 ms** on 2 KB (GPU) |
 | regex only | above `ANONPROXY_REGEX_THRESHOLD` (8000 chars) | 2.1 ms |
-| personal data | every request | ~1.1 s on 2 KB, measured |
+| personal data | every request | **~250 ms** on 1.1 KB, measured |
 
 The regex recognizers are what actually fire on infrastructure text — on
 synthetic log material the raw NER returned zero entities and every detection

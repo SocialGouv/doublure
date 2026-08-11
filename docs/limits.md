@@ -53,9 +53,10 @@ agent, with the proxy alone straddling both sides. That is not a rule to
 maintain but an **absence of route**. See
 [Network isolation](d9-network-isolation.md).
 
-## The four preserved attributes are leaks
+## The five preserved attributes are leaks
 
-Environment, `/24` co-membership, human vs service, internal vs external
+Environment, `/24` co-membership, human vs service, internal vs external, and
+the interval between two dates
 survive substitution on purpose (D1 usability). They are also exactly what a
 re-identification attempt would correlate on.
 
@@ -80,21 +81,22 @@ survives and an incident still reads as a sequence. The end-to-end proof that
 asserted this gap *inverted* has been turned the right way round — it failed
 the day the gap closed, which is what it was written to do.
 
-!!! warning "Recall depends on context, and it is measured"
+!!! note "Recall was measured, and it decided the model"
 
-    On a 1.1 KB incident file the model returned **two of the three people in
-    it**. The one it missed was detected at 0.96 when the same line was
-    submitted alone — so the miss is not a matter of document length but of
-    context.
+    The first model shipped here returned **two of the three people** in a
+    1.1 KB incident file. The third was found at 0.96 when its line was
+    submitted alone, so the miss was context, not length — and chunking bought
+    it back at 1527 ms against 315 ms.
 
-    Measured on that file: whole document 315 ms and the name missed;
-    300-character windows 669 ms, still missed; paragraphs 894 ms, still
-    missed; **line by line 1527 ms and found**, with two false positives.
-    Chunking therefore buys recall at roughly five times the latency, and the
-    false positives fall in the harmless direction — they substitute more.
+    Measuring an alternative was cheaper than paying that. GLiNER takes its
+    types in natural language, and asking for `address` rather than
+    `postal address` is the difference between finding the address and not:
+    **3/3 people, both dates and the address in one span, 249 ms**, and zero
+    spans on a pure infrastructure file. The chunking arbitration disappeared
+    with the measurement that made it unnecessary.
 
-    Left as an arbitration rather than decided quietly, because the cost lands
-    on every request of every session.
+    Formulating those labels is now a detection decision. Changing them without
+    measuring is changing the detector.
 
 !!! danger "Why this gap deserved its own service"
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Detection service for personal data — port 9100.
 #
-# Its own virtualenv, deliberately. The model needs `transformers >= 5`, and
+# Its own virtualenv, deliberately. The model brings its own heavy stack, and
 # the AnonShield environment is pinned and fragile: installing it there breaks
 # the detector that already works. That trap is documented in CLAUDE.md and it
 # has been paid.
@@ -12,10 +12,10 @@ VENV="${SERVICE_DIR}/.venv"
 PORT="${DOUBLURE_PII_PORT:-9100}"
 
 if [[ ! -x "${VENV}/bin/python" ]]; then
-  echo "→ création du venv du service (transformers >= 5, torch)…"
+  echo "→ création du venv du service (gliner, torch)…"
   uv venv "${VENV}" --python 3.12
   uv pip install --python "${VENV}/bin/python" \
-    "transformers>=5" torch accelerate fastapi "uvicorn[standard]"
+    gliner torch fastapi "uvicorn[standard]"
 fi
 
 # `.venv/bin/python` DIRECT, jamais `uv run` : `uv run` resynchronise

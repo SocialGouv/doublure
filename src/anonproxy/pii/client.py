@@ -21,9 +21,9 @@ from .spans import garder, merge_fragments
 #: mot n'est plus une adresse. La correspondance est ici, une seule fois — la
 #: dupliquer dans le service ferait deux endroits où la changer.
 TYPES_ACTIFS = {
-    "private_person": "PERSON",
-    "private_date": "DATE",
-    "private_address": "ADDRESS",
+    "person": "PERSON",
+    "date": "DATE",
+    "address": "ADDRESS",
 }
 
 
