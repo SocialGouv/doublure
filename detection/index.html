@@ -758,10 +758,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#two-paths" class="md-nav__link">
+  <a href="#two-detectors-composed" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Two paths
+        Two detectors, composed
       
     </span>
   </a>
@@ -1175,10 +1175,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#two-paths" class="md-nav__link">
+  <a href="#two-detectors-composed" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Two paths
+        Two detectors, composed
       
     </span>
   </a>
@@ -1286,7 +1286,35 @@
 <p>Detection answers one question: <strong>which spans of this text identify
 something?</strong> It runs in a separate process (D7) and returns spans with types
 and scores. What happens next — substitute, keep, ask — is decided on our side.</p>
-<h2 id="two-paths">Two paths<a class="headerlink" href="#two-paths" title="Permanent link">&para;</a></h2>
+<h2 id="two-detectors-composed">Two detectors, composed<a class="headerlink" href="#two-detectors-composed" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Detector</th>
+<th>Covers</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>infrastructure (AnonShield)</td>
+<td>hosts, addresses, images, secrets, 33 cyber labels</td>
+<td>separate process, GPL side</td>
+</tr>
+<tr>
+<td>personal data</td>
+<td><strong><code>PERSON</code></strong> — no cyber NER has that class</td>
+<td>separate process, Apache-2.0 side</td>
+</tr>
+</tbody>
+</table>
+<p>Neither subsumes the other, and an outage of <strong>either</strong> is a refusal. Carrying
+on without the personal-data pass would silently restore the state in which
+three names left a real session with nothing to count.</p>
+<p>The second model returns entities in pieces — <code>Ines Ferreira-K</code> then <code>onate</code>.
+They are reassembled by offset before anything else sees them: substituting the
+pieces would store half a name and let the other half leave, which is a leak
+wearing the shape of a substitution.</p>
 <table>
 <thead>
 <tr>
@@ -1305,6 +1333,11 @@ and scores. What happens next — substitute, keep, ask — is decided on our si
 <td>regex only</td>
 <td>above <code>ANONPROXY_REGEX_THRESHOLD</code> (8000 chars)</td>
 <td>2.1 ms</td>
+</tr>
+<tr>
+<td>personal data</td>
+<td>every request</td>
+<td>~1.1 s on 2 KB, measured</td>
 </tr>
 </tbody>
 </table>
