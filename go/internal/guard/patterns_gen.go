@@ -42,6 +42,12 @@ var sshPrivateVerifyMarks = []int{2}
 
 var vaultRules = []rule{
 	{
+		re: regexp.MustCompile(`(?i)\.doublure/`),
+	},
+	{
+		re: regexp.MustCompile(`(?i)\.anonshield/`),
+	},
+	{
 		re: regexp.MustCompile(`(?i)\.local/state/anonproxy`),
 	},
 	{

@@ -1990,8 +1990,12 @@ def test_le_repertoire_d_etat_renomme_reste_hors_de_portee(audit_log):
     """
     coffre = "vault" + ".db"
     cle = "anon_" + "secret_key"
+    # Les deux premiers ont un motif à LEUR NOM ; les deux suivants n'en ont
+    # pas, et c'est eux qui attestent que la règle protège le RÉPERTOIRE. Sans
+    # eux, ce test passait alors que le binaire Go laissait écrire
+    # `open-domains.txt` — donc laissait l'agent ouvrir sa propre sortie.
     for racine in ("~/.doublure/-home-jo-projet/", "~/.anonshield/-home-jo-projet/"):
-        for fichier in (coffre, cle):
+        for fichier in (coffre, cle, "open-domains.txt", "policy/settings.json"):
             cible = racine + fichier
             assert is_denied(run_hook("Read", {"file_path": cible}, audit_log)), cible
             assert is_denied(

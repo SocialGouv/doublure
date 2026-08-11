@@ -44,7 +44,7 @@ def _repertoire_etat() -> Path:
 
 
 STATE_DIR = _repertoire_etat()
-AUDIT_LOG = Path(os.environ.get("ANONPROXY_AUDIT_LOG", STATE_DIR / "canal2_audit.jsonl"))
+AUDIT_LOG = Path(os.environ.get("ANONPROXY_AUDIT_LOG", STATE_DIR / "hook-audit.jsonl"))
 
 #: Claude Code lance ce hook comme un exécutable, donc sous le python SYSTÈME
 #: (`#!/usr/bin/env python3`), qui n'a pas la grammaire. On se relance sous
