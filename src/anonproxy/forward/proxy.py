@@ -233,20 +233,11 @@ class ForwardProxy:
         """
         hote, _, port = destination.rpartition(":")
         hote = hote.strip("[]")
-        try:
-            amont_l, amont_e = await asyncio.open_connection(
-                hote, int(port), ssl=self.upstream_context, server_hostname=hote)
-        except ssl.SSLCertVerificationError as exc:
-            await self._refuser(
-                ecrivain, destination,
-                f"certificat amont invérifiable : {exc.verify_message or exc}",
-                verdict=Verdict.INSPECT)
+        ouvert = await self._ouvrir_amont(hote, port, ecrivain, destination,
+                                          en_clair=True)
+        if ouvert is None:
             return
-        except (OSError, ValueError) as exc:
-            await self._refuser(ecrivain, destination,
-                                f"connexion impossible : {exc}",
-                                verdict=Verdict.INSPECT)
-            return
+        amont_l, amont_e = ouvert
 
         self._tracer(destination, Verdict.INSPECT, "corps lus et réécrits")
         ecrivain.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -257,12 +248,47 @@ class ForwardProxy:
             amont_e.close()
             return  # le client a refusé notre feuille : rien à dire en clair
 
+        # UNE connexion amont PAR ÉCHANGE. Le tour 6 avait fermé la fenêtre
+        # courte du vol de réponse en vérifiant que le tampon amont était vide ;
+        # un amont qui attend 150 ms avant de glisser sa fausse réponse la
+        # rouvrait — 10 vols sur 10 mesurés. Contrôler un état qui bouge ne
+        # ferme pas la classe ; ne rien réutiliser la ferme. Le client, lui,
+        # garde sa connexion : c'est nous qui ne recyclons pas la nôtre.
         try:
-            while await self._echange(hote, destination, lecteur, ecrivain,
-                                      amont_l, amont_e):
-                pass
+            while True:
+                encore = await self._echange(hote, destination, lecteur,
+                                             ecrivain, amont_l, amont_e)
+                amont_e.close()
+                if not encore:
+                    return
+                ouvert = await self._ouvrir_amont(hote, int(port), ecrivain,
+                                                  destination)
+                if ouvert is None:
+                    return
+                amont_l, amont_e = ouvert
         finally:
             amont_e.close()
+
+    async def _ouvrir_amont(self, hote: str, port, ecrivain, destination: str,
+                            *, en_clair: bool = False):
+        """Ouvre l'amont, en VÉRIFIANT son certificat. None si c'est refusé.
+
+        `en_clair` : avant la réponse 200, le refus part en HTTP lisible, que
+        le client comprend. Après, il n'y a plus que le tunnel.
+        """
+        try:
+            return await asyncio.open_connection(
+                hote, int(port), ssl=self.upstream_context, server_hostname=hote)
+        except ssl.SSLCertVerificationError as exc:
+            raison = f"certificat amont invérifiable : {exc.verify_message or exc}"
+        except (OSError, ValueError) as exc:
+            raison = f"connexion impossible : {exc}"
+        if en_clair:
+            await self._refuser(ecrivain, destination, raison,
+                                verdict=Verdict.INSPECT)
+        else:
+            await self._echouer(ecrivain, destination, raison)
+        return None
 
     async def _echange(self, hote: str, destination: str,
                        cl: asyncio.StreamReader, ce: asyncio.StreamWriter,
@@ -275,9 +301,9 @@ class ForwardProxy:
         requete = await self._lire_entete(cl)
         if not requete:
             return False
-        ligne, entetes = _analyser(requete)
-        methode = ligne.split(" ", 1)[0].upper()
         try:
+            ligne, entetes = _analyser(requete)
+            methode = ligne.split(" ", 1)[0].upper()
             corps = await self._lire_corps(cl, entetes, reponse=False)
         except _CorpsIllisible as exc:
             await self._echouer(ce, destination, str(exc))
@@ -290,7 +316,11 @@ class ForwardProxy:
         reponse = await self._lire_entete(al)
         if not reponse:
             return False
-        ligne_r, entetes_r = _analyser(reponse)
+        try:
+            ligne_r, entetes_r = _analyser(reponse)
+        except _CorpsIllisible as exc:
+            await self._echouer(ce, destination, str(exc))
+            return False
         try:
             statut = int(ligne_r.split(" ")[1])
         except (IndexError, ValueError):
@@ -336,7 +366,16 @@ class ForwardProxy:
         if "chunked" in entetes.get("transfer-encoding", "").lower():
             return await self._lire_morceaux(lecteur)
         if (taille := entetes.get("content-length")) is not None:
-            n = int(taille)
+            # `int()` qui échoue, ou un nombre NÉGATIF passé à `readexactly` :
+            # deux exceptions qui n'étaient pas `_CorpsIllisible`, donc qui
+            # remontaient jusqu'à la tâche et tuaient le tunnel sans un mot.
+            try:
+                n = int(taille)
+            except ValueError as exc:
+                raise _CorpsIllisible(
+                    f"content-length illisible : {taille!r}") from exc
+            if n < 0:
+                raise _CorpsIllisible(f"content-length négatif : {n}")
             if n > _MAX_CORPS:
                 raise _CorpsIllisible(
                     f"corps de {n} octets : au-delà de ce qui peut être relu")
@@ -352,10 +391,18 @@ class ForwardProxy:
                 "être relue, et la relayer intacte serait un fail-open")
         return b""
 
+    async def _ligne(self, lecteur: asyncio.StreamReader) -> bytes:
+        """Une ligne, ou un refus. `LimitOverrunError` n'hérite pas de
+        `ConnectionError` : elle traversait tout et tuait la tâche."""
+        try:
+            return await lecteur.readuntil(b"\r\n")
+        except asyncio.LimitOverrunError as exc:
+            raise _CorpsIllisible(f"ligne démesurée : {exc}") from exc
+
     async def _lire_morceaux(self, lecteur: asyncio.StreamReader) -> bytes:
         morceaux = bytearray()
         while True:
-            ligne = (await lecteur.readuntil(b"\r\n")).strip()
+            ligne = (await self._ligne(lecteur)).strip()
             try:
                 # Sans le `or b"0"` d'origine : une ligne VIDE passait pour la
                 # marque de fin, le corps était tronqué en silence et le reste
@@ -364,6 +411,10 @@ class ForwardProxy:
             except ValueError as exc:
                 raise _CorpsIllisible(
                     f"taille de morceau illisible : {ligne!r}") from exc
+            if taille < 0:
+                # `int(b"-5", 16)` vaut -5 sans lever : c'est `readexactly` qui
+                # tombait, plus loin et sans être rattrapé.
+                raise _CorpsIllisible(f"taille de morceau négative : {taille}")
             if taille == 0:
                 # Une remorque est `*(field-line CRLF) CRLF`. N'en consommer
                 # qu'UNE ligne laissait le reste dans le tampon, et ce reste
@@ -372,7 +423,7 @@ class ForwardProxy:
                 # Le commentaire d'origine promettait « puis ligne vide » ; le
                 # code ne la lisait pas.
                 for _ in range(_MAX_REMORQUE):
-                    if await lecteur.readuntil(b"\r\n") == b"\r\n":
+                    if await self._ligne(lecteur) == b"\r\n":
                         return bytes(morceaux)
                 raise _CorpsIllisible("remorque interminable : framing refusé")
             if len(morceaux) + taille > _MAX_CORPS:
@@ -443,6 +494,13 @@ def _analyser(entete: bytes) -> tuple[str, dict[str, str]]:
     entetes: dict[str, str] = {}
     for ligne in lignes[1:]:
         nom, _, valeur = ligne.partition(":")
+        if "\n" in valeur or "\r" in valeur:
+            # Le découpage coupe sur `\r\n` ; un `\n` SEUL au milieu d'une
+            # valeur passait, était recopié tel quel, et un client qui accepte
+            # le `\n` seul comme terminateur — la RFC 7230 le permet — lisait
+            # un en-tête injecté par l'amont.
+            raise _CorpsIllisible(
+                f"en-tête {nom.strip()!r} : caractère de contrôle interdit")
         if nom.strip():
             # Comparés en minuscules : HTTP les déclare insensibles à la casse,
             # et `Content-Length` doit décider comme `content-length`.

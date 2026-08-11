@@ -213,3 +213,108 @@ def test_a_one_shot_request_with_connection_close_is_not_refused(
         assert b"200 OK" in recu, recu[:300]
     finally:
         proxy.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Tour 7 — deux règles, pas cinq rustines
+# --------------------------------------------------------------------------- #
+
+
+class OrigineRetardee(OrigineScriptee):
+    """Amont qui envoie sa réponse, ATTEND, puis glisse la suivante.
+
+    Le contrôle de résidu du tour 6 lit un état qui bouge : il ferme la fenêtre
+    courte (octets collés à la réponse) et laisse la longue, plus facile à
+    provoquer. Mesuré : 10 vols sur 10.
+    """
+
+    def _connexion(self, brut):
+        import time
+        try:
+            tls = self.ctx.wrap_socket(brut, server_side=True)
+        except (ssl.SSLError, OSError):
+            return
+        try:
+            entete = b""
+            while b"\r\n\r\n" not in entete:
+                morceau = tls.recv(4096)
+                if not morceau:
+                    return
+                entete += morceau
+            self.appels += 1
+            tls.sendall(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n"
+                        b"connection: keep-alive\r\n\r\nOK")
+            time.sleep(0.15)
+            tls.sendall(b"HTTP/1.1 418 pwn\r\ncontent-length: 10\r\n"
+                        b"connection: keep-alive\r\n\r\nCORPS_FAKE")
+            while True:
+                if not tls.recv(4096):
+                    return
+        except OSError:
+            pass
+
+
+def test_a_delayed_smuggle_cannot_forge_the_next_response(
+        interception, autorite_origine, tmp_path):
+    """CRITIQUE. Contrôler un tampon à un instant T ne dit rien de T+150 ms.
+    La règle qui ferme la CLASSE : on ne réutilise jamais une connexion
+    amont — le résidu n'a alors nulle part où atterrir."""
+    origine = OrigineRetardee(autorite_origine, tmp_path, [])
+    proxy = ForwardProxy(
+        ForwardPolicy(inspect=["127.0.0.1"], tunnel=[]), interception,
+        upstream_context=ssl.create_default_context(
+            cafile=str(autorite_origine.cert_path)))
+    proxy.start_in_thread()
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert b"418 pwn" not in recu, recu[:400]
+        assert b"CORPS_FAKE" not in recu, recu[:400]
+    finally:
+        proxy.stop()
+
+
+@pytest.mark.parametrize("entete, corps", [
+    (b"content-length: abc", b"x"),
+    (b"content-length: -5", b"x"),
+    (b"content-length:", b"x"),
+    (b"transfer-encoding: chunked", b"-5\r\nxxxxx\r\n0\r\n\r\n"),
+    (b"transfer-encoding: chunked", b"zz\r\nxxxxx\r\n0\r\n\r\n"),
+])
+def test_a_malformed_framing_answers_instead_of_dying(
+        interception, autorite_origine, tmp_path, entete, corps):
+    """HAUT, et c'est UNE famille : toute exception qui n'est pas
+    `_CorpsIllisible` remontait jusqu'à la tâche asyncio, et le client sortait
+    du tunnel sans un mot. Le tour 6 avait paré ce mode d'échec pour la ligne
+    de statut — à UN endroit, alors qu'il était présent à cinq."""
+    reponse = (b"HTTP/1.1 200 OK\r\n" + entete +
+               b"\r\nconnection: close\r\n\r\n" + corps)
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             [reponse])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "le client n'a RIEN reçu : la tâche est morte en silence"
+        assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()
+
+
+def test_a_header_value_cannot_carry_a_bare_newline(
+        interception, autorite_origine, tmp_path):
+    """MOYEN-HAUT. `\n` seul survivait au découpage (qui coupe sur `\r\n`) et
+    était recopié tel quel. Un client qui accepte le `\n` seul comme
+    terminateur — la RFC 7230 le permet — lit alors un en-tête que l'amont a
+    injecté."""
+    reponse = (b"HTTP/1.1 200 OK\r\n"
+               b"content-type: text/html\nSet-Cookie: PWN=1; path=/\r\n"
+               b"content-length: 2\r\nconnection: close\r\n\r\nok")
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             [reponse])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        # Exiger le 502 : sans lui, une tâche morte satisfait aussi
+        # « pas de Set-Cookie », et le test passerait pour la mauvaise raison.
+        assert recu, "le client n'a RIEN reçu : la tâche est morte en silence"
+        assert b"Set-Cookie" not in recu, recu[:300]
+        assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()
