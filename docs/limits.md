@@ -61,9 +61,32 @@ re-identification attempt would correlate on.
 
 ## Detection gaps
 
-Dates, postal addresses and customer names are **not detected**. This is
-documented, not a surprise: an end-to-end test asserts it *inverted*, and will
-fail the day the gap closes.
+**No person is detected. None.** Not a customer, not the on-call engineer, not
+the reporter of a ticket — in any language. The detection model is a
+**cyber-security** NER: its 33 labels include `MALWARE`, `THREAT_ACTOR`,
+`CVE_ID`, `LOCATION` and `ORGANIZATION`, and **`PERSON` is not among them**.
+Measured, not inferred: `Barack Obama met Angela Merkel in Berlin` returns one
+span, `Berlin`.
+
+Dates and postal addresses are not detected either.
+
+!!! danger "This gap leaves no trace"
+
+    A value nobody detected produces no vault entry, no unresolved surrogate,
+    and no `public_by_shape` line — that list counts what a *form rule* opened,
+    not what was never seen. So nothing in the logs distinguishes "there was no
+    name in that file" from "three names went out in the clear". The only way
+    to know is to ask the detector, which is how this was found.
+
+    For a GDPR assessment, say it plainly: the most directly identifying
+    category in an incident ticket is the one that is not covered.
+
+The surrogate engine **can** substitute a person — it has a dedicated branch
+that preserves the word count, so `Marie-Anne De La Fontaine` does not come
+back as two tokens. Nothing ever feeds it.
+
+An end-to-end test asserts the date gap *inverted*, and will fail the day it
+closes.
 
 ## Residuals that are counted
 
