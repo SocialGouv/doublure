@@ -80,6 +80,22 @@ survives and an incident still reads as a sequence. The end-to-end proof that
 asserted this gap *inverted* has been turned the right way round — it failed
 the day the gap closed, which is what it was written to do.
 
+!!! warning "Recall depends on context, and it is measured"
+
+    On a 1.1 KB incident file the model returned **two of the three people in
+    it**. The one it missed was detected at 0.96 when the same line was
+    submitted alone — so the miss is not a matter of document length but of
+    context.
+
+    Measured on that file: whole document 315 ms and the name missed;
+    300-character windows 669 ms, still missed; paragraphs 894 ms, still
+    missed; **line by line 1527 ms and found**, with two false positives.
+    Chunking therefore buys recall at roughly five times the latency, and the
+    false positives fall in the harmless direction — they substitute more.
+
+    Left as an arbitration rather than decided quietly, because the cost lands
+    on every request of every session.
+
 !!! danger "Why this gap deserved its own service"
 
     A value nobody detects produces no vault entry, no unresolved surrogate,

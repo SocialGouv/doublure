@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from ..detect import DetectionUnavailable
-from .spans import merge_fragments
+from .spans import garder, merge_fragments
 
 #: Étiquettes du modèle vers nos types. Une entrée n'est ajoutée ici QUE
 #: lorsque le moteur sait produire un substitut de même nature : une date tirée
@@ -52,9 +52,10 @@ class PiiClient:
             for s in brut
             if s.get("type") in TYPES_ACTIFS and s.get("score", 0) >= self.min_score
         ]
-        # Le modèle coupe au milieu des mots : recomposer AVANT de rendre, sinon
-        # la moitié d'un nom entre au coffre et l'autre part.
-        return merge_fragments(spans, text)
+        # Recomposer AVANT de filtrer : la garde de forme juge une ENTITÉ, et
+        # un fragment n'en est pas une — `Ferreira-K` seul n'a ni deux mots ni
+        # majuscule là où l'entier en a.
+        return [s for s in merge_fragments(spans, text) if garder(s)]
 
     def health(self) -> dict[str, Any]:
         try:

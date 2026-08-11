@@ -142,9 +142,18 @@ fails on any import that crosses, in either direction. Details:
 
 ## Known limits
 
-Channel 2 (Bash, MCP) is not reversible: the hook blocks, it does not
-pseudonymise. Four destinations out of five do not go through
-`ANTHROPIC_BASE_URL` — remote MCP servers, connectors, the npm registry.
+**Bash is not reversible, and cannot be**: a `kubectl` command has to reach the
+real cluster, so there is nothing to substitute. The hook blocks before
+execution; that is the whole of what this channel gets.
+
+**Remote MCP no longer belongs in that sentence.** `task forward -- <agent>`
+runs any agent behind a forward proxy that terminates TLS and pseudonymises
+JSON-RPC bodies both ways. It is not the default path — `task session` still
+only covers the model API — the destination list is written by the operator,
+and it has **not yet been exercised by a real session**.
+
+Four destinations out of five ignore `ANTHROPIC_BASE_URL`; none of them ignore
+an explicit proxy, which is what makes the above possible.
 
 **On a workstation, D9 is not met**: the egress harness detects, it does not
 prevent. The only shape where the proxy really is the sole path is a

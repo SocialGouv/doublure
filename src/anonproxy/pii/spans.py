@@ -12,6 +12,8 @@ injectivity guarantee (D6) broken from the other side.
 """
 from __future__ import annotations
 
+import re
+
 #: Ce qui peut se trouver À L'INTÉRIEUR d'un nom entre deux fragments : la
 #: coupure d'un mot (rien), une espace, un trait d'union, une apostrophe. Une
 #: virgule, un point ou un mot séparent deux entités — pas deux morceaux d'une.
@@ -20,6 +22,50 @@ _LIAISONS = set(" -'’")
 _ECART_MAX = 2
 #: Le modèle rend volontiers l'espace qui précède le mot.
 _BORDURES = " \t\n\r,;:.!?()[]{}\"'"
+
+
+#: Vocabulaire de voie : sa présence suffit à faire une adresse d'un seul mot
+#: composé. Sans lui, il faut au moins deux jetons ou une virgule.
+_VOIES = ("rue", "avenue", "boulevard", "impasse", "place", "chemin", "quai",
+          "route", "street", "road", "lane", "drive", "way")
+
+
+def garder(span: dict) -> bool:
+    """Ce span a-t-il la FORME de ce que le modèle en dit ?
+
+    Mesuré sur un ticket réel : le numéro `4218` est rendu `ADDRESS` à 1.00, et
+    `lica-` — quatre lettres prises au milieu de `db-replica-02-prod` — aussi.
+    Ni l'un ni l'autre ne fuit : ils substituent PLUS que nécessaire, ce qui est
+    le sens sans danger. Mais tous deux abîment le texte, et un modèle qui lit
+    un document mutilé répond sur un document mutilé.
+
+    La garde est volontairement grossière. Plus fine, elle serait un second
+    détecteur en train de contredire le premier — et c'est le premier qui a vu
+    le contexte.
+    """
+    valeur = span.get("value", "").strip()
+    if not valeur:
+        return False
+    etype = span.get("type")
+    mots = [m for m in re.split(r"[\s,]+", valeur) if m]
+
+    if etype == "ADDRESS":
+        if not any(c.isalpha() for c in valeur):
+            return False  # `4218`, `75006` : un nombre n'est pas une adresse
+        if any(m.lower().strip(".,") in _VOIES for m in mots):
+            return True
+        return len(mots) >= 2 or "," in valeur
+
+    if etype == "PERSON":
+        if not any(c.isalpha() for c in valeur):
+            return False  # `14`
+        # Un mot unique tout en minuscules est du vocabulaire, pas quelqu'un.
+        return len(mots) >= 2 or valeur[:1].isupper()
+
+    if etype == "DATE":
+        return any(c.isdigit() for c in valeur)
+
+    return True
 
 
 def merge_fragments(spans: list[dict], text: str) -> list[dict]:
