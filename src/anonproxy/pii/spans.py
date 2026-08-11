@@ -24,6 +24,43 @@ _ECART_MAX = 2
 _BORDURES = " \t\n\r,;:.!?()[]{}\"'"
 
 
+def resserrer(spans: list[dict], text: str) -> list[dict]:
+    """Réduit un span de DATE à la date qu'il contient.
+
+    Ce qui entre au coffre doit être ce que le modèle citera. Sur le texte tel
+    que l'outil `Read` l'envoie, le détecteur rend le champ avec son heure —
+    `3 février 2026 à 14h32` — et cette chaîne entière devenait la clé. Le
+    modèle citait la date seule, plus rien ne la reconnaissait, et l'opérateur
+    lisait une date fictive **sans aucun moyen de le savoir** : un substitut non
+    résolu est compté, un substitut que personne ne reconnaît comme tel ne
+    l'est pas.
+
+    La deuxième date du même fichier, sans heure après elle, revenait
+    parfaitement. Un document, un type, deux sorts — pour quatre caractères
+    d'entourage.
+
+    Seul le type DATE est resserré : une adresse réduite à sa date n'est plus
+    une adresse.
+    """
+    from ..surrogates.dates import chercher
+
+    sortie = []
+    for span in spans:
+        if span.get("type") != "DATE":
+            sortie.append(span)
+            continue
+        trouve = chercher(span.get("value", ""))
+        if trouve is None:
+            sortie.append(span)
+            continue
+        debut, fin = trouve
+        sortie.append({**span,
+                       "start": span["start"] + debut,
+                       "end": span["start"] + fin,
+                       "value": span["value"][debut:fin]})
+    return sortie
+
+
 #: L'ÉCHAFAUDAGE d'une sortie d'outil : un retour à la ligne, des espaces, un
 #: numéro, une tabulation. C'est ainsi que `Read` numérote ce qu'il rend, et
 #: une entité qui court sur deux lignes l'avale.

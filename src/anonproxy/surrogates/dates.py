@@ -87,6 +87,8 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
     return None
 
 
+
+
 #: Les formes reconnues, CHERCHÉES dans le span plutôt qu'imposées à lui.
 #:
 #: Un détecteur rend le champ tel qu'il est écrit — `3 février 2026 à 14h32`,
@@ -100,6 +102,20 @@ _CHERCHE = (
     re.compile(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}"),
     re.compile(r"\d{1,2}(?:er)? [^\W\d_]+ \d{4}", re.UNICODE),
 )
+
+
+def chercher(valeur: str) -> tuple[int, int] | None:
+    """Bornes de la date CONTENUE dans la valeur, ou None.
+
+    Sert d'abord à resserrer un span avant qu'il n'entre au coffre : la clé
+    doit être la date, pas le champ qui la porte, sinon le modèle citant la
+    date seule ne retrouve rien.
+    """
+    for motif in _CHERCHE:
+        trouve = motif.search(valeur)
+        if trouve is not None and parse(trouve.group(0)) is not None:
+            return trouve.start(), trouve.end()
+    return None
 
 
 def shift(valeur: str, jours: int) -> str | None:

@@ -125,9 +125,16 @@ Every one of these is a question of **inventory**, not of shape. Filling
 ## Residuals that are not counted
 
 **A surrogate truncated by the model is not restored, and nothing counts it.**
-It is not a leak — fiction stays fiction — but it is a blind spot in the
-observability, which contradicts the rule that an accepted residual must be
-countable. The announcement asks the model to quote identifiers whole; that
+It is not a leak — fiction stays fiction — but the operator is shown a
+fictional value with no way to tell, and an unresolved surrogate is counted
+while one nobody recognises as such is not.
+
+That stopped being theoretical: a date field detected as `3 février 2026 à
+14h32` made the whole string the vault key, so the model quoting the date alone
+matched nothing and the operator read a date that never existed. Spans are now
+narrowed to the entity before they reach the vault — the key is the date, not
+the field carrying it. The class remains for anything the model paraphrases
+rather than quotes; the announcement asks for whole identifiers, which
 mitigates without measuring.
 
 ## Operational

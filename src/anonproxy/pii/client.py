@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from ..detect import DetectionUnavailable
-from .spans import couper_echafaudage, garder, merge_fragments
+from .spans import couper_echafaudage, garder, merge_fragments, resserrer
 
 #: Étiquettes du modèle vers nos types. Une entrée n'est ajoutée ici QUE
 #: lorsque le moteur sait produire un substitut de même nature : une date tirée
@@ -56,7 +56,8 @@ class PiiClient:
         # un fragment n'en est pas une — `Ferreira-K` seul n'a ni deux mots ni
         # majuscule là où l'entier en a. Puis couper l'échafaudage de la sortie
         # d'outil, qu'une entité à cheval sur deux lignes avale.
-        entiers = couper_echafaudage(merge_fragments(spans, text), text)
+        entiers = resserrer(
+            couper_echafaudage(merge_fragments(spans, text), text), text)
         return [s for s in entiers if garder(s)]
 
     def health(self) -> dict[str, Any]:
