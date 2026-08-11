@@ -136,6 +136,12 @@ def shift(valeur: str, jours: int) -> str | None:
         trouve = motif.search(valeur)
         if trouve is None:
             continue
+        if trouve.group(0) == valeur:
+            # `parse` a déjà refusé cette valeur entière : se rappeler dessus
+            # ne peut que recommencer. Une date qui a la FORME d'une date sans
+            # en être une (`2020-02-30`, courant dans un export) faisait ainsi
+            # exploser la pile, et `RecursionError` n'est rattrapée nulle part.
+            return None
         decalee = shift(trouve.group(0), jours)
         if decalee is not None:
             return valeur[:trouve.start()] + decalee + valeur[trouve.end():]

@@ -103,6 +103,11 @@ def resserrer(spans: list[dict], text: str) -> list[dict]:
 #: La tabulation qui suit immédiatement des chiffres en tête de ligne est ce
 #: qui rend le motif sûr : aucune adresse, aucun nom n'en contient.
 _ECHAFAUDAGE = re.compile(r"\n[ \t]*\d+\t")
+#: Le même échafaudage EN TÊTE de span : sur la première ligne d'une sortie
+#: d'outil, le modèle commence au numéro et non au saut de ligne qui le
+#: précède, donc le motif ci-dessus ne matche pas et le numéro se fait
+#: réécrire.
+_TETE_ECHAFAUDAGE = re.compile(r"^[ \t]*\d+\t")
 
 
 def couper_echafaudage(spans: list[dict], text: str) -> list[dict]:
@@ -131,7 +136,14 @@ def couper_echafaudage(spans: list[dict], text: str) -> list[dict]:
         for a, b in morceaux:
             if (ajuste := _ajuster({**span, "start": a, "end": b}, text)):
                 sortie.append(ajuste)
-    return sortie
+    return [_sans_tete(s, text) for s in sortie]
+
+
+def _sans_tete(span: dict, text: str) -> dict:
+    tete = _TETE_ECHAFAUDAGE.match(span.get("value", ""))
+    if tete is None:
+        return span
+    return _ajuster({**span, "start": span["start"] + tete.end()}, text) or span
 
 
 #: Vocabulaire de voie : sa présence suffit à faire une adresse d'un seul mot

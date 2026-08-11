@@ -350,7 +350,7 @@ class SurrogateEngine:
                 rendu.append(mot.capitalize() if nu[:1].isupper() else mot)
         return "".join(rendu)
 
-    def _fake_date(self, value: str) -> str | None:
+    def _fake_date(self, value: str, attempt: int = 0) -> str | None:
         """Décale la date d'UNE constante par portée.
 
         La constante ne dépend PAS de la valeur : c'est ce qui préserve les
@@ -362,7 +362,13 @@ class SurrogateEngine:
         deux dates survit à la substitution.
         """
         etendue = self._DECALAGE_MAX - self._DECALAGE_MIN
-        jours = self._DECALAGE_MIN + self._idx("date-shift") % etendue
+        # `attempt` décale d'un jour de plus à chaque essai. Deux ÉCRITURES
+        # d'un même jour (`1 janvier` et `1er janvier`) sont deux chaînes à
+        # restaurer chacune vers elle-même, donc deux entrées de coffre — et
+        # deux entrées ne peuvent pas partager un substitut (D6). Sans cette
+        # variation, les 64 tentatives rendaient la même date et la requête
+        # tombait en 503 sur un document qui mêle les deux formes.
+        jours = self._DECALAGE_MIN + self._idx("date-shift") % etendue + attempt
         return dates.shift(value, jours)
 
     # -- API ---------------------------------------------------------------- #
@@ -1110,7 +1116,7 @@ class SurrogateEngine:
         if etype in ("FILE_PATH", "USER_PATH"):
             return self._fake_path(v, attempt)
 
-        if etype == "DATE" and (faux := self._fake_date(value)) is not None:
+        if etype == "DATE" and (faux := self._fake_date(value, attempt)) is not None:
             return faux
 
         if etype == "ADDRESS":

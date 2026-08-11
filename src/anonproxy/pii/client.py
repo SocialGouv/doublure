@@ -47,10 +47,14 @@ class PiiClient:
                 f"détecteur de données personnelles injoignable "
                 f"({self.base_url}) : {exc}") from exc
 
+        # Le seuil ne s'applique PAS ici : un fragment sous le seuil était
+        # jeté avant que la fusion puisse le rattacher, et son texte réel
+        # restait en clair, collé au substitut du morceau resté — une fuite qui
+        # a l'apparence d'une substitution. C'est l'ENTITÉ qu'on juge, et
+        # `merge_fragments` lui donne déjà le score du morceau le moins sûr.
         spans = [
             {**s, "type": TYPES_ACTIFS[s["type"]]}
-            for s in brut
-            if s.get("type") in TYPES_ACTIFS and s.get("score", 0) >= self.min_score
+            for s in brut if s.get("type") in TYPES_ACTIFS
         ]
         # Recomposer AVANT de filtrer : la garde de forme juge une ENTITÉ, et
         # un fragment n'en est pas une — `Ferreira-K` seul n'a ni deux mots ni
@@ -58,7 +62,8 @@ class PiiClient:
         # d'outil, qu'une entité à cheval sur deux lignes avale.
         entiers = resserrer(
             couper_echafaudage(merge_fragments(spans, text), text), text)
-        return [s for s in entiers if garder(s)]
+        return [s for s in entiers
+                if garder(s) and s.get("score", 0) >= self.min_score]
 
     def health(self) -> dict[str, Any]:
         try:

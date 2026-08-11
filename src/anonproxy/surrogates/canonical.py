@@ -141,6 +141,17 @@ def canonicalize(etype: str, value: str) -> Canonical:
     # cyrillique reste une entité distincte, et doit le rester (sinon deux
     # réels différents partageraient un substitut : collision).
     v = unicodedata.normalize("NFC", value.strip())
+    if etype == "DATE":
+        # `1 janvier 2020` et `1er janvier 2020` sont le MÊME jour. Gardés
+        # distincts, ils produisaient deux entrées de coffre pour un substitut
+        # identique — le conflit d'unicité que la régénération ne peut pas
+        # résoudre, donc 503 en séance, sur un document qui mêle la forme
+        # formelle et la forme de tableau.
+        from .dates import parse as _parse_date
+        lu = _parse_date(v)
+        if lu is not None:
+            return Canonical(key=lu[0].isoformat(), kind="date",
+                             attrs={}, normalized=v)
     if etype in ("URL", "REPO"):
         # Les identifiants d'accès d'une URL (`https://user:jeton@hôte/…`) sont
         # des SECRETS : ils ne doivent pas entrer dans la clé du coffre, sinon
