@@ -1418,9 +1418,15 @@ silences.</p>
 <code>config/inventory.txt</code> closes them for your environment; no form rule can.</p>
 <h2 id="residuals-that-are-not-counted">Residuals that are not counted<a class="headerlink" href="#residuals-that-are-not-counted" title="Permanent link">&para;</a></h2>
 <p><strong>A surrogate truncated by the model is not restored, and nothing counts it.</strong>
-It is not a leak — fiction stays fiction — but it is a blind spot in the
-observability, which contradicts the rule that an accepted residual must be
-countable. The announcement asks the model to quote identifiers whole; that
+It is not a leak — fiction stays fiction — but the operator is shown a
+fictional value with no way to tell, and an unresolved surrogate is counted
+while one nobody recognises as such is not.</p>
+<p>That stopped being theoretical: a date field detected as <code>3 février 2026 à
+14h32</code> made the whole string the vault key, so the model quoting the date alone
+matched nothing and the operator read a date that never existed. Spans are now
+narrowed to the entity before they reach the vault — the key is the date, not
+the field carrying it. The class remains for anything the model paraphrases
+rather than quotes; the announcement asks for whole identifiers, which
 mitigates without measuring.</p>
 <h2 id="operational">Operational<a class="headerlink" href="#operational" title="Permanent link">&para;</a></h2>
 <ul>
