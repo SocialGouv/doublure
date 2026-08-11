@@ -1311,10 +1311,15 @@ and scores. What happens next — substitute, keep, ask — is decided on our si
 <p>Neither subsumes the other, and an outage of <strong>either</strong> is a refusal. Carrying
 on without the personal-data pass would silently restore the state in which
 three names left a real session with nothing to count.</p>
-<p>The second model returns entities in pieces — <code>Ines Ferreira-K</code> then <code>onate</code>.
-They are reassembled by offset before anything else sees them: substituting the
-pieces would store half a name and let the other half leave, which is a leak
-wearing the shape of a substitution.</p>
+<p>The personal-data model is asked for its types <strong>in natural language</strong>, which
+makes their wording part of the detection: <code>address</code> finds what
+<code>postal address</code> does not, on the same text and the same model.</p>
+<p>Spans are still reassembled by offset and checked for shape before anything
+else sees them — a fragment would store half a name and let the other half
+leave, and a ticket number classed as an address turns the document the model
+reads into one about a different incident. Both were measured on a real file;
+the guards stay as a net even though the current model returns whole
+entities.</p>
 <table>
 <thead>
 <tr>
@@ -1337,7 +1342,7 @@ wearing the shape of a substitution.</p>
 <tr>
 <td>personal data</td>
 <td>every request</td>
-<td>~1.1 s on 2 KB, measured</td>
+<td><strong>~250 ms</strong> on 1.1 KB, measured</td>
 </tr>
 </tbody>
 </table>
