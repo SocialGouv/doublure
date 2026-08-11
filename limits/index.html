@@ -1453,6 +1453,10 @@ that truncates, which answers 502 since round 8. A stalled exchange waits.</p>
 <td>removing those extensions turns <code>main.py</code> and <code>lib.rs</code> into fake domains, which has already broken a real session</td>
 </tr>
 <tr>
+<td>a fictional external host on a real TLD (<code>alpine-relecloud.net</code>) — <strong>only under <code>domaines_fictifs=tld_reels</code></strong></td>
+<td>the default is now the RFC 2606 reserved space, which is provably nobody's; the real-TLD space stays reachable, but the operator has to declare it</td>
+</tr>
+<tr>
 <td>a package under a third-party prefix (<code>sigs.k8s.io/tenant-acme</code>)</td>
 <td>indistinguishable from a real module without an inventory</td>
 </tr>
@@ -1494,6 +1498,15 @@ long-lived stream are indistinguishable — that is what inspection buys: it
 knows what it is waiting for. Nor to a <strong>client</strong> holding its connection open
 between two turns, where no upstream socket is held and closing would cost a
 handshake per pause.</p>
+<p><strong>What an inactivity deadline cannot catch, by construction</strong>: an upstream
+that sends one byte just under the deadline holds an exchange indefinitely. A
+total ceiling would catch it and would also cut a large body arriving slowly —
+the twin defect, and the reason the deadline is written this way. It stays
+bounded by what an attacker needs first: the destination must be <em>declared</em>
+inspectable, and every request is one the agent itself made. Likewise, a
+response that stays silent for over two minutes is given up on even if it
+would have arrived — on an inspected destination the whole body is buffered
+anyway, so a genuine stream is already refused there for a different reason.</p>
 <h2 id="operational">Operational<a class="headerlink" href="#operational" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>The detector does not reload its lists.</strong> Change <code>config/</code> and restart it,
