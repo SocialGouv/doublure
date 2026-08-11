@@ -48,6 +48,13 @@ tasks:
     cmds:
       - ANTHROPIC_BASE_URL=http://127.0.0.1:8090 claude
 
+  forward:
+    desc: 'Run ANY agent behind the forward proxy — e.g. task forward -- claude'
+    cmds:
+      # `HTTPS_PROXY` names no vendor: this is the entry point for an agent
+      # that has no `ANTHROPIC_BASE_URL` to point at us.
+      - uv run python -m anonproxy.forward -- {{.CLI_ARGS}}
+
   # ------------------------------------------------------------------- build
 
   build:

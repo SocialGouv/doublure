@@ -54,6 +54,44 @@ def _maintenant() -> dt.datetime:
     return dt.datetime.now(dt.timezone.utc)
 
 
+#: Paquets concaténés des distributions courantes. `capath` est le cas
+#: fréquent sous Debian et Ubuntu : le magasin y est un RÉPERTOIRE de liens
+#: hachés, et `cafile` n'existe pas — s'arrêter à `cafile` rend un paquet vide
+#: sur la moitié des machines.
+_PAQUETS_CONNUS = (
+    "/etc/ssl/certs/ca-certificates.crt",   # Debian, Ubuntu, Alpine
+    "/etc/pki/tls/certs/ca-bundle.crt",     # RHEL, Fedora
+    "/etc/ssl/cert.pem",                    # BSD, macOS via ports
+)
+
+
+def _racines_du_systeme() -> bytes:
+    """Les racines que la machine croit, en un seul PEM."""
+    chemins = ssl.get_default_verify_paths()
+    for candidat in (chemins.cafile, chemins.openssl_cafile, *_PAQUETS_CONNUS):
+        if candidat and Path(candidat).is_file():
+            return Path(candidat).read_bytes()
+    for repertoire in (chemins.capath, chemins.openssl_capath):
+        if not repertoire or not Path(repertoire).is_dir():
+            continue
+        # Les liens hachés pointent plusieurs fois sur le même certificat :
+        # dédoublonné par CONTENU, pas par nom.
+        vus, morceaux = set(), []
+        for fichier in sorted(Path(repertoire).glob("*")):
+            if fichier.suffix not in (".pem", ".crt", ".0"):
+                continue
+            try:
+                contenu = fichier.read_bytes()
+            except OSError:
+                continue
+            if b"BEGIN CERTIFICATE" in contenu and contenu not in vus:
+                vus.add(contenu)
+                morceaux.append(contenu)
+        if morceaux:
+            return b"\n".join(morceaux)
+    return b""
+
+
 def _san_pour(host: str) -> x509.SubjectAlternativeName:
     """Un client qui joint une ADRESSE vérifie un SAN de type IP.
 
@@ -193,6 +231,31 @@ class InterceptionCA:
         )
         self._feuilles[host] = feuille
         return feuille
+
+    def bundle_path(self) -> Path:
+        """Paquet de confiance à donner à l'agent : les racines du système
+        PLUS la nôtre.
+
+        Pointer `SSL_CERT_FILE` sur notre seule autorité ferait échouer TOUT
+        accès TLS que le proxy ne fabrique pas — un dépôt de paquets, une API
+        publique — et le symptôme serait une erreur de confiance que personne
+        ne rattache au proxy. On AJOUTE, on ne remplace pas.
+
+        Reconstruit à chaque appel : le magasin du système est mis à jour par
+        l'administrateur, et un paquet figé prendrait du retard sans le dire.
+        """
+        self.ensure()
+        racines = _racines_du_systeme()
+        if not racines:
+            # Livrer un paquet qui ne contient QUE notre autorité ferait
+            # échouer tout accès TLS légitime de l'agent, et l'erreur ne se
+            # rattacherait pas au proxy. Mieux vaut ne pas démarrer.
+            raise RuntimeError(
+                "magasin de certificats du système introuvable : un paquet "
+                "sans ses racines casserait tout accès TLS de l'agent")
+        paquet = self.state_dir / "trust-bundle.pem"
+        paquet.write_bytes(racines + b"\n" + self.cert_path.read_bytes())
+        return paquet
 
     def server_context(self, host: str) -> ssl.SSLContext:
         """Contexte TLS servant cet hôte, mémorisé.

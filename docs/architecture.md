@@ -74,6 +74,35 @@ rather than substitutes, before execution, and traces its reason.
 Deciding what a command actually runs is a parsing problem, not a keyword
 problem. See [the command grammar](hook-parser.md).
 
+## Forward mode — the channel a base URL cannot reach
+
+`ANTHROPIC_BASE_URL` redirects one client's calls to one API. Remote MCP
+servers, package registries and vendor tool APIs ignore it — Phase 0 measured
+four such destinations against the one that honours it, and captured all four
+**through an explicit proxy**.
+
+```bash
+task forward -- <any agent>      # sets HTTPS_PROXY and the trust bundle
+```
+
+| Verdict | What happens |
+|---|---|
+| `inspect` | TLS terminated with a local leaf, bodies pseudonymised and restored |
+| `tunnel` | relayed untouched, so the client validates the origin's own certificate |
+| unlisted | **refused** — no socket is opened at all |
+
+Three properties hold it together. The upstream certificate is **verified**,
+with no setting to skip it: a proxy that decrypts and then trusts anything has
+moved the attack surface rather than removed it. What cannot be rewritten — a
+stream with neither length nor chunking — is **refused**, because relaying it
+untouched on a destination the operator declared `inspect` would say it was
+read. And the authority that signs the leaves is never installed system-wide:
+trust travels in the launched process's environment and dies with it.
+
+This is also what makes the tool agent-agnostic. `HTTPS_PROXY` names no vendor,
+so one launcher covers any runtime that speaks HTTP, instead of one integration
+per agent.
+
 ## The detection service
 
 AnonShield runs as a **separate process behind HTTP** (decision D7). The

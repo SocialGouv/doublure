@@ -12,8 +12,19 @@ not pseudonymise. Anything you deliberately allow through on that channel goes
 out as itself.
 
 For Bash this is inherent — a `kubectl` command has to reach the real cluster,
-so there is nothing to substitute. For remote MCP it is not inherent, only
-current: see the note under D9 below.
+so there is nothing to substitute.
+
+For **remote MCP it is no longer the case**: `task forward -- <agent>` runs any
+agent behind a forward proxy that terminates TLS, pseudonymises JSON-RPC bodies
+on the way out and restores them on the way back. Destinations come from a list
+the operator writes in the state directory, and an unlisted one is refused.
+
+!!! warning "New, and never yet run in a real session"
+
+    The forward mode is covered by tests, including interception proven against
+    a client that trusts only our authority. It has not been exercised by a
+    real agent for a full session — and in this project, that is the step that
+    has found what tests did not, four times.
 
 ## D9 is not met on a workstation
 

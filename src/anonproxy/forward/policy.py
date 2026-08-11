@@ -70,6 +70,43 @@ class ForwardPolicy:
                 "destination déclarée dans les deux listes : "
                 + ", ".join(sorted(doublons)))
 
+    @classmethod
+    def load(cls, path) -> "ForwardPolicy":
+        """Lit `<verbe> <destination>` par ligne.
+
+        Le fichier vit dans le RÉPERTOIRE D'ÉTAT, hors de portée de l'agent :
+        chaque ligne OUVRE une destination réseau, `tunnel` comme `inspect`.
+        C'est la même décision que pour les domaines ouverts, et pour la même
+        raison — si l'agent peut l'écrire, il s'ouvre sa propre sortie.
+
+        Un verbe inconnu est une ERREUR : le traiter comme un commentaire
+        transformerait une faute de frappe en destination silencieusement
+        absente, donc refusée sans que personne comprenne pourquoi.
+        """
+        from pathlib import Path
+
+        p = Path(path)
+        if not p.exists():
+            return cls(inspect=[], tunnel=[])  # rien d'ouvert
+        inspect, tunnel = [], []
+        for numero, ligne in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            ligne = ligne.strip()
+            if not ligne or ligne.startswith("#"):
+                continue
+            verbe, _, destination = ligne.partition(" ")
+            destination = destination.strip()
+            if not destination:
+                raise ValueError(f"{p}:{numero} — il faut `<verbe> <destination>`")
+            if verbe == "inspect":
+                inspect.append(destination)
+            elif verbe == "tunnel":
+                tunnel.append(destination)
+            else:
+                raise ValueError(
+                    f"{p}:{numero} — verbe inconnu {verbe!r} : "
+                    f"attendu `inspect` ou `tunnel`")
+        return cls(inspect=inspect, tunnel=tunnel)
+
     def verdict(self, destination: str) -> Verdict:
         hote = _hote_nu(destination)
         candidats = [(len(r), Verdict.INSPECT) for r in self.inspect
