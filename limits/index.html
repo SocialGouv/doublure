@@ -1317,15 +1317,26 @@ channel 1 does it.</p>
 agent behind a forward proxy that terminates TLS, pseudonymises JSON-RPC bodies
 on the way out and restores them on the way back. Destinations come from a list
 the operator writes in the state directory, and an unlisted one is refused.</p>
-<div class="admonition warning">
-<p class="admonition-title">New, and never yet run in a real session</p>
-<p>The forward mode is covered by tests, including interception proven against
-a client that trusts only our authority. It has not been exercised by a
-real agent for a full session — and in this project, that is the step that
-has found what tests did not, four times.</p>
+<div class="admonition success">
+<p class="admonition-title">Proven by a real session</p>
+<p><code>tests/forward_e2e.sh</code> runs a real Claude Code session under the launcher.
+The agent works, its model traffic is seen by the proxy — and the
+destinations Phase 0 measured as escaping are <strong>refused, with no socket
+opened</strong>:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>api.githubcopilot.com:443 -&gt; refuse (destination non déclarée)
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>registry.npmjs.org:443    -&gt; refuse (destination non déclarée)
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>mcp.context7.com:443      -&gt; refuse (destination non déclarée)
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>api.anthropic.com:443     -&gt; tunnel
+</span></code></pre></div>
+<p>And the session still completes. A chokepoint that stopped the agent
+working would be a wall, not a control.</p>
 </div>
 <h2 id="d9-is-not-met-on-a-workstation">D9 is not met on a workstation<a class="headerlink" href="#d9-is-not-met-on-a-workstation" title="Permanent link">&para;</a></h2>
-<p><strong>The egress harness detects; it does not prevent.</strong> Say exactly that to a DPO.</p>
+<p><strong>On the default path, the egress harness detects; it does not prevent.</strong> Under
+<code>task forward</code>, it <em>does</em> prevent — measured above — but only for what honours
+<code>HTTPS_PROXY</code>. A process opening a raw socket ignores it, so the deployment
+shape (an <code>internal</code> network, the proxy alone straddling both sides) remains
+the only enforcement. Say exactly that to a DPO.</p>
 <p>Measured on one real session: four destinations out of five escape
 <code>ANTHROPIC_BASE_URL</code> — <code>mcp-proxy.anthropic.com</code> (×12), <code>mcp.context7.com</code>
 (×11), <code>registry.npmjs.org</code> (×4), <code>api.githubcopilot.com</code> (×2), against
