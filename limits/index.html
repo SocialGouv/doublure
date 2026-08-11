@@ -1357,6 +1357,20 @@ for you.</p>
 survives and an incident still reads as a sequence. The end-to-end proof that
 asserted this gap <em>inverted</em> has been turned the right way round — it failed
 the day the gap closed, which is what it was written to do.</p>
+<div class="admonition warning">
+<p class="admonition-title">Recall depends on context, and it is measured</p>
+<p>On a 1.1 KB incident file the model returned <strong>two of the three people in
+it</strong>. The one it missed was detected at 0.96 when the same line was
+submitted alone — so the miss is not a matter of document length but of
+context.</p>
+<p>Measured on that file: whole document 315 ms and the name missed;
+300-character windows 669 ms, still missed; paragraphs 894 ms, still
+missed; <strong>line by line 1527 ms and found</strong>, with two false positives.
+Chunking therefore buys recall at roughly five times the latency, and the
+false positives fall in the harmless direction — they substitute more.</p>
+<p>Left as an arbitration rather than decided quietly, because the cost lands
+on every request of every session.</p>
+</div>
 <div class="admonition danger">
 <p class="admonition-title">Why this gap deserved its own service</p>
 <p>A value nobody detects produces no vault entry, no unresolved surrogate,
