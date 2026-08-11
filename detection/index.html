@@ -1387,7 +1387,15 @@ inventory can, without probability.</p>
 <code>acme</code> covers <code>tenant-acme-nda</code>, <code>registry.k8s.io/acme-billing</code> and
 <code>vnd.acme.billing+json</code> at once.</p>
 <p>This list only ever raises protection, so it cannot introduce a silent leak —
-which is why it is the right place to resolve doubts.</p>
+which is why it is the right place to resolve doubts. It is also the only
+source that <strong>produces</strong> spans of its own: a name you declared is found even
+where no model saw anything.</p>
+<p>That was not always true, and the gap was measured on
+<code>kubectl get pods -n acmecorp-billing</code>, where the detector returns a single
+span — <code>TOOL: kubectl</code>. The namespace carried the organisation's name, the
+inventory declared it, and it left in the clear: the inventory could only
+SUBTRACT from what a model had already noticed. The least ambiguous instruction
+an operator can give was conditional on a model happening to see the word.</p>
 <div class="admonition warning">
 <p class="admonition-title">Keep the real one out of the tree</p>
 <p>This file names your organisation, your zones and your team prefixes. Point

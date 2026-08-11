@@ -1268,9 +1268,10 @@ behave is the anti-pattern this project was built against: protection never
 depends on the model cooperating.</p>
 <div class="admonition warning">
 <p class="admonition-title">Read the limits before you rely on it</p>
-<p><strong>Bash</strong> does not go through any proxy and cannot: a <code>kubectl</code> command
-has to reach the real cluster. The hook blocks there — it does not
-pseudonymise.</p>
+<p><strong>Bash output is protected</strong>: it returns to the model through the API and
+is pseudonymised there. What is not reversible is the EXECUTION — <code>kubectl</code>
+must reach the real cluster — so on that path the hook blocks data going
+OUT rather than substituting.</p>
 <p><strong>Remote MCP and WebFetch</strong> do, under <code>task forward -- &lt;agent&gt;</code> — but that
 is not the default path, and it has not yet been exercised by a real
 session. And on a workstation the proxy is still not the only network

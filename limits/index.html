@@ -939,10 +939,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#channel-2-bash-is-not-reversible-the-rest-now-is" class="md-nav__link">
+  <a href="#channel-2-what-not-reversible-actually-means" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Channel 2: Bash is not reversible, the rest now is
+        Channel 2: what "not reversible" actually means
       
     </span>
   </a>
@@ -1180,10 +1180,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#channel-2-bash-is-not-reversible-the-rest-now-is" class="md-nav__link">
+  <a href="#channel-2-what-not-reversible-actually-means" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Channel 2: Bash is not reversible, the rest now is
+        Channel 2: what "not reversible" actually means
       
     </span>
   </a>
@@ -1297,11 +1297,22 @@
 this page and the
 <a href="../re-identification-analysis/">re-identification analysis</a> are the two you
 need.</p>
-<h2 id="channel-2-bash-is-not-reversible-the-rest-now-is">Channel 2: Bash is not reversible, the rest now is<a class="headerlink" href="#channel-2-bash-is-not-reversible-the-rest-now-is" title="Permanent link">&para;</a></h2>
-<p><strong>Bash</strong> does not go through any proxy and cannot: a <code>kubectl</code> command has to
-reach the real cluster, so there is nothing to substitute. The hook <strong>blocks</strong>
-before execution; anything you deliberately allow through goes out as itself.
-That is inherent, and it will not change.</p>
+<h2 id="channel-2-what-not-reversible-actually-means">Channel 2: what "not reversible" actually means<a class="headerlink" href="#channel-2-what-not-reversible-actually-means" title="Permanent link">&para;</a></h2>
+<p>It is easy to read this section as "your shell output leaks". It does not, and
+the distinction decides whether the tool is usable at all.</p>
+<p><strong>What the model reads is protected.</strong> A <code>kubectl</code> command and its output come
+back to the model through the API — channel 1 — and are pseudonymised there
+like everything else. Measured:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>10.1.2.3                              → 172.22.20.25
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>db-master-01-prod.acmecorp.internal   → vale-glacier-01-prod.litware-contoso.internal
+</span></code></pre></div>
+<p><strong>What is not reversible is the EXECUTION.</strong> <code>kubectl</code> has to reach the real
+cluster; there is no fictional cluster to talk to. So on that path the hook
+<strong>blocks</strong> rather than substitutes — its job is to stop the agent sending data
+OUT (a <code>curl</code> to a third party, a vault read, an environment dump), not to hide
+your infrastructure from the model. That second job belongs to channel 1, and
+channel 1 does it.</p>
+<p>That is inherent, and it will not change.</p>
 <p>For <strong>remote MCP it is no longer the case</strong>: <code>task forward -- &lt;agent&gt;</code> runs any
 agent behind a forward proxy that terminates TLS, pseudonymises JSON-RPC bodies
 on the way out and restores them on the way back. Destinations come from a list
