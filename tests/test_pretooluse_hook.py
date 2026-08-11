@@ -1777,6 +1777,45 @@ def test_le_hook_se_relance_sous_l_interpreteur_du_projet(audit_log):
         f"stderr : {proc.stderr}")
 
 
+def test_un_venv_bati_sur_le_python_systeme_relance_quand_meme(monkeypatch, tmp_path):
+    """RÉGRESSION : la garde comparait les chemins RÉSOLUS.
+
+    `uv venv` et `python3 -m venv` font de `.venv/bin/python` un LIEN vers
+    l'interpréteur qui les a créés. Quand c'est le python système — le cas par
+    défaut d'un runner de CI et de toute machine sans python géré — les deux
+    chemins se résolvent au MÊME binaire. La garde en concluait « on y est
+    déjà », sautait la relance, et le hook analysait sans grammaire : il
+    refusait CHAQUE appel d'outil. Fail-closed, donc sans fuite, et totalement
+    inutilisable.
+
+    Or seul l'appel PAR LE CHEMIN du venv active ses `site-packages` : même
+    exécutable ne veut pas dire même environnement.
+
+    Le venv est reconstruit ici plutôt qu'emprunté au dépôt : sur une machine
+    dont le venv pointe vers un python géré, le défaut ne se reproduit pas et
+    le test passerait sans rien prouver.
+    """
+    import importlib.util
+
+    systeme = Path("/usr/bin/python3")
+    if not systeme.exists():
+        pytest.skip("pas de python système")
+
+    spec = importlib.util.spec_from_file_location("_garde_relance", HOOK)
+    garde = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(garde)
+
+    lien = tmp_path / ".venv" / "bin" / "python"
+    lien.parent.mkdir(parents=True)
+    lien.symlink_to(systeme)
+    monkeypatch.setattr(garde, "_PYTHON_PROJET", lien)
+
+    assert garde._relance_necessaire(str(systeme)), \
+        "venv bâti sur le python système : il faut RELANCER, pas conclure"
+    assert not garde._relance_necessaire(str(lien)), \
+        "invoqué PAR le venv : rien à relancer"
+
+
 # --------------------------------------------------------------------------- #
 # Domaines ouverts par l'opérateur (D9).
 #

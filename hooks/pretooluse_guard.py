@@ -73,18 +73,37 @@ class GrammaireIndisponible(RuntimeError):
     """
 
 
+def _relance_necessaire(executable: str) -> bool:
+    """Sommes-nous déjà l'interpréteur du projet ?
+
+    Comparaison sur le chemin TEL QU'INVOQUÉ, jamais résolu. Un venv créé
+    depuis le python système a `.venv/bin/python` pour LIEN vers lui : les deux
+    chemins se résolvent au même binaire, alors que seul l'appel par le chemin
+    du venv active ses `site-packages`. Résoudre le lien détruit exactement
+    l'information qui décide.
+
+    Le coût de l'erreur n'est pas théorique : la relance était sautée, le hook
+    analysait sans grammaire, et il REFUSAIT TOUT. Fail-closed, donc sans
+    fuite — et parfaitement inutilisable.
+    """
+    return Path(executable) != _PYTHON_PROJET
+
+
 def _relance_sous_interpreteur_du_projet() -> None:
     """Rejoue ce hook sous le python du projet, une seule fois.
 
     La relance a lieu depuis `main`, avant toute lecture de stdin, et JAMAIS à
     l'import : une suite de tests lancée sans la grammaire verrait sinon son
     propre processus remplacé.
+
+    Le marqueur, et lui seul, empêche la boucle : si l'interpréteur du projet
+    n'a pas la grammaire non plus, le second passage refuse en le disant.
     """
     if _PARSEUR is not None or os.environ.get(_MARQUEUR_RELANCE):
         return
     if not _PYTHON_PROJET.exists():
         return
-    if Path(sys.executable).resolve() == _PYTHON_PROJET.resolve():
+    if not _relance_necessaire(sys.executable):
         return
     os.environ[_MARQUEUR_RELANCE] = "1"  # sans quoi deux pythons sans grammaire bouclent
     os.execv(str(_PYTHON_PROJET),
