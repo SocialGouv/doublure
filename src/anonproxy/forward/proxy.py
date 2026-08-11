@@ -42,6 +42,8 @@ _MORCEAU = 64 * 1024
 _MAX_CORPS = 32 * 1024 * 1024
 #: Ces réponses n'ont pas de corps, quoi que disent leurs en-têtes.
 _SANS_CORPS = {204, 304}
+#: Au-delà, une remorque n'est plus une remorque mais un déni de service.
+_MAX_REMORQUE = 64
 
 
 @dataclass(frozen=True)
@@ -276,7 +278,7 @@ class ForwardProxy:
         ligne, entetes = _analyser(requete)
         methode = ligne.split(" ", 1)[0].upper()
         try:
-            corps = await self._lire_corps(cl, entetes)
+            corps = await self._lire_corps(cl, entetes, reponse=False)
         except _CorpsIllisible as exc:
             await self._echouer(ce, destination, str(exc))
             return False
@@ -289,15 +291,38 @@ class ForwardProxy:
         if not reponse:
             return False
         ligne_r, entetes_r = _analyser(reponse)
-        statut = int(ligne_r.split(" ")[1]) if len(ligne_r.split(" ")) > 1 else 0
+        try:
+            statut = int(ligne_r.split(" ")[1])
+        except (IndexError, ValueError):
+            # Remontait jusqu'à `_client`, qui ne l'attrapait pas : la tâche
+            # mourait et le client voyait sa socket coupée sans un mot.
+            await self._echouer(ce, destination,
+                                f"ligne de statut amont illisible : {ligne_r!r}")
+            return False
         if methode == "HEAD" or statut in _SANS_CORPS:
             ce.write(_reconstruire(ligne_r, entetes_r, b"", avec_corps=False))
             await ce.drain()
-            return _peut_resservir(entetes, entetes_r)
+            # La connexion amont N'EST PAS réutilisée : un amont qui envoie
+            # malgré tout un corps sur un 204 laisse ces octets dans le
+            # tampon, et ils fabriquent la réponse suivante. Drainer
+            # supposerait que ses en-têtes disent la vérité ; fermer ne
+            # suppose rien.
+            return False
         try:
             corps_r = await self._lire_corps(al, entetes_r)
         except _CorpsIllisible as exc:
             await self._echouer(ce, destination, str(exc))
+            return False
+
+        if _residu_amont(al):
+            # L'amont a envoyé PLUS que la réponse demandée. Ces octets
+            # deviendraient la réponse à la requête SUIVANTE — c'est le vol de
+            # réponse : un serveur hostile choisit alors ce que l'agent croit
+            # avoir reçu. On ne devine pas ce que c'est, on ferme.
+            await self._echouer(
+                ce, destination,
+                "l'amont a envoyé plus que la réponse demandée : "
+                "connexion désynchronisée, elle ne sera pas réutilisée")
             return False
 
         corps_r = self.transform.incoming(hote, entetes_r, corps_r)
@@ -306,7 +331,8 @@ class ForwardProxy:
         return _peut_resservir(entetes, entetes_r)
 
     async def _lire_corps(self, lecteur: asyncio.StreamReader,
-                          entetes: dict[str, str]) -> bytes:
+                          entetes: dict[str, str], *,
+                          reponse: bool = True) -> bytes:
         if "chunked" in entetes.get("transfer-encoding", "").lower():
             return await self._lire_morceaux(lecteur)
         if (taille := entetes.get("content-length")) is not None:
@@ -315,7 +341,8 @@ class ForwardProxy:
                 raise _CorpsIllisible(
                     f"corps de {n} octets : au-delà de ce qui peut être relu")
             return await lecteur.readexactly(n) if n else b""
-        if "content-type" in entetes or entetes.get("connection", "").lower() == "close":
+        if reponse and ("content-type" in entetes
+                        or entetes.get("connection", "").lower() == "close"):
             # Ni longueur ni découpage : la fin du corps est la fermeture de la
             # connexion — un FLUX. On ne sait pas encore le réécrire au fil de
             # l'eau, et le relayer intact sur une destination à INSPECTER
@@ -329,10 +356,25 @@ class ForwardProxy:
         morceaux = bytearray()
         while True:
             ligne = (await lecteur.readuntil(b"\r\n")).strip()
-            taille = int(ligne.split(b";", 1)[0] or b"0", 16)
+            try:
+                # Sans le `or b"0"` d'origine : une ligne VIDE passait pour la
+                # marque de fin, le corps était tronqué en silence et le reste
+                # laissé dans le tampon.
+                taille = int(ligne.split(b";", 1)[0], 16)
+            except ValueError as exc:
+                raise _CorpsIllisible(
+                    f"taille de morceau illisible : {ligne!r}") from exc
             if taille == 0:
-                await lecteur.readuntil(b"\r\n")  # remorque, puis ligne vide
-                return bytes(morceaux)
+                # Une remorque est `*(field-line CRLF) CRLF`. N'en consommer
+                # qu'UNE ligne laissait le reste dans le tampon, et ce reste
+                # devenait la « réponse » à la requête SUIVANTE : un amont
+                # hostile choisissait ce que l'agent croyait avoir reçu.
+                # Le commentaire d'origine promettait « puis ligne vide » ; le
+                # code ne la lisait pas.
+                for _ in range(_MAX_REMORQUE):
+                    if await lecteur.readuntil(b"\r\n") == b"\r\n":
+                        return bytes(morceaux)
+                raise _CorpsIllisible("remorque interminable : framing refusé")
             if len(morceaux) + taille > _MAX_CORPS:
                 raise _CorpsIllisible("corps découpé au-delà de la taille relisible")
             morceaux += await lecteur.readexactly(taille)
@@ -424,6 +466,24 @@ def _reconstruire(ligne: str, entetes: dict[str, str], corps: bytes,
     tete = ligne + "\r\n" + "".join(
         f"{n}: {v}\r\n" for n, v in sortants.items()) + "\r\n"
     return tete.encode("latin-1") + corps
+
+
+def _residu_amont(lecteur: asyncio.StreamReader) -> bool:
+    """Reste-t-il des octets que l'amont a envoyés sans qu'on les demande ?
+
+    `StreamReader` n'expose pas sa file. On touche cet attribut privé plutôt
+    que d'attendre un délai à chaque échange : c'est le seul moyen GRATUIT de
+    voir un résidu, et un résidu devient la réponse à la requête suivante.
+
+    S'il disparaît d'une version de Python, on lève : perdre ce contrôle en
+    silence rouvrirait le vol de réponse sans que rien ne le dise.
+    """
+    file = getattr(lecteur, "_buffer", None)
+    if file is None:
+        raise RuntimeError(
+            "StreamReader sans `_buffer` : la détection de résidu amont ne "
+            "fonctionne plus. Refus plutôt que silence.")
+    return bool(file)
 
 
 def _peut_resservir(requete: dict[str, str], reponse: dict[str, str]) -> bool:
