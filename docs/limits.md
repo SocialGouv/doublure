@@ -61,21 +61,24 @@ re-identification attempt would correlate on.
 
 ## Detection gaps
 
-**Dates and postal addresses are not detected.** An end-to-end test asserts the
-date gap *inverted*, and will fail the day it closes.
-
-Person names **were** in that list until a real session put three of them —
+Person names, dates and postal addresses **were** the whole of this section
+until a real session put three people —
 the reporter, the on-call engineer and a customer — in front of a model that
 has no class for them. The infrastructure detector is a **cyber-security** NER:
 33 labels, `MALWARE`, `THREAT_ACTOR`, `CVE_ID`, `LOCATION`, `ORGANIZATION`, and
 no `PERSON`. `Barack Obama met Angela Merkel in Berlin` returned one span:
 `Berlin`.
 
-They are now covered by a **second detector**, in its own process, on the
+All three are now covered by a **second detector**, in its own process, on the
 Apache-2.0 side. It must be running: if it is unreachable the proxy returns
 503, exactly as for the other one. `ANONPROXY_PII=off` disables it — an
 operator decision, printed at startup — because an outage must not decide that
 for you.
+
+A **date is shifted, not drawn**: one constant per scope, so every interval
+survives and an incident still reads as a sequence. The end-to-end proof that
+asserted this gap *inverted* has been turned the right way round — it failed
+the day the gap closed, which is what it was written to do.
 
 !!! danger "Why this gap deserved its own service"
 

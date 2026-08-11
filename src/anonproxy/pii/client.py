@@ -15,11 +15,16 @@ import httpx
 from ..detect import DetectionUnavailable
 from .spans import merge_fragments
 
-#: Le modèle étiquette `private_person`, `private_address`, `private_date`…
-#: Seul le premier a un générateur de substituts côté moteur ; les autres
-#: seraient substitués par un rendu qui n'a ni la forme ni la cohérence de ce
-#: qu'ils remplacent — une date tirée au hasard casse une chronologie.
-TYPES_ACTIFS = {"private_person": "PERSON"}
+#: Étiquettes du modèle vers nos types. Une entrée n'est ajoutée ici QUE
+#: lorsque le moteur sait produire un substitut de même nature : une date tirée
+#: au hasard détruit la chronologie qu'elle datait, et une adresse rendue en
+#: mot n'est plus une adresse. La correspondance est ici, une seule fois — la
+#: dupliquer dans le service ferait deux endroits où la changer.
+TYPES_ACTIFS = {
+    "private_person": "PERSON",
+    "private_date": "DATE",
+    "private_address": "ADDRESS",
+}
 
 
 class PiiClient:

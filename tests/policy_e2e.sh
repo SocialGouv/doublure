@@ -105,19 +105,19 @@ verifie "tour 3 — un AUTRE hôte reste anonymisé" "${ETAT}/tour3b.txt" "db-re
 # évite.
 #
 # La politique ne peut pas gouverner ce qui n'est pas détecté : c'est
-# précisément l'exemple qui a motivé cette couche. Les deux modèles mesurés
-# (`bench_privacy_filter.py`, `bench_gliner.py`) attrapent la date, chacun
-# à 1.00 — le correctif est un choix de détecteur, pas de politique.
+# précisément l'exemple qui a motivé cette couche. Le correctif était un choix
+# de DÉTECTEUR, pas de politique — et c'est ce qui a été fait.
 #
-# Cette vérification est écrite à l'ENVERS : elle constate le trou. Le jour où
-# il est comblé, elle ÉCHOUE — et c'est le signal attendu.
+# Cette vérification était écrite à l'ENVERS : elle constatait le trou et
+# devait ÉCHOUER le jour où il serait comblé. Elle a échoué, le trou est
+# comblé, et elle est retournée dans le bon sens.
 # --------------------------------------------------------------------------- #
 if grep -qF -- "3 fevrier 2026" "${ETAT}/tour1.txt"; then
-  echo "TROU : la date sort en clair — non détectée (attendu tant qu'aucun"
-  echo "       détecteur de dates n'est en place ; cf. commentaire ci-dessus)"
-else
-  echo "ÉCHEC: la date est désormais traitée — retirer ce constat du script"
+  echo "ÉCHEC: la date sort en clair alors que le détecteur de données"
+  echo "       personnelles est censé la couvrir — service arrêté ?"
   rc=1
+else
+  echo "OK : la date est substituée (décalée, donc les intervalles tiennent)"
 fi
 
 # La politique ne doit contenir aucune valeur réelle, jamais.
@@ -139,8 +139,16 @@ uv run python scripts/anonproxy_policy.py regler projet delai_arbitrage 20
 NOUVEAU="Le noeud cache-77-prod.acmecorp.internal sature depuis ce matin."
 # Répond depuis un AUTRE processus, comme le ferait l'opérateur dans un
 # second terminal : c'est le seul montage réaliste.
-( sleep 3; uv run python scripts/anonproxy_policy.py arbitrer --portee session \
-    --repondre v >/dev/null 2>&1 ) &
+# Le répondeur répond en BOUCLE jusqu'à l'échéance, sans s'arrêter au premier
+# succès : la question attendue n'est consignée qu'au moment où la requête
+# bloque, et une réponse qui solde une question d'un tour PRÉCÉDENT n'est pas
+# celle qu'on attend. S'arrêter là laissait l'échéance expirer — un défaut de
+# fixture qui se lit comme un défaut du mode.
+( for _ in $(seq 1 8); do
+    sleep 2
+    uv run python scripts/anonproxy_policy.py arbitrer --portee session \
+      --repondre v >/dev/null 2>&1
+  done ) >/dev/null 2>&1 &
 REPONDEUR=$!
 DEBUT=$(date +%s)
 uv run python tests/policy_e2e_tour.py "${NOUVEAU}" > "${ETAT}/tour4.txt" || exit 1

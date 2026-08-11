@@ -74,11 +74,12 @@ separate them. See [Network isolation](d9-network-isolation.md).
 |---|---|
 | Determinism scope | per **project** by default; session, tenant or global on request |
 | Tool coverage | nothing hard-coded per tool — generic detection plus custom patterns |
-| Preserved attributes | environment, `/24` co-membership, human vs service, internal vs external — all four, as **accepted leaks** |
+| Preserved attributes | environment, `/24` co-membership, human vs service, internal vs external, and the **interval between two dates** — accepted leaks, all five |
 | Vault location | local, same user; outside the repository; treated as a secret |
 
-The four preserved attributes are deliberate: they are what makes the
-pseudonymised text still readable as infrastructure. They are also, precisely,
+The five preserved attributes are deliberate: they are what makes the
+pseudonymised text still readable as infrastructure — and, since dates are
+shifted by one constant rather than drawn, still readable as a chronology. They are also, precisely,
 what a re-identification attack would use — which is why they are listed here
 and analysed in the [re-identification analysis](re-identification-analysis.md)
 rather than left implicit.

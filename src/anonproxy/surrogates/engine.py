@@ -39,6 +39,7 @@ from .canonical import (
     is_internal_host,
     split_host,
 )
+from . import dates
 from .classes import DataClass, class_of
 from .lexicon import (
     EXTERNAL_TLDS,
@@ -300,6 +301,69 @@ class SurrogateEngine:
 
     def _idx(self, *parts: str) -> int:
         return int.from_bytes(self._digest(*parts)[:8], "big")
+
+    #: Bornes du décalage des dates, en jours. Assez grand pour qu'un
+    #: recoupement avec un calendrier réel ne retrouve pas la date d'origine ;
+    #: assez petit pour que l'année reste plausible — un incident daté de 2043
+    #: se remarque autant qu'un `[DATE_1]`.
+    _DECALAGE_MIN, _DECALAGE_MAX = 200, 1200
+
+    #: Vocabulaire de voie : il n'identifie personne, et le substituer rendrait
+    #: une chaîne qui n'est plus une adresse — la première clause de
+    #: l'invariant cassée pour satisfaire la seconde.
+    _VOIES = frozenset({
+        "rue", "avenue", "boulevard", "impasse", "place", "chemin", "allée",
+        "allee", "quai", "cours", "route", "voie", "square", "villa",
+        "street", "road", "lane", "drive", "court", "way", "close",
+    })
+    #: Articles et particules : ils n'identifient personne, et les substituer
+    #: donne `rue riley Ollie` là où `rue des Ollie` se lit comme une adresse.
+    _PARTICULES = frozenset({"de", "des", "du", "la", "le", "les", "d",
+                             "of", "the", "at"})
+
+    def _fake_address(self, value: str, attempt: int) -> str:
+        """Réécrit l'adresse en gardant sa FORME et rien de ce qui situe.
+
+        Les chiffres partent aussi, code postal compris : garder le code garde
+        la localité, et la localité est précisément ce sur quoi un recoupement
+        se fait. Ce qui reste — `rue`, `street` — ne désigne personne.
+        """
+        morceaux = re.split(r"([^\w'’-]+)", value)
+        rendu = []
+        for i, morceau in enumerate(morceaux):
+            nu = morceau.strip()
+            if not nu or not re.search(r"\w", nu):
+                rendu.append(morceau)          # séparateurs : conservés
+            elif nu.lower() in self._VOIES or nu.lower() in self._PARTICULES:
+                rendu.append(morceau)          # vocabulaire commun : conservé
+            elif nu.isdigit():
+                # Même longueur : un code postal à cinq chiffres reste un code
+                # postal, un numéro de rue reste un numéro de rue.
+                tire = self._idx("adresse-n", value, str(i), str(attempt))
+                rendu.append(str(tire % (10 ** len(nu))).zfill(len(nu)))
+            elif re.fullmatch(r"\d+\w+", nu):  # `221B`
+                tire = self._idx("adresse-bis", value, str(i), str(attempt))
+                rendu.append(f"{tire % 900 + 1}{nu[-1]}")
+            else:
+                mot = pick(IDENTITY_WORDS,
+                           self._idx("adresse-m", value, str(i), str(attempt)))
+                rendu.append(mot.capitalize() if nu[:1].isupper() else mot)
+        return "".join(rendu)
+
+    def _fake_date(self, value: str) -> str | None:
+        """Décale la date d'UNE constante par portée.
+
+        La constante ne dépend PAS de la valeur : c'est ce qui préserve les
+        intervalles, donc la chronologie d'un incident. Une translation est
+        aussi injective par construction — deux dates distinctes ne peuvent
+        pas tomber sur la même.
+
+        Prix assumé, à compter parmi les attributs préservés : l'ÉCART entre
+        deux dates survit à la substitution.
+        """
+        etendue = self._DECALAGE_MAX - self._DECALAGE_MIN
+        jours = self._DECALAGE_MIN + self._idx("date-shift") % etendue
+        return dates.shift(value, jours)
 
     # -- API ---------------------------------------------------------------- #
 
@@ -1045,6 +1109,12 @@ class SurrogateEngine:
 
         if etype in ("FILE_PATH", "USER_PATH"):
             return self._fake_path(v, attempt)
+
+        if etype == "DATE" and (faux := self._fake_date(value)) is not None:
+            return faux
+
+        if etype == "ADDRESS":
+            return self._fake_address(v, attempt)
 
         if etype == "PERSON":
             # Même nombre de mots : « Marie-Anne De La Fontaine » réduit à deux

@@ -35,6 +35,14 @@ def main() -> int:
     )
     detecteur = DetectClient(reglages.detect_url,
                              regex_threshold=reglages.regex_threshold)
+    # Monté comme la PRODUCTION le monte. Avec le seul détecteur
+    # d'infrastructure, cette preuve validait une chaîne qui n'est pas celle
+    # qui tourne — et elle serait restée verte pendant qu'un nom, une date ou
+    # une adresse sortaient en clair.
+    if reglages.pii_url:
+        from anonproxy.pii.client import PiiClient
+        from anonproxy.pii.composite import CompositeDetector
+        detecteur = CompositeDetector(detecteur, PiiClient(reglages.pii_url))
     try:
         sortie = Pseudonymizer(detecteur, moteur).to_surrogate(texte)
     except DetectionUnavailable as exc:

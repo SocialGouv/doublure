@@ -15,8 +15,8 @@ The test that pins it replays all three; removing any fix makes it fail.
 
 ## What is preserved, on purpose
 
-Four attributes survive substitution, because without them the text stops being
-readable as infrastructure:
+Five attributes survive substitution, because without them the text stops being
+readable as infrastructure — and, for the last one, as a chronology:
 
 | Preserved | So that the model can still tell |
 |---|---|
@@ -24,6 +24,7 @@ readable as infrastructure:
 | `/24` co-membership | two machines on the same subnet |
 | human vs service account | a person from a robot |
 | internal vs external | your network from the internet |
+| the interval between two dates | how long an incident actually lasted |
 
 These are **accepted leaks**, listed in the
 [re-identification analysis](re-identification-analysis.md). They are the price
@@ -47,6 +48,10 @@ Produced by the engine, from synthetic inputs:
 | `PHONE_NUMBER` | `+33 6 12 34 56 78` | `+33 6 39 98 10 41` |
 | `IBAN_CODE` | `FR76 3000 6000 0112 3456 7890 189` | `FR59 0000 0309 1434 4904 2525 063` |
 | `HASH` | `sha256:9f2b1c4e…` | `sha256:ec7a28e3…` |
+| `PERSON` | `Thibault Escourrou` | `Emery-wren Corey` |
+| `DATE` | `12 mars 2019` | `24 octobre 2019` |
+| `DATE` | `2026-02-03T14:32:00Z` | `2026-09-17T14:32:00Z` |
+| `ADDRESS` | `14 rue des Grands-Augustins, 75006 Paris` | `76 rue des Darcy, 19449 Zion` |
 
 Read them closely:
 
@@ -58,6 +63,11 @@ Read them closely:
   identifies moved;
 - `github.com` survived while the org and repository did not — the model still
   needs to know it is talking about GitHub;
+- the date moved by a constant, so `14:32:00` is untouched and two dates stay
+  exactly as far apart as they were — an incident still reads as a sequence;
+- the address kept `rue` and `des`, which identify nobody, and lost its
+  postcode: keeping the code keeps the LOCALITY, and locality is what a
+  re-identification joins on;
 - the IBAN is **checksum-valid** (ISO 13616 mod 97) with the bank identifier
   neutralised, so a validator accepts it and it names no bank;
 - the phone number sits in the range regulators reserve for fiction (`06 39 98`
