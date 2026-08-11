@@ -19,9 +19,11 @@ operation, known limits and the adversarial record.
 claude ──ANTHROPIC_BASE_URL──► proxy :8090 ──► api.anthropic.com
                                   │
                                   ├── AnonShield detector :9000 (GPL, separate process)
+                                  ├── personal-data detector :9100 (PERSON, dates, addresses)
                                   └── SQLite vault (outside the repo)
 
-Bash · WebFetch · MCP ──► PreToolUse hook ──► blocked or allowed
+Bash ──────────────► PreToolUse hook ──► blocked or allowed
+remote MCP, WebFetch ──HTTPS_PROXY──► forward proxy ──► pseudonymised, or refused
 ```
 
 ## Start
@@ -30,9 +32,12 @@ Bash · WebFetch · MCP ──► PreToolUse hook ──► blocked or allowed
 devbox install        # pinned toolchain: uv, go, node, task, curl, jq
 task                  # lists everything that can be run
 
-task detector         # detection service :9000 — leave it running
-task proxy            # proxy :8090
+task detector         # infrastructure detection :9000 — leave it running
+task detector:pii     # personal data :9100 — leave it running too
+task proxy            # proxy :8090 — refuses to serve without BOTH
 task session          # a Claude Code session through the proxy
+
+task forward -- claude   # any agent, behind the forward proxy
 ```
 
 The detector needs the NVIDIA driver and a CUDA build of torch, so it lives

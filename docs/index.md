@@ -17,7 +17,9 @@ flowchart LR
     P -->|restored| A
     P <-->|/detect| D[AnonShield :9000<br/>separate process, GPL]
     P <--> V[(vault<br/>encrypted at rest)]
-    A -->|Bash · WebFetch · MCP| H{PreToolUse hook}
+    A -->|Bash| H{PreToolUse hook}
+    A -->|remote MCP · WebFetch| F[forward proxy<br/>HTTPS_PROXY]
+    F -->|pseudonymised or refused| T
     H -->|blocked or allowed| T[tools]
 ```
 
@@ -101,7 +103,12 @@ depends on the model cooperating.
 
 !!! warning "Read the limits before you rely on it"
 
-    Bash, WebFetch and MCP do not go through the proxy. The hook blocks
-    there — it does not pseudonymise. And on a workstation the proxy is not
-    the only network path: the egress harness *detects*, it does not
-    *prevent*. See [Known limits](limits.md).
+    **Bash** does not go through any proxy and cannot: a `kubectl` command
+    has to reach the real cluster. The hook blocks there — it does not
+    pseudonymise.
+
+    **Remote MCP and WebFetch** do, under `task forward -- <agent>` — but that
+    is not the default path, and it has not yet been exercised by a real
+    session. And on a workstation the proxy is still not the only network
+    path: the egress harness *detects*, it does not *prevent*. See
+    [Known limits](limits.md).

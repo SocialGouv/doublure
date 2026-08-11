@@ -12,10 +12,12 @@ flowchart TB
         AN -->|SSE stream| PX
         PX -->|real values back| CC
     end
-    subgraph c2["Channel 2 — tools, NOT reversible"]
+    subgraph c2["Channel 2 — tools: blocked, or proxied"]
         direction LR
-        CC2[Claude Code] --> HK{PreToolUse hook}
-        HK -->|allow| TL[Bash · WebFetch · MCP]
+        CC2[Claude Code] -->|Bash| HK{PreToolUse hook}
+        CC2 -->|remote MCP · WebFetch| FW[forward proxy]
+        FW -->|pseudonymised or refused| TL[tools]
+        HK -->|allow| TL
         HK -->|deny + trace| X[refused before execution]
     end
     PX --- DT[AnonShield /detect]
@@ -66,10 +68,16 @@ an older format is refused rather than read.
 
 ## Channel 2 — the hook
 
-Bash, WebFetch and MCP calls do not go through the proxy: they run on the
-operator's machine, against the real world. There is nothing to pseudonymise —
-a `kubectl` command has to reach the real cluster. So the hook **blocks**
-rather than substitutes, before execution, and traces its reason.
+**Bash** runs on the operator's machine, against the real world, and there is
+nothing to pseudonymise: a `kubectl` command has to reach the real cluster. So
+the hook **blocks** rather than substitutes, before execution, and traces its
+reason.
+
+**Remote MCP and WebFetch** are a different case, and no longer belong in that
+sentence: they speak HTTP, so the forward proxy sees them. Under
+`task forward -- <agent>` their bodies are pseudonymised and restored like the
+model API's. The hook still guards them — two controls on one channel, and
+removing either opens it.
 
 Deciding what a command actually runs is a parsing problem, not a keyword
 problem. See [the command grammar](hook-parser.md).

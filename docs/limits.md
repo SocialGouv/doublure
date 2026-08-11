@@ -5,14 +5,12 @@ this page and the
 [re-identification analysis](re-identification-analysis.md) are the two you
 need.
 
-## Channel 2 is not reversible
+## Channel 2: Bash is not reversible, the rest now is
 
-Bash, WebFetch and MCP do not go through the proxy. The hook **blocks**; it does
-not pseudonymise. Anything you deliberately allow through on that channel goes
-out as itself.
-
-For Bash this is inherent — a `kubectl` command has to reach the real cluster,
-so there is nothing to substitute.
+**Bash** does not go through any proxy and cannot: a `kubectl` command has to
+reach the real cluster, so there is nothing to substitute. The hook **blocks**
+before execution; anything you deliberately allow through goes out as itself.
+That is inherent, and it will not change.
 
 For **remote MCP it is no longer the case**: `task forward -- <agent>` runs any
 agent behind a forward proxy that terminates TLS, pseudonymises JSON-RPC bodies
@@ -42,8 +40,9 @@ through the proxy.
     Those same four were **captured through mitmproxy** by the Phase 0 harness,
     with `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS`. So they honour an explicit
     forward proxy; what they ignore is one API client's base-URL setting. A
-    forward-proxy mode would bring remote MCP — JSON-RPC, which the walker
-    already knows how to traverse — into the reversible channel.
+    forward-proxy mode brings remote MCP — JSON-RPC, which the walker already
+    knows how to traverse — into the reversible channel. That is what
+    `task forward` now does.
 
 A local firewall cannot fix it either way, because `api.anthropic.com` and
 `mcp-proxy.anthropic.com` resolve to the **same address**.
