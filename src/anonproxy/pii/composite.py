@@ -16,11 +16,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from .spans import spans_inventaire
+
 
 class CompositeDetector:
-    def __init__(self, infrastructure, personnel):
+    def __init__(self, infrastructure, personnel, inventory=None):
         self.infrastructure = infrastructure
         self.personnel = personnel
+        #: L'inventaire n'est pas un troisième détecteur : c'est une CERTITUDE
+        #: de l'opérateur. Il produit ses propres spans là où aucun modèle n'a
+        #: rien vu — sans quoi « ce nom est à nous » dépendrait qu'un modèle
+        #: remarque le mot.
+        self.inventory = inventory
 
     def detect(self, text: str, *, strategy: str | None = None) -> list[dict[str, Any]]:
         """`DetectionUnavailable` de l'une OU l'autre propage : fail-closed."""
@@ -28,6 +35,8 @@ class CompositeDetector:
         spans += list(self.personnel.detect(text))
         # Triés par position : le moteur arbitre les recouvrements, et il le
         # fait sur un flux ordonné. Deux sources concaténées ne le sont pas.
+        if self.inventory is not None:
+            spans += spans_inventaire(text, self.inventory, spans)
         spans.sort(key=lambda s: (s["start"], -(s["end"] - s["start"])))
         return spans
 

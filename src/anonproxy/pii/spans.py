@@ -24,6 +24,41 @@ _ECART_MAX = 2
 _BORDURES = " \t\n\r,;:.!?()[]{}\"'"
 
 
+#: Un identifiant composite se délimite par ses séparateurs. `acmecorp` est un
+#: segment de `acmecorp-billing` ; il n'en est pas un d'`acmecorporation`, et
+#: confondre les deux ferait substituer du vocabulaire qui ressemble.
+_JETON = re.compile(r"[\w.:/@+-]+", re.UNICODE)
+
+
+def spans_inventaire(text: str, inventory, deja: list[dict]) -> list[dict]:
+    """Spans que l'INVENTAIRE produit là où aucun détecteur n'a rien vu.
+
+    Mesuré : `kubectl get pods -n acmecorp-billing` ne rend qu'un span, `TOOL:
+    kubectl`. Le namespace porte le nom de l'organisation, `acmecorp` est
+    déclaré dans l'inventaire, et il partait en clair — parce que l'inventaire
+    ne savait que RETRANCHER de ce que le détecteur avait déjà trouvé.
+
+    L'instruction la moins ambiguë que l'opérateur puisse donner — « ce nom est
+    à nous » — dépendait donc qu'un modèle remarque le mot. L'inventaire ne
+    peut que remonter la protection : c'est précisément pour ça qu'il est le
+    bon endroit où poser une certitude.
+    """
+    if not inventory:
+        return []
+    couverts = [(s["start"], s["end"]) for s in deja]
+    produits = []
+    for jeton in _JETON.finditer(text):
+        if not inventory.est_a_nous(jeton.group(0)):
+            continue
+        if any(a < jeton.end() and jeton.start() < b for a, b in couverts):
+            continue  # déjà vu par un détecteur : deux spans se disputeraient
+        produits.append({
+            "type": "INVENTORY", "value": jeton.group(0),
+            "start": jeton.start(), "end": jeton.end(), "score": 1.0,
+        })
+    return produits
+
+
 def resserrer(spans: list[dict], text: str) -> list[dict]:
     """Réduit un span de DATE à la date qu'il contient.
 

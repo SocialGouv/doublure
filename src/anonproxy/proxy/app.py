@@ -104,10 +104,15 @@ class ProxyState:
             settings.detect_url, regex_threshold=settings.regex_threshold
         )
         if settings.pii_url:
+            from ..inventory import Inventory
             from ..pii.client import PiiClient
             from ..pii.composite import CompositeDetector
+            # Chargé UNE fois et partagé : `predicat_public` en lit sa propre
+            # copie du même fichier, et deux lectures du même chemin ne peuvent
+            # pas diverger — mais deux CHEMINS le pourraient.
             self.detector = CompositeDetector(
-                self.detector, PiiClient(settings.pii_url))
+                self.detector, PiiClient(settings.pii_url),
+                inventory=Inventory.load())
         else:
             # Dit à voix haute : sans ce passage, AUCUN nom de personne n'est
             # détecté, et l'absence ne laisse aucune trace — ni entrée au

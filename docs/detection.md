@@ -83,7 +83,16 @@ An identifier is yours as soon as one of its **segments** matches, so declaring
 `vnd.acme.billing+json` at once.
 
 This list only ever raises protection, so it cannot introduce a silent leak —
-which is why it is the right place to resolve doubts.
+which is why it is the right place to resolve doubts. It is also the only
+source that **produces** spans of its own: a name you declared is found even
+where no model saw anything.
+
+That was not always true, and the gap was measured on
+`kubectl get pods -n acmecorp-billing`, where the detector returns a single
+span — `TOOL: kubectl`. The namespace carried the organisation's name, the
+inventory declared it, and it left in the clear: the inventory could only
+SUBTRACT from what a model had already noticed. The least ambiguous instruction
+an operator can give was conditional on a model happening to see the word.
 
 !!! warning "Keep the real one out of the tree"
 

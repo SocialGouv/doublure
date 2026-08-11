@@ -5,11 +5,27 @@ this page and the
 [re-identification analysis](re-identification-analysis.md) are the two you
 need.
 
-## Channel 2: Bash is not reversible, the rest now is
+## Channel 2: what "not reversible" actually means
 
-**Bash** does not go through any proxy and cannot: a `kubectl` command has to
-reach the real cluster, so there is nothing to substitute. The hook **blocks**
-before execution; anything you deliberately allow through goes out as itself.
+It is easy to read this section as "your shell output leaks". It does not, and
+the distinction decides whether the tool is usable at all.
+
+**What the model reads is protected.** A `kubectl` command and its output come
+back to the model through the API — channel 1 — and are pseudonymised there
+like everything else. Measured:
+
+```
+10.1.2.3                              → 172.22.20.25
+db-master-01-prod.acmecorp.internal   → vale-glacier-01-prod.litware-contoso.internal
+```
+
+**What is not reversible is the EXECUTION.** `kubectl` has to reach the real
+cluster; there is no fictional cluster to talk to. So on that path the hook
+**blocks** rather than substitutes — its job is to stop the agent sending data
+OUT (a `curl` to a third party, a vault read, an environment dump), not to hide
+your infrastructure from the model. That second job belongs to channel 1, and
+channel 1 does it.
+
 That is inherent, and it will not change.
 
 For **remote MCP it is no longer the case**: `task forward -- <agent>` runs any

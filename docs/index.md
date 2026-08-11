@@ -103,9 +103,10 @@ depends on the model cooperating.
 
 !!! warning "Read the limits before you rely on it"
 
-    **Bash** does not go through any proxy and cannot: a `kubectl` command
-    has to reach the real cluster. The hook blocks there — it does not
-    pseudonymise.
+    **Bash output is protected**: it returns to the model through the API and
+    is pseudonymised there. What is not reversible is the EXECUTION — `kubectl`
+    must reach the real cluster — so on that path the hook blocks data going
+    OUT rather than substituting.
 
     **Remote MCP and WebFetch** do, under `task forward -- <agent>` — but that
     is not the default path, and it has not yet been exercised by a real

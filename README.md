@@ -160,9 +160,12 @@ fails on any import that crosses, in either direction. Details:
 
 ## Known limits
 
-**Bash is not reversible, and cannot be**: a `kubectl` command has to reach the
-real cluster, so there is nothing to substitute. The hook blocks before
-execution; that is the whole of what this channel gets.
+**Bash output is pseudonymised** — it returns to the model through the API,
+which is channel 1. What is not reversible is the **execution**: `kubectl` has
+to reach the real cluster, and there is no fictional cluster to talk to. So on
+that path the hook stops data going OUT (a `curl` to a third party, a vault
+read, an environment dump) instead of substituting. Hiding your infrastructure
+from the model is channel 1's job, and it does it.
 
 **Remote MCP no longer belongs in that sentence.** `task forward -- <agent>`
 runs any agent behind a forward proxy that terminates TLS and pseudonymises
