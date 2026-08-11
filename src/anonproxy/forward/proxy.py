@@ -209,7 +209,7 @@ class ForwardProxy:
         try:
             amont_l, amont_e = await asyncio.open_connection(
                 hote.strip("[]"), int(port))
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, OverflowError) as exc:
             await self._refuser(ecrivain, destination,
                                 f"connexion impossible : {exc}",
                                 verdict=Verdict.TUNNEL)
@@ -254,20 +254,39 @@ class ForwardProxy:
         # rouvrait — 10 vols sur 10 mesurés. Contrôler un état qui bouge ne
         # ferme pas la classe ; ne rien réutiliser la ferme. Le client, lui,
         # garde sa connexion : c'est nous qui ne recyclons pas la nôtre.
+        # L'amont est ouvert PARESSEUSEMENT, après avoir lu la requête : ouvrir
+        # avant de savoir si le client en enverra une autre faisait payer N+1
+        # poignées de main pour N requêtes, et sur un amont à quota la
+        # dernière — inutile — peut faire refuser la suivante, qui est vraie.
+        amont_e.close()
         try:
             while True:
-                encore = await self._echange(hote, destination, lecteur,
-                                             ecrivain, amont_l, amont_e)
-                amont_e.close()
-                if not encore:
+                requete = await self._lire_entete(lecteur)
+                if not requete:
                     return
                 ouvert = await self._ouvrir_amont(hote, int(port), ecrivain,
                                                   destination)
                 if ouvert is None:
                     return
                 amont_l, amont_e = ouvert
-        finally:
-            amont_e.close()
+                try:
+                    encore = await self._echange(hote, destination, requete,
+                                                 lecteur, ecrivain,
+                                                 amont_l, amont_e)
+                finally:
+                    amont_e.close()
+                if not encore:
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — voir le commentaire
+            # Énumérer les types d'exception a échoué DEUX fois : le tour 7 a
+            # converti les cinq qu'il avait sous les yeux et laissé passer
+            # `IncompleteReadError` et `OverflowError`. Ce qui reste est
+            # d'attraper ce qui n'était pas prévu — et de le NOMMER, pour que
+            # le refus soit visible au lieu d'être une socket coupée.
+            await self._echouer(ecrivain, destination,
+                                f"échange interrompu : {type(exc).__name__}: {exc}")
 
     async def _ouvrir_amont(self, hote: str, port, ecrivain, destination: str,
                             *, en_clair: bool = False):
@@ -281,7 +300,7 @@ class ForwardProxy:
                 hote, int(port), ssl=self.upstream_context, server_hostname=hote)
         except ssl.SSLCertVerificationError as exc:
             raison = f"certificat amont invérifiable : {exc.verify_message or exc}"
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, OverflowError) as exc:
             raison = f"connexion impossible : {exc}"
         if en_clair:
             await self._refuser(ecrivain, destination, raison,
@@ -290,7 +309,7 @@ class ForwardProxy:
             await self._echouer(ecrivain, destination, raison)
         return None
 
-    async def _echange(self, hote: str, destination: str,
+    async def _echange(self, hote: str, destination: str, requete: bytes,
                        cl: asyncio.StreamReader, ce: asyncio.StreamWriter,
                        al: asyncio.StreamReader, ae: asyncio.StreamWriter) -> bool:
         """Une requête, une réponse. Rend True si la connexion peut resservir.
@@ -298,9 +317,6 @@ class ForwardProxy:
         Un agent réutilise sa connexion des dizaines de fois : ne traiter que
         la première requête figerait la session sur la deuxième.
         """
-        requete = await self._lire_entete(cl)
-        if not requete:
-            return False
         try:
             ligne, entetes = _analyser(requete)
             methode = ligne.split(" ", 1)[0].upper()
@@ -491,6 +507,11 @@ class _CorpsIllisible(RuntimeError):
 
 def _analyser(entete: bytes) -> tuple[str, dict[str, str]]:
     lignes = entete.decode("latin-1").split("\r\n")
+    if "\n" in lignes[0] or "\r" in lignes[0]:
+        # LA JUMELLE du refus ci-dessous : le tour 7 a protégé les VALEURS
+        # d'en-tête et laissé la ligne de statut, recopiée telle quelle par
+        # `_reconstruire`. Un `\n` seul y injecte un en-tête tout aussi bien.
+        raise _CorpsIllisible("ligne de statut : caractère de contrôle interdit")
     entetes: dict[str, str] = {}
     for ligne in lignes[1:]:
         nom, _, valeur = ligne.partition(":")

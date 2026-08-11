@@ -41,9 +41,17 @@ def autorite_origine(tmp_path_factory):
 
 
 class OrigineScriptee:
-    """Amont qui répond des OCTETS choisis, une réponse par requête reçue."""
+    """Amont qui répond des OCTETS choisis, une réponse par requête reçue.
 
-    def __init__(self, ca: InterceptionCA, tmp_path, reponses: list[bytes]):
+    `ferme_apres` : coupe la connexion juste après avoir répondu. C'est ce qui
+    distingue une TRONCATURE (EOF au milieu d'un corps annoncé) d'une ATTENTE
+    (l'amont ne dit plus rien mais tient la ligne) — deux défauts différents,
+    et seul le premier est traité ici.
+    """
+
+    def __init__(self, ca: InterceptionCA, tmp_path, reponses: list[bytes],
+                 ferme_apres: bool = False):
+        self.ferme_apres = ferme_apres
         cert_pem, cle_pem = ca.leaf_for("127.0.0.1")
         pem = tmp_path / "o.pem"
         pem.write_bytes(cert_pem + cle_pem)
@@ -84,14 +92,18 @@ class OrigineScriptee:
                 if not self.reponses:
                     return
                 tls.sendall(self.reponses.pop(0))
+                if self.ferme_apres:
+                    return
         except OSError:
             pass
         finally:
             tls.close()
 
 
-def _monter(interception, autorite_origine, tmp_path, reponses):
-    origine = OrigineScriptee(autorite_origine, tmp_path, reponses)
+def _monter(interception, autorite_origine, tmp_path, reponses,
+            ferme_apres=False):
+    origine = OrigineScriptee(autorite_origine, tmp_path, reponses,
+                              ferme_apres=ferme_apres)
     proxy = ForwardProxy(
         ForwardPolicy(inspect=["127.0.0.1"], tunnel=[]), interception,
         upstream_context=ssl.create_default_context(
@@ -112,6 +124,7 @@ def _deux_requetes(proxy, interception, port) -> bytes:
     tls = ctx.wrap_socket(brut, server_hostname="127.0.0.1")
     tls.sendall(b"GET /un HTTP/1.1\r\nhost: x\r\n\r\n")
     recu = b""
+    relance = False
     try:
         tls.settimeout(3)
         while len(recu) < 4096:
@@ -119,7 +132,10 @@ def _deux_requetes(proxy, interception, port) -> bytes:
             if not morceau:
                 break
             recu += morceau
-            if b"\r\n\r\n" in recu:
+            if b"\r\n\r\n" in recu and not relance:
+                # UNE seule fois : renvoyer à chaque tour faisait compter mes
+                # propres requêtes comme des connexions amont du proxy.
+                relance = True
                 tls.sendall(b"GET /deux HTTP/1.1\r\nhost: x\r\n\r\n")
     except (TimeoutError, OSError):
         pass
@@ -316,5 +332,89 @@ def test_a_header_value_cannot_carry_a_bare_newline(
         assert recu, "le client n'a RIEN reçu : la tâche est morte en silence"
         assert b"Set-Cookie" not in recu, recu[:300]
         assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Tour 8 — trois régressions du tour 7, dont sa JUMELLE
+# --------------------------------------------------------------------------- #
+
+
+def test_the_status_line_cannot_carry_a_bare_newline(
+        interception, autorite_origine, tmp_path):
+    """HAUT, et c'est LA JUMELLE. Le tour 7 a refusé les caractères de contrôle
+    dans les VALEURS d'en-tête et laissé la ligne de STATUT, recopiée telle
+    quelle. Chercher le jumeau fait partie du correctif, pas de la revue."""
+    reponse = (b"HTTP/1.1 200 OK\nSet-Cookie: PWN=1; path=/\r\n"
+               b"content-length: 2\r\nconnection: close\r\n\r\nok")
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             [reponse])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "tâche morte en silence"
+        assert b"Set-Cookie" not in recu, recu[:300]
+        assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()
+
+
+@pytest.mark.parametrize("reponse", [
+    # Chunked annoncé, connexion coupée avant le premier morceau.
+    b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n",
+    # `content-length` menteur : 100 annoncés, 9 envoyés.
+    b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\ntronquee!",
+])
+def test_an_upstream_that_cuts_early_answers_instead_of_dying(
+        interception, autorite_origine, tmp_path, reponse):
+    """HAUT. `IncompleteReadError` n'était pas convertie : elle traversait
+    l'échange, traversait l'inspection, et `_client` l'avalait en silence.
+
+    Le tour 7 avait annoncé fermer la CLASSE « aucune exception ne sort du
+    tunnel sans un mot » — il l'avait fermée pour les cinq exceptions qu'il
+    avait sous les yeux. Énumérer des types a échoué deux fois ; ce qui reste
+    est d'attraper ce qui n'était pas prévu, en le NOMMANT."""
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             [reponse], ferme_apres=True)
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "le client n'a RIEN reçu : la tâche est morte en silence"
+        assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()
+
+
+def test_an_impossible_port_is_refused_not_hung(interception, tmp_path):
+    """MOYEN. `open_connection` lève `OverflowError` sur un port hors bornes —
+    ni `OSError` ni `ValueError`, donc hors de toutes les gardes."""
+    proxy = ForwardProxy(ForwardPolicy(inspect=["127.0.0.1"], tunnel=[]),
+                         interception)
+    proxy.start_in_thread()
+    try:
+        brut = socket.create_connection(("127.0.0.1", proxy.port), timeout=10)
+        brut.sendall(b"CONNECT 127.0.0.1:66666 HTTP/1.1\r\n\r\n")
+        brut.settimeout(5)
+        recu = brut.recv(4096)
+        brut.close()
+        assert recu, "aucune réponse : la tâche est morte"
+        assert b"403" in recu or b"502" in recu, recu[:200]
+    finally:
+        proxy.stop()
+
+
+def test_no_upstream_handshake_is_paid_for_a_request_never_sent(
+        interception, autorite_origine, tmp_path):
+    """MOYEN. La connexion amont s'ouvrait APRÈS l'échange, donc avant de
+    savoir si le client en enverrait un autre : N requêtes coûtaient N+1
+    poignées de main. Sur un amont à quota, la dernière — inutile — peut faire
+    refuser la suivante, qui est vraie."""
+    reponses = [b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n"
+                b"connection: keep-alive\r\n\r\nok"] * 4
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             reponses)
+    try:
+        _deux_requetes(proxy, interception, origine.port)
+        assert origine.appels <= 2, (
+            f"{origine.appels} connexions amont pour 2 requêtes client")
     finally:
         proxy.stop()
