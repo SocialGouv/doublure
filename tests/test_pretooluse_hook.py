@@ -1764,9 +1764,17 @@ def test_le_hook_se_relance_sous_l_interpreteur_du_projet(audit_log):
     assert proc.returncode == 0, proc.stderr
     # La décision prouve que l'analyse a bien eu lieu : sans grammaire, le
     # refus porterait la raison « analyse impossible ».
-    assert is_denied(json.loads(proc.stdout))
-    assert "analyse" not in json.loads(proc.stdout)["hookSpecificOutput"][
-        "permissionDecisionReason"]
+    decision = json.loads(proc.stdout)
+    assert is_denied(decision)
+    raison = decision["hookSpecificOutput"]["permissionDecisionReason"]
+    # Le hook écrit la CAUSE sur stderr quand la relance échoue. Sans elle, une
+    # CI qui tombe ici ne dit que « ça a échoué », et chaque hypothèse coûte un
+    # aller-retour complet.
+    interprete = HOOK.parent.parent / ".venv" / "bin" / "python"
+    assert "analyse" not in raison, (
+        f"relance manquée — raison : {raison}\n"
+        f"interpréteur attendu : {interprete} (existe : {interprete.exists()})\n"
+        f"stderr : {proc.stderr}")
 
 
 # --------------------------------------------------------------------------- #

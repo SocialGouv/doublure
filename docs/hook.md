@@ -7,6 +7,23 @@ it **refuses, before execution, and says why**.
 It runs as a `PreToolUse` hook and covers every tool — Bash, WebFetch, MCP
 calls, file writes — not an enumerated list of the ones that looked risky.
 
+## Wiring
+
+The wiring lives in `hooks/settings.json` and is **not** installed in
+`.claude/settings.json`, so it does not apply to sessions that work on this
+repository itself. Copy it into the project you want guarded:
+
+```bash
+cp hooks/settings.json /path/to/your/project/.claude/settings.json
+```
+
+That choice is deliberate. The asset this guard protects is your real
+infrastructure, and it is not present in its own source tree — while the guard
+did block the work of writing its own tests, grepping its own patterns, and
+reading its own refusal messages. The end-to-end proof passes the file
+explicitly (`claude --settings hooks/settings.json`), so what is verified is
+the same wiring you install.
+
 ## What it refuses
 
 | Class | Examples |

@@ -73,7 +73,7 @@ session. Three defects were only ever found by them, never by the unit suites.
 | `go/` | Control service (arbitration API over a Unix socket) |
 | `extension/` | VSCode/VSCodium extension — control surface only |
 | `services/anonshield/` | **GPL-3.0 side**: upstream plus the HTTP `/detect` wrapper |
-| `hooks/` | PreToolUse guard (channel 2) |
+| `hooks/` | PreToolUse guard (channel 2); `hooks/settings.json` is the wiring to copy into a guarded project's `.claude/` |
 | `corpus/` | Golden set; `corpus/real/` is gitignored |
 | `docs/re-identification-analysis.md` | DPO deliverable |
 | `docs/d9-network-isolation.md` | What escapes the proxy, and the deployment shape that fixes it |
