@@ -24,8 +24,10 @@ meant to protect gets turned off, and then nothing is protected.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import ipaddress
 import os
+import ssl
 from pathlib import Path
 
 from cryptography import x509
@@ -72,9 +74,11 @@ class InterceptionCA:
         self.state_dir = Path(state_dir)
         self.cert_path = self.state_dir / "interception-ca.crt"
         self.key_path = self.state_dir / "interception-ca.key"
+        self.leaves_dir = self.state_dir / "leaves"
         self._cle = None
         self._cert = None
         self._feuilles: dict[str, tuple[bytes, bytes]] = {}
+        self._contextes: dict[str, ssl.SSLContext] = {}
 
     # ----------------------------------------------------------------- autorité
 
@@ -189,3 +193,31 @@ class InterceptionCA:
         )
         self._feuilles[host] = feuille
         return feuille
+
+    def server_context(self, host: str) -> ssl.SSLContext:
+        """Contexte TLS servant cet hôte, mémorisé.
+
+        `load_cert_chain` n'accepte que des CHEMINS : la feuille est donc
+        écrite, sous le répertoire d'état et en `0600`, jamais ailleurs. Le nom
+        du fichier est un condensé — un hôte peut être un littéral IPv6, dont
+        les deux-points et les crochets ne font pas un nom de fichier, et
+        assainir les caractères ferait collisionner deux hôtes distincts.
+
+        ALPN n'annonce que `http/1.1` : HTTP/2 se négocie là, et relayer un
+        protocole qu'on ne sait pas relire reviendrait à ne rien lire.
+        """
+        if (connu := self._contextes.get(host)) is not None:
+            return connu
+        cert_pem, cle_pem = self.leaf_for(host)
+        self.leaves_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.leaves_dir, 0o700)
+        chemin = self.leaves_dir / (
+            hashlib.sha256(host.encode("utf-8")).hexdigest()[:32] + ".pem")
+        fd = os.open(chemin, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(cert_pem + cle_pem)
+        contexte = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        contexte.load_cert_chain(certfile=str(chemin))
+        contexte.set_alpn_protocols(["http/1.1"])
+        self._contextes[host] = contexte
+        return contexte

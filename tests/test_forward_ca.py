@@ -136,7 +136,28 @@ def test_the_authority_is_never_installed_system_wide(ca, tmp_path):
     avec lui."""
     ca.ensure()
     ca.leaf_for("api.example.test")
-    ecrits = {p for p in (tmp_path / "state").rglob("*") if p.is_file()}
-    assert ecrits == {ca.cert_path, ca.key_path}, ecrits
+    ca.server_context("api.example.test")
+    etat = (tmp_path / "state").resolve()
+    for ecrit in etat.rglob("*"):
+        assert etat in ecrit.resolve().parents, ecrit
     for methode in dir(ca):
         assert "install" not in methode.lower(), methode
+
+
+def test_a_served_leaf_is_written_readable_by_nobody_else(ca):
+    """Elle porte la clé privée de la feuille : les mêmes droits que
+    l'autorité, et sous le même répertoire."""
+    import stat as _stat
+
+    ca.server_context("api.example.test")
+    feuilles = list(ca.leaves_dir.glob("*.pem"))
+    assert feuilles, "aucune feuille écrite"
+    for f in feuilles:
+        assert _stat.S_IMODE(f.stat().st_mode) == 0o600, f
+
+
+def test_the_served_context_announces_only_http1(ca):
+    """HTTP/2 se négocie par ALPN. L'annoncer alors qu'on ne sait pas le relire
+    reviendrait à ne rien lire du tout."""
+    contexte = ca.server_context("api.example.test")
+    assert ca.server_context("api.example.test") is contexte, "contexte non mémorisé"

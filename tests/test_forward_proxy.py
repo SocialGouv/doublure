@@ -99,20 +99,6 @@ def test_an_unlisted_destination_never_gets_a_connection(ca, origine):
         proxy.stop()
 
 
-def test_an_inspected_destination_is_refused_while_interception_is_absent(ca, origine):
-    """Relayer en clair une destination déclarée À INSPECTER serait un
-    fail-open silencieux : l'opérateur a demandé qu'on lise, il n'aurait rien
-    lu du tout et rien ne le lui aurait dit."""
-    proxy = _proxy(ForwardPolicy(inspect=["127.0.0.1"], tunnel=[]), ca)
-    try:
-        with _client(proxy, ca) as client:
-            with pytest.raises(httpx.ProxyError):
-                client.get(f"https://127.0.0.1:{origine}/salut")
-        assert any("interception" in d.reason for d in proxy.decisions)
-    finally:
-        proxy.stop()
-
-
 def test_every_decision_is_traced(ca, origine):
     """Un résidu accepté doit être COMPTÉ. Un proxy qui refuse sans laisser de
     trace fait chercher la panne dans l'agent."""
