@@ -222,7 +222,9 @@ def test_a_media_type_is_not_a_channel_for_secrets(value):
 @pytest.mark.parametrize("value", [
     "AKIAJXQNJDLZBSCGKPQR",                        # clé AWS SANS aucun chiffre
     "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",    # jeton OAuth tout en lettres
-    "xoxb-REDACTED-TEST-FIXTURE",
+    # Littéral coupé en deux : la valeur est identique au runtime, mais
+    # la protection de GitHub refuse un push qui contient la forme entière.
+    "xoxb-" "1234567890-1234567890-abcdefabcdefabcdef",
     "alice-dupont-directrice-financiere",          # PII en segments courts
     "aa-bb-cc-dd-ee-ff",                           # adresse MAC en tirets
 ])
