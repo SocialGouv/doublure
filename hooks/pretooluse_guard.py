@@ -44,13 +44,22 @@ _PYTHON_PROJET = _RACINE / ".venv" / "bin" / "python"
 _MARQUEUR_RELANCE = "ANONPROXY_HOOK_RELANCE"
 
 
+#: Pourquoi la grammaire manque. Le refus ne change pas — il est fail-closed
+#: dans tous les cas — mais la CAUSE doit survivre : un module absent, une ABI
+#: incompatible et une version divergente demandent trois corrections
+#: différentes, et sans elle chaque hypothèse coûte un aller-retour complet.
+_ERREUR_GRAMMAIRE: str | None = None
+
+
 def _charger_grammaire():
+    global _ERREUR_GRAMMAIRE
     try:
         import tree_sitter_bash
         from tree_sitter import Language, Parser
 
         return Parser(Language(tree_sitter_bash.language()))
-    except Exception:  # noqa: BLE001 — import, ABI, version : tout vaut échec
+    except Exception as exc:  # noqa: BLE001 — import, ABI, version : tout vaut échec
+        _ERREUR_GRAMMAIRE = f"{type(exc).__name__}: {exc}"
         return None
 
 
@@ -1115,7 +1124,9 @@ def tokenize(command: str) -> list[list[str]]:
     """
     if _PARSEUR is None:
         raise GrammaireIndisponible(
-            "grammaire bash introuvable : le découpage ne peut pas être vérifié")
+            "grammaire bash introuvable : le découpage ne peut pas être "
+            f"vérifié ({_ERREUR_GRAMMAIRE or 'cause inconnue'}) — "
+            f"interpréteur {sys.executable}")
     return _commandes_ast(command)
 
 
