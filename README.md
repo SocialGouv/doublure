@@ -99,9 +99,22 @@ session. Three defects were only ever found by them, never by the unit suites.
 | `ANON_CUSTOM_PATTERNS_FILE` | `config/custom_patterns.json` | Read by both sides too |
 | `ANON_INVENTORY_FILE` | `config/inventory.txt` | "What is ours" — keep the real one out of the tree |
 
-State paths (vault, master secret, policy) also come from the environment; the
-control service has no defaults for them and refuses to start without them, so
-that a second source of truth cannot drift from the launcher's.
+State lives in `~/.doublure/<slug of the project path>` — one directory per
+project, so two projects never share a vault. The rule is duplicated in bash,
+in Python and in Go because the hook has to know it without importing
+anything; the three had drifted apart, and only the launcher setting
+`ANONPROXY_STATE_DIR` explicitly hid it.
+
+The control service has no default for those paths at all and refuses to start
+without them, so that a second source of truth cannot drift from the
+launcher's.
+
+!!! danger "Migrating an existing state directory"
+
+    Renaming it is a `mv`, and the vault is half of what makes surrogates
+    restorable. Stop the chain first, move it, and keep the old guard patterns
+    — they still refuse the old location, which costs nothing and covers the
+    interval.
 
 Detection reads `config/allowlist.txt` (§6 of the plan) and
 `config/custom_patterns.json` (environment conventions, to be written with jo).

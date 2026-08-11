@@ -32,7 +32,18 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-STATE_DIR = Path(os.environ.get("ANONPROXY_STATE_DIR", Path.home() / ".local/state/anonproxy"))
+def _repertoire_etat() -> Path:
+    """Même règle que le garde Go et que les scripts : un répertoire par
+    PROJET, nommé d'après son chemin. Les trois divergeaient — le hook visait
+    un chemin fixe pendant que tout le reste visait `~/.doublure/<projet>` —
+    et seul le fait que le lanceur pose la variable masquait l'écart."""
+    if (demande := os.environ.get("ANONPROXY_STATE_DIR")):
+        return Path(demande)
+    slug = re.sub(r"[^A-Za-z0-9_.]", "-", str(Path.cwd()))
+    return Path.home() / ".doublure" / slug
+
+
+STATE_DIR = _repertoire_etat()
 AUDIT_LOG = Path(os.environ.get("ANONPROXY_AUDIT_LOG", STATE_DIR / "canal2_audit.jsonl"))
 
 #: Claude Code lance ce hook comme un exécutable, donc sous le python SYSTÈME
@@ -110,7 +121,14 @@ def _relance_sous_interpreteur_du_projet() -> None:
              [str(_PYTHON_PROJET), str(Path(__file__).resolve())])
 
 #: Chemins du coffre : l'agent ne doit jamais les lire (ni par Read, ni par Bash).
+#:
+#: Les emplacements HISTORIQUES restent listés. Un motif périmé qui refuse
+#: encore ne coûte rien ; un motif retiré trop tôt cesse de protéger un coffre
+#: qu'une migration n'a pas encore déplacé, et personne ne le remarque — c'est
+#: la seule règle de ce fichier dont l'échec est silencieux.
 VAULT_PATTERNS = (
+    r"\.doublure/",
+    r"\.anonshield/",
     r"\.local/state/anonproxy",
     r"anon_secret_key",
     r"vault\.db",

@@ -2,7 +2,7 @@
 # Démarre le service de détection AnonShield (wrapper GPL, port 9000).
 #
 # - Génère et persiste ANON_SECRET_KEY au premier lancement, dans
-#   ${ANONPROXY_STATE_DIR:-~/.local/state/anonproxy}/anon_secret_key
+#   ${ANONPROXY_STATE_DIR:-~/.doublure/shared}/anon_secret_key
 #   (0600, jamais affichée). Cette clé + la base = les deux moitiés du
 #   secret : sauvegarder le dossier, le perdre rend la dé-anonymisation
 #   impossible.
@@ -13,7 +13,7 @@ set -euo pipefail
 
 WRAPPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UPSTREAM="$(cd "${WRAPPER_DIR}/../upstream" && pwd)"
-STATE_DIR="${ANONPROXY_STATE_DIR:-${HOME}/.local/state/anonproxy}"
+STATE_DIR="${ANONPROXY_STATE_DIR:-${HOME}/.doublure/shared}"
 KEY_FILE="${STATE_DIR}/anon_secret_key"
 PORT="${ANON_WRAPPER_PORT:-9000}"
 

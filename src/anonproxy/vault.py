@@ -1,6 +1,6 @@
 """Coffre des correspondances substitut ↔ valeur réelle (SQLite chiffré).
 
-Le coffre vit HORS du dépôt (défaut : ``~/.local/state/anonproxy/vault.db``,
+Le coffre vit HORS du dépôt (défaut : ``~/.doublure/<projet>/vault.db``,
 cf. réponse §3.5 : local, même utilisateur — gap assumé et documenté).
 
 Garanties structurelles :

@@ -6,10 +6,11 @@ composants, jamais lu ni journalisé ailleurs qu'au point d'usage.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-STATE_DIR = Path(os.environ.get("ANONPROXY_STATE_DIR", Path.home() / ".local/state/anonproxy"))
+STATE_DIR = Path(os.environ.get("ANONPROXY_STATE_DIR", Path.home() / ".doublure" / re.sub(r"[^A-Za-z0-9_.]", "-", str(Path.cwd()))))
 
 
 @dataclass(frozen=True)

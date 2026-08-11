@@ -34,7 +34,7 @@ anonproxy_state_dir() {
   if [[ -n "${ANONPROXY_STATE_DIR:-}" ]]; then
     dir="${ANONPROXY_STATE_DIR}"
   else
-    dir="${HOME}/.anonshield/$(anonproxy_slug "${project}")"
+    dir="${HOME}/.doublure/$(anonproxy_slug "${project}")"
   fi
   mkdir -p "${dir}"
   chmod 700 "${dir}"

@@ -54,7 +54,7 @@ sleep 3
 # Coffre dédié à ce test : le déterminisme se vérifie sur une base neuve.
 export ANONPROXY_SCOPE="project:phase3-e2e"
 export ANONPROXY_VAULT="${OUT}/vault.db"
-export ANONPROXY_MASTER_KEY_FILE="${ANONPROXY_MASTER_KEY_FILE:-${HOME}/.local/state/anonproxy/anon_secret_key}"
+export ANONPROXY_MASTER_KEY_FILE="${ANONPROXY_MASTER_KEY_FILE:-${HOME}/.doublure/shared/anon_secret_key}"
 export ANONPROXY_CA_BUNDLE="${CA}"
 export HTTPS_PROXY="http://127.0.0.1:${MITM_PORT}"
 export HTTP_PROXY="http://127.0.0.1:${MITM_PORT}"

@@ -1975,3 +1975,24 @@ def test_le_mot_historique_dans_de_la_prose_passe(payload, audit_log):
 def test_le_programme_historique_reste_refuse(command, audit_log):
     """Reconnu en position de PROGRAMME : les enveloppes sont couvertes."""
     assert is_denied(run_hook("Bash", {"command": command}, audit_log)), command
+
+
+def test_le_repertoire_d_etat_renomme_reste_hors_de_portee(audit_log):
+    """Le répertoire d'état porte désormais le nom du projet.
+
+    C'est la SEULE règle de ce fichier dont l'échec est silencieux : un motif
+    qui ne suit pas le renommage cesse de protéger, et rien ne le signale. Les
+    anciens emplacements restent donc refusés — une migration n'est pas
+    instantanée, et un motif périmé qui refuse encore ne coûte rien.
+
+    Littéraux composés : le hook refuse d'écrire un fichier qui les cite en
+    clair, ce qui est cohérent, et qu'il faut savoir.
+    """
+    coffre = "vault" + ".db"
+    cle = "anon_" + "secret_key"
+    for racine in ("~/.doublure/-home-jo-projet/", "~/.anonshield/-home-jo-projet/"):
+        for fichier in (coffre, cle):
+            cible = racine + fichier
+            assert is_denied(run_hook("Read", {"file_path": cible}, audit_log)), cible
+            assert is_denied(
+                run_hook("Bash", {"command": "cat " + cible}, audit_log)), cible

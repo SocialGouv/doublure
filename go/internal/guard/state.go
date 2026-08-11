@@ -13,7 +13,7 @@ import (
 // One directory per project, named after the project's own path:
 //
 //	/home/jo/lab/ai/anonproxy-demo
-//	  → ~/.anonshield/-home-jo-lab-ai-anonproxy-demo/
+//	  → ~/.doublure/-home-jo-lab-ai-anonproxy-demo/
 //
 // The rule is DUPLICATED in shell (scripts/lib/state.sh). The hook is launched
 // by Claude Code, not by those scripts, so it has to find the same directory on
@@ -57,7 +57,7 @@ func StateDir() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".anonshield", Slug(project))
+	return filepath.Join(home, ".doublure", Slug(project))
 }
 
 // AuditLogPath names the file every decision is appended to.
