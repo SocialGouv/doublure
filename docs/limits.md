@@ -11,13 +11,30 @@ Bash, WebFetch and MCP do not go through the proxy. The hook **blocks**; it does
 not pseudonymise. Anything you deliberately allow through on that channel goes
 out as itself.
 
+For Bash this is inherent — a `kubectl` command has to reach the real cluster,
+so there is nothing to substitute. For remote MCP it is not inherent, only
+current: see the note under D9 below.
+
 ## D9 is not met on a workstation
 
 **The egress harness detects; it does not prevent.** Say exactly that to a DPO.
 
-Measured: four destinations out of five escape `ANTHROPIC_BASE_URL` — remote
-MCP servers, the claude.ai connectors, the npm registry, a vendor's Copilot
-API. A local firewall cannot fix it, because `api.anthropic.com` and
+Measured on one real session: four destinations out of five escape
+`ANTHROPIC_BASE_URL` — `mcp-proxy.anthropic.com` (×12), `mcp.context7.com`
+(×11), `registry.npmjs.org` (×4), `api.githubcopilot.com` (×2), against
+`api.anthropic.com` (×5). That counts *destinations and connections*, not
+volume: the traffic carrying your infrastructure is the model's, and it does go
+through the proxy.
+
+!!! info "They escape `ANTHROPIC_BASE_URL`, not a proxy"
+
+    Those same four were **captured through mitmproxy** by the Phase 0 harness,
+    with `HTTPS_PROXY` and `NODE_EXTRA_CA_CERTS`. So they honour an explicit
+    forward proxy; what they ignore is one API client's base-URL setting. A
+    forward-proxy mode would bring remote MCP — JSON-RPC, which the walker
+    already knows how to traverse — into the reversible channel.
+
+A local firewall cannot fix it either way, because `api.anthropic.com` and
 `mcp-proxy.anthropic.com` resolve to the **same address**.
 
 The shape that does close it is deployment: an `internal` network for the
@@ -57,11 +74,6 @@ It is not a leak — fiction stays fiction — but it is a blind spot in the
 observability, which contradicts the rule that an accepted residual must be
 countable. The announcement asks the model to quote identifiers whole; that
 mitigates without measuring.
-
-## The inventory does not prime over an exact allowlist entry
-
-See [Detection](detection.md#configinventorytxt-what-is-ours). The design says
-it does; the code drops the span before the inventory is consulted. Tracked.
 
 ## Operational
 

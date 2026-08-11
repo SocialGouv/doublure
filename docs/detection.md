@@ -71,17 +71,16 @@ which is why it is the right place to resolve doubts.
     for and that does not exist is an **error**, never an empty inventory:
     reading it as empty would silently re-open the names it was meant to close.
 
-!!! bug "Current gap: the inventory does not prime over an *exact* allowlist entry"
+!!! note "Both sides read it, and a test proves they agree"
 
-    The diagram above is the design. In the code, the detection service drops a
-    span covered by an exact allowlist entry before returning it, so the engine
-    — where the inventory is applied — never sees that token. Declaring in your
-    inventory a name that also sits in the allowlist as an exact entry
-    therefore protects it in the unit tests and **not in a session**.
+    The inventory used to be applied by the engine only. But the detection
+    service drops a span covered by an exact allowlist entry *before* returning
+    it, so that token never reached the engine and the inventory could not
+    close it — the protection existed and did not act, exactly where it is
+    useful: on the generic words the allowlist opens.
 
-    It matters for the handful of generic words the allowlist opens
-    (`monitoring` is one). The fix is to mirror the inventory on the detection
-    side, exactly as the allowlist already is; it is tracked, not done.
+    `tests/test_inventory_detection.py` now judges the same values through
+    both sides of the boundary and fails if they disagree.
 
 ### `config/custom_patterns.json` — your conventions
 

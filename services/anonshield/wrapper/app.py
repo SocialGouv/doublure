@@ -37,6 +37,13 @@ LANG = "en"
 #: que « ce qui est public » ne soit maintenu qu'à un seul endroit.
 CONFIG_DIR = WRAPPER_DIR.parents[2] / "config"
 ALLOWLIST_FILE = Path(os.environ.get("ANON_ALLOWLIST_FILE", CONFIG_DIR / "allowlist.txt"))
+#: « Ce qui est À NOUS » — l'inverse logique de l'allowlist, et il PRIME sur
+#: elle. Le moteur l'appliquait déjà ; la détection l'ignorait, si bien qu'un
+#: token couvert par une entrée EXACTE était écarté ici et n'atteignait jamais
+#: le moteur : l'inventaire ne pouvait pas le refermer. La liste est unique, le
+#: parseur est dupliqué de part et d'autre de la frontière D7 — comme
+#: l'allowlist, et pour la même raison.
+INVENTORY_FILE_ENV = "ANON_INVENTORY_FILE"
 CUSTOM_PATTERNS_FILE = Path(
     os.environ.get("ANON_CUSTOM_PATTERNS_FILE", CONFIG_DIR / "custom_patterns.json")
 )
@@ -49,6 +56,57 @@ _ENGINE: dict = {"ready": False}
 # --------------------------------------------------------------------------- #
 # Configuration : allowlist et custom patterns
 # --------------------------------------------------------------------------- #
+
+
+#: Séparateurs de segments d'un identifiant composite. Un nom nous appartient
+#: dès qu'un de ses segments est à nous : `tenant-acmecorp-nda`,
+#: `registry.k8s.io/acmecorp-billing` et `vnd.acmecorp.billing+json` doivent
+#: tous être reconnus, et ils ne partagent aucune forme.
+_SEGMENTS_RE = re.compile(r"[.:/@+_\-]+")
+
+
+def _load_inventory() -> tuple[set[str], list[re.Pattern[str]]]:
+    """Deux formes de lignes : un LABEL, ou ``re:<regex>`` en full-match.
+
+    Un chemin DEMANDÉ qui n'existe pas est une erreur — le lire comme vide
+    rendrait publics les noms qu'il devait fermer, en silence. L'absence à
+    l'emplacement par défaut, elle, est l'état légitime d'un dépôt qui n'a pas
+    encore constitué son inventaire.
+    """
+    demande = os.environ.get(INVENTORY_FILE_ENV)
+    path = Path(demande) if demande else CONFIG_DIR / "inventory.txt"
+    if not path.exists():
+        if demande:
+            raise FileNotFoundError(f"inventaire introuvable : {path}")
+        return set(), []
+    labels: set[str] = set()
+    patterns: list[re.Pattern[str]] = []
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("re:"):
+            try:
+                patterns.append(re.compile(line[3:], re.I))
+            except re.error as exc:
+                raise ValueError(
+                    f"{path}:{lineno} — regex inventaire invalide : {exc}") from exc
+        else:
+            # Comparés en minuscules : un nom d'hôte est insensible à la casse,
+            # et manquer une variante de casse serait manquer une fuite. C'est
+            # l'inverse de l'allowlist, où la casse d'une entrée DÉCLARE si
+            # elle compte — ici il n'y a qu'un sens possible.
+            labels.add(line.lower())
+    return labels, patterns
+
+
+def _est_a_nous(value: str, inventory) -> bool:
+    if not inventory:
+        return False
+    labels, patterns = inventory
+    if any(p.fullmatch(value) for p in patterns):
+        return True
+    return any(seg.lower() in labels for seg in _SEGMENTS_RE.split(value) if seg)
 
 
 def _load_allowlist(path: Path):
@@ -180,6 +238,7 @@ def _load_engine() -> None:
     t0 = time.perf_counter()
     allow_exact, allow_patterns, allow_types, allow_pat_types = \
         _load_allowlist(ALLOWLIST_FILE)
+    inventory = _load_inventory()
     custom_patterns = _load_custom_patterns(CUSTOM_PATTERNS_FILE)
 
     # Imports src.anon APRÈS la mise en place de l'environnement.
@@ -269,6 +328,7 @@ def _load_engine() -> None:
         allow_types=allow_types,
         allow_pat_types=allow_pat_types,
         allow_patterns=allow_patterns,
+        inventory=inventory,
         loaded_in_s=round(time.perf_counter() - t0, 1),
         loaded_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     )
@@ -338,7 +398,7 @@ def _ecarter_cartes_invalides(ents: list[dict]) -> list[dict]:
 
 def _raison_publique(text: str, ent: dict, allow_exact: list[str],
                      allow_patterns, allow_types=None,
-                     allow_pat_types=None) -> str | None:
+                     allow_pat_types=None, inventory=None) -> str | None:
     """Ce span est-il public ? C'est le TOKEN ÉTENDU qui décide, et lui seul.
 
     Un span n'est qu'un fragment ; ce qui part sur le réseau, c'est le token.
@@ -371,6 +431,12 @@ def _raison_publique(text: str, ent: dict, allow_exact: list[str],
     """
     etype = ent.get("type")
     etendu = _expand_token(text, ent["start"], ent["end"])
+    # L'inventaire PRIME sur toute règle de forme, et il ne peut que REMONTER
+    # la protection : au pire il substitue un mot que l'allowlist ouvrait, il
+    # ne laisse jamais rien sortir. Il passe donc AVANT, et sur le token étendu
+    # — qui est ce qui part réellement sur le réseau.
+    if _est_a_nous(etendu, inventory) or _est_a_nous(ent["value"], inventory):
+        return None
     raison = _allowed(etendu, allow_exact, allow_patterns,
                       allow_types, allow_pat_types, etype)
     if raison is not None:
@@ -506,7 +572,8 @@ def detect(inp: DetectIn):
     par_forme: dict[str, dict] = {}
     for e in ents:
         raison = _raison_publique(inp.text, e, allow_exact, allow_patterns,
-                                  allow_types, allow_pat_types)
+                                  allow_types, allow_pat_types,
+                                  _ENGINE.get("inventory"))
         if raison is None:
             gardees.append(e)
         elif raison != "exact":
