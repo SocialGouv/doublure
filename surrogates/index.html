@@ -1261,8 +1261,8 @@ stands for a routable address, and an IPv6 generator that returned a local
 address whatever the input.</p>
 <p>The test that pins it replays all three; removing any fix makes it fail.</p>
 <h2 id="what-is-preserved-on-purpose">What is preserved, on purpose<a class="headerlink" href="#what-is-preserved-on-purpose" title="Permanent link">&para;</a></h2>
-<p>Four attributes survive substitution, because without them the text stops being
-readable as infrastructure:</p>
+<p>Five attributes survive substitution, because without them the text stops being
+readable as infrastructure — and, for the last one, as a chronology:</p>
 <table>
 <thead>
 <tr>
@@ -1286,6 +1286,10 @@ readable as infrastructure:</p>
 <tr>
 <td>internal vs external</td>
 <td>your network from the internet</td>
+</tr>
+<tr>
+<td>the interval between two dates</td>
+<td>how long an incident actually lasted</td>
 </tr>
 </tbody>
 </table>
@@ -1363,6 +1367,26 @@ of a usable agent, and they are stated rather than discovered.</p>
 <td><code>sha256:9f2b1c4e…</code></td>
 <td><code>sha256:ec7a28e3…</code></td>
 </tr>
+<tr>
+<td><code>PERSON</code></td>
+<td><code>Thibault Escourrou</code></td>
+<td><code>Emery-wren Corey</code></td>
+</tr>
+<tr>
+<td><code>DATE</code></td>
+<td><code>12 mars 2019</code></td>
+<td><code>24 octobre 2019</code></td>
+</tr>
+<tr>
+<td><code>DATE</code></td>
+<td><code>2026-02-03T14:32:00Z</code></td>
+<td><code>2026-09-17T14:32:00Z</code></td>
+</tr>
+<tr>
+<td><code>ADDRESS</code></td>
+<td><code>14 rue des Grands-Augustins, 75006 Paris</code></td>
+<td><code>76 rue des Darcy, 19449 Zion</code></td>
+</tr>
 </tbody>
 </table>
 <p>Read them closely:</p>
@@ -1375,6 +1399,11 @@ of a usable agent, and they are stated rather than discovered.</p>
   identifies moved;</li>
 <li><code>github.com</code> survived while the org and repository did not — the model still
   needs to know it is talking about GitHub;</li>
+<li>the date moved by a constant, so <code>14:32:00</code> is untouched and two dates stay
+  exactly as far apart as they were — an incident still reads as a sequence;</li>
+<li>the address kept <code>rue</code> and <code>des</code>, which identify nobody, and lost its
+  postcode: keeping the code keeps the LOCALITY, and locality is what a
+  re-identification joins on;</li>
 <li>the IBAN is <strong>checksum-valid</strong> (ISO 13616 mod 97) with the bank identifier
   neutralised, so a validator accepts it and it names no bank;</li>
 <li>the phone number sits in the range regulators reserve for fiction (<code>06 39 98</code>
