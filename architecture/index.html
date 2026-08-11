@@ -666,6 +666,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#forward-mode-the-channel-a-base-url-cannot-reach" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forward mode — the channel a base URL cannot reach
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-detection-service" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1236,6 +1247,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#forward-mode-the-channel-a-base-url-cannot-reach" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Forward mode — the channel a base URL cannot reach
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-detection-service" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1341,6 +1363,45 @@ a <code>kubectl</code> command has to reach the real cluster. So the hook <stron
 rather than substitutes, before execution, and traces its reason.</p>
 <p>Deciding what a command actually runs is a parsing problem, not a keyword
 problem. See <a href="../hook-parser/">the command grammar</a>.</p>
+<h2 id="forward-mode-the-channel-a-base-url-cannot-reach">Forward mode — the channel a base URL cannot reach<a class="headerlink" href="#forward-mode-the-channel-a-base-url-cannot-reach" title="Permanent link">&para;</a></h2>
+<p><code>ANTHROPIC_BASE_URL</code> redirects one client's calls to one API. Remote MCP
+servers, package registries and vendor tool APIs ignore it — Phase 0 measured
+four such destinations against the one that honours it, and captured all four
+<strong>through an explicit proxy</strong>.</p>
+<div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>task<span class="w"> </span>forward<span class="w"> </span>--<span class="w"> </span>&lt;any<span class="w"> </span>agent&gt;<span class="w">      </span><span class="c1"># sets HTTPS_PROXY and the trust bundle</span>
+</span></code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Verdict</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inspect</code></td>
+<td>TLS terminated with a local leaf, bodies pseudonymised and restored</td>
+</tr>
+<tr>
+<td><code>tunnel</code></td>
+<td>relayed untouched, so the client validates the origin's own certificate</td>
+</tr>
+<tr>
+<td>unlisted</td>
+<td><strong>refused</strong> — no socket is opened at all</td>
+</tr>
+</tbody>
+</table>
+<p>Three properties hold it together. The upstream certificate is <strong>verified</strong>,
+with no setting to skip it: a proxy that decrypts and then trusts anything has
+moved the attack surface rather than removed it. What cannot be rewritten — a
+stream with neither length nor chunking — is <strong>refused</strong>, because relaying it
+untouched on a destination the operator declared <code>inspect</code> would say it was
+read. And the authority that signs the leaves is never installed system-wide:
+trust travels in the launched process's environment and dies with it.</p>
+<p>This is also what makes the tool agent-agnostic. <code>HTTPS_PROXY</code> names no vendor,
+so one launcher covers any runtime that speaks HTTP, instead of one integration
+per agent.</p>
 <h2 id="the-detection-service">The detection service<a class="headerlink" href="#the-detection-service" title="Permanent link">&para;</a></h2>
 <p>AnonShield runs as a <strong>separate process behind HTTP</strong> (decision D7). The
 boundary is not decoration: it is a licence boundary, and

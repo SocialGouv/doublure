@@ -1302,8 +1302,18 @@ need.</p>
 not pseudonymise. Anything you deliberately allow through on that channel goes
 out as itself.</p>
 <p>For Bash this is inherent — a <code>kubectl</code> command has to reach the real cluster,
-so there is nothing to substitute. For remote MCP it is not inherent, only
-current: see the note under D9 below.</p>
+so there is nothing to substitute.</p>
+<p>For <strong>remote MCP it is no longer the case</strong>: <code>task forward -- &lt;agent&gt;</code> runs any
+agent behind a forward proxy that terminates TLS, pseudonymises JSON-RPC bodies
+on the way out and restores them on the way back. Destinations come from a list
+the operator writes in the state directory, and an unlisted one is refused.</p>
+<div class="admonition warning">
+<p class="admonition-title">New, and never yet run in a real session</p>
+<p>The forward mode is covered by tests, including interception proven against
+a client that trusts only our authority. It has not been exercised by a
+real agent for a full session — and in this project, that is the step that
+has found what tests did not, four times.</p>
+</div>
 <h2 id="d9-is-not-met-on-a-workstation">D9 is not met on a workstation<a class="headerlink" href="#d9-is-not-met-on-a-workstation" title="Permanent link">&para;</a></h2>
 <p><strong>The egress harness detects; it does not prevent.</strong> Say exactly that to a DPO.</p>
 <p>Measured on one real session: four destinations out of five escape
