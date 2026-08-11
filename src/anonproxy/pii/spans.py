@@ -17,11 +17,30 @@ import re
 #: Ce qui peut se trouver À L'INTÉRIEUR d'un nom entre deux fragments : la
 #: coupure d'un mot (rien), une espace, un trait d'union, une apostrophe. Une
 #: virgule, un point ou un mot séparent deux entités — pas deux morceaux d'une.
-_LIAISONS = set(" -'’")
+_LIAISONS = set("-'’")
+#: Espaces qui marquent une STRUCTURE, donc ne relient rien : la tabulation
+#: sépare des colonnes, les sauts de ligne des lignes. Fusionner à travers
+#: elles collerait deux personnes distinctes en une seule entité.
+_SEPARATEURS_STRUCTURE = set("\t\n\r\v\f\x1c\x1d\x1e\x85  ")
 #: Au-delà, ce n'est plus une liaison mais du texte entre deux entités.
 _ECART_MAX = 2
 #: Le modèle rend volontiers l'espace qui précède le mot.
 _BORDURES = " \t\n\r,;:.!?()[]{}\"'"
+
+
+def _est_liaison(car: str) -> bool:
+    """Ce caractère relie-t-il deux fragments d'une MÊME entité ?
+
+    Toute espace HORIZONTALE, pas seulement l'espace ordinaire. L'insécable est
+    la convention typographique française et arrive par tout copier-coller d'un
+    traitement de texte ou d'une page web : sans elle, `Marguerite<insécable>
+    Vasseur` restait DEUX fragments, donc deux identités fictives pour une
+    personne, et le modèle lisait deux individus là où il y en a un.
+
+    Énumérer les espaces une par une était le défaut ; on teste la propriété.
+    """
+    return car in _LIAISONS or (car.isspace()
+                                and car not in _SEPARATEURS_STRUCTURE)
 
 
 #: Un identifiant composite se délimite par ses séparateurs. `acmecorp` est un
@@ -219,7 +238,7 @@ def merge_fragments(spans: list[dict], text: str) -> list[dict]:
         ecart = text[courant["end"]:suivant["start"]]
         if (suivant["type"] == courant["type"]
                 and len(ecart) <= _ECART_MAX
-                and set(ecart) <= _LIAISONS):
+                and all(_est_liaison(c) for c in ecart)):
             courant["end"] = max(courant["end"], suivant["end"])
             # Le score le plus BAS gagne : un fragment douteux ne doit pas être
             # blanchi par un voisin certain, sinon le seuil ne porte plus sur

@@ -27,6 +27,7 @@ import base64
 import binascii
 import gzip
 import json
+import re
 import zlib
 from typing import Callable
 
@@ -36,14 +37,8 @@ _ENVELOPPE = frozenset({"jsonrpc", "id", "method"})
 _ROUTAGE = frozenset({"name"})
 #: Sous-arbres de données libres d'un message JSON-RPC.
 _DONNEES = frozenset({"params", "result", "error"})
-#: Champs où MCP range une charge encodée, et la clé qui dit ce qu'elle
-#: contient. `mimeType` est la forme camelCase du protocole MCP.
+#: Champs où MCP range une charge encodée.
 _CHARGES = ("blob", "data", "content")
-_TYPES_MIME = ("mimeType", "mime_type", "media_type", "mimetype")
-#: Seul un type MIME TEXTUEL autorise la traversée : décoder puis ré-encoder
-#: un PNG le corrigerait. Même arbitrage que le walker Anthropic (round 12).
-_MIME_TEXTUELS = ("text/", "application/json", "application/xml",
-                  "application/yaml", "application/x-yaml")
 #: Borne de la charge DÉTENDUE. Le proxy plafonne ce qu'il LIT à 32 Mio ; la
 #: décompression, elle, alloue ce que l'amont décide. Même borne, même raison —
 #: ce qui ne tient pas en mémoire ne peut pas être pseudonymisé — mais c'est
@@ -54,6 +49,17 @@ _MAX_CLAIR = 32 * 1024 * 1024
 
 class BinaryBody(RuntimeError):
     """Ce corps n'est pas du texte : il ne peut être ni relu ni réécrit."""
+
+
+def _semble_du_texte(clair: str) -> bool:
+    """Un binaire COURT peut décoder en UTF-8 par hasard ; le substituer le
+    corromprait. Un texte réel ne porte pas d'octet nul et très peu de
+    caractères de contrôle — c'est le même discriminant que le walker utilise
+    pour choisir un jeu de caractères."""
+    if "\x00" in clair:
+        return False
+    controles = sum(1 for c in clair if c < " " and c not in "\t\n\r")
+    return controles * 20 <= len(clair)
 
 
 class JsonRpcTransform:
@@ -89,7 +95,16 @@ class JsonRpcTransform:
             "gzip", "x-gzip")
         if comprime:
             body = self._detendre(body)
-        rendu = self._appliquer_clair(body, transformer)
+        try:
+            rendu = self._appliquer_clair(body, transformer)
+        except RecursionError as exc:
+            # `json.loads` est itératif en C et avale une profondeur
+            # arbitraire ; la traversée, elle, récurse en Python. Douze kilos
+            # d'octets — très en dessous de la limite d'entrée — faisaient
+            # sauter la pile, et la connexion mourait sans un mot. Même classe
+            # que la bombe gzip : une petite entrée, un coût disproportionné.
+            raise BinaryBody(
+                "JSON trop profond pour être relu sans épuiser la pile") from exc
         return gzip.compress(rendu) if comprime else rendu
 
     @staticmethod
@@ -159,23 +174,41 @@ class JsonRpcTransform:
         est du protocole, et uniquement à ce niveau."""
         if not isinstance(noeud, dict):
             return self._libre(noeud, transformer)
-        return {
+        rendu = {
             transformer(cle) if cle not in _ROUTAGE else cle:
                 valeur if cle in _ROUTAGE else self._libre(valeur, transformer)
             for cle, valeur in noeud.items()
         }
+        # `_libre` traverse les charges encodées de ses sous-dicts ; ce
+        # niveau-ci n'en faisait rien, et un serveur MCP range le contenu d'une
+        # ressource DIRECTEMENT sous `result` aussi souvent que sous un
+        # sous-objet. La valeur réelle sortait alors en base64, sans entrée au
+        # coffre ni substitut non résolu : rien à compter.
+        return self._charge_encodee(noeud, rendu, transformer)
 
     def _charge_encodee(self, source: dict, rendu: dict, transformer):
-        """Traverse une charge base64 quand une CLÉ VOISINE la dit textuelle.
+        """Traverse une charge base64 qui SE DÉCODE en texte.
 
-        Un serveur MCP range le contenu d'une ressource sous `blob`, avec son
-        type MIME à côté. Traité comme une chaîne opaque, le fichier traversait
-        VERBATIM dans les deux sens — la lecture d'une ressource rendait le
-        document brut à l'agent, et son écriture le sortait tel quel.
+        Un serveur MCP range le contenu d'une ressource sous `blob`. Traité
+        comme une chaîne opaque, le fichier traversait VERBATIM dans les deux
+        sens — la lecture d'une ressource rendait le document brut à l'agent,
+        et son écriture le sortait tel quel.
+
+        **Le type MIME déclaré ne décide pas.** Il était la porte d'entrée ;
+        or il est écrit par l'amont. Un serveur qui étiquetait `image/png` une
+        charge de texte la faisait sortir intacte, et il suffisait de deux
+        déclinaisons contradictoires de la clé (`mimeType` et `mimetype`) pour
+        choisir celle qui l'arrangeait. Faire dépendre la protection d'une
+        valeur écrite par celui dont on se protège est l'anti-pattern du
+        projet.
+
+        Ce qui décide est le DÉCODAGE : du base64 qui rend de l'UTF-8 propre
+        est du texte, quoi qu'on en déclare. Un binaire échoue au décodage dès
+        ses premiers octets ; s'il passe par hasard, `_semble_du_texte`
+        l'arrête. Se tromper vers le texte corrompt un binaire, ce qui se VOIT ;
+        se tromper vers le binaire laisse sortir une valeur réelle sans laisser
+        de trace.
         """
-        mime = next((str(source[c]) for c in _TYPES_MIME if c in source), "")
-        if not mime.lower().startswith(_MIME_TEXTUELS):
-            return rendu
         for champ in _CHARGES:
             valeur = source.get(champ)
             if not isinstance(valeur, str):
@@ -184,6 +217,8 @@ class JsonRpcTransform:
                 clair = base64.b64decode(valeur, validate=True).decode("utf-8")
             except (binascii.Error, UnicodeDecodeError, ValueError):
                 continue  # pas du base64 textuel : la chaîne a déjà été traitée
+            if not _semble_du_texte(clair):
+                continue
             rendu[transformer(champ)] = base64.b64encode(
                 transformer(clair).encode("utf-8")).decode("ascii")
         return rendu

@@ -92,6 +92,13 @@ class ProxyState:
             racine=settings.policy_dir, master_key=master,
             scope_key=settings.scope_key, session=settings.session_id,
         )
+        # Une valeur de réglage invalide dans l'environnement doit refuser le
+        # DÉMARRAGE. Elle levait bien — mais à chaque requête, donc une faute
+        # de frappe se lisait comme une panne du canal : socket coupée, message
+        # noyé dans une erreur d'échange. Le refus est le bon comportement,
+        # c'est son MOMENT qui était faux. Même règle que le binaire de
+        # contrôle, qui refuse de démarrer sans ses chemins d'état.
+        self.policy.reglages_resolus()
         self.engine = SurrogateEngine(
             vault=self.vault,
             master_key=master,

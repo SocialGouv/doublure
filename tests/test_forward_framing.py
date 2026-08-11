@@ -548,3 +548,241 @@ def test_ordinary_headers_still_pass(interception, autorite_origine, tmp_path):
         assert b"x-request-id: abc-123" in recu, recu[:300]
     finally:
         proxy.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Tour 10 — les réponses INTÉRIMAIRES, et ce qu'un refus a le droit de dire
+# --------------------------------------------------------------------------- #
+
+
+class OrigineIntermediaire:
+    """Amont qui envoie une réponse `1xx` avant sa réponse finale.
+
+    Le corps arrive souvent COLLÉ à l'en-tête dans le même segment : le lire
+    sans tenir compte de ce qui est déjà dans le tampon fait attendre un amont
+    de test pour rien, et donne un faux défaut. (Payé sur le harnais d'un
+    agent, dont deux « findings » venaient de là.)
+    """
+
+    def __init__(self, ca: InterceptionCA, tmp_path, *, delai=0.0,
+                 interim=b"HTTP/1.1 100 Continue\r\n\r\n"):
+        cert_pem, cle_pem = ca.leaf_for("127.0.0.1")
+        pem = tmp_path / "oi.pem"
+        pem.write_bytes(cert_pem + cle_pem)
+        self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        self.ctx.load_cert_chain(certfile=str(pem))
+        self.delai, self.interim = delai, interim
+        self.corps_recus: list[bytes] = []
+        self.sock = socket.socket()
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(8)
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self._servir, daemon=True).start()
+
+    def _servir(self):
+        while True:
+            try:
+                brut, _ = self.sock.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._connexion, args=(brut,),
+                             daemon=True).start()
+
+    def _connexion(self, brut):
+        try:
+            tls = self.ctx.wrap_socket(brut, server_side=True)
+        except (ssl.SSLError, OSError):
+            return
+        try:
+            tampon = b""
+            while b"\r\n\r\n" not in tampon:
+                morceau = tls.recv(4096)
+                if not morceau:
+                    return
+                tampon += morceau
+            tete, _, corps = tampon.partition(b"\r\n\r\n")
+            taille = 0
+            for ligne in tete.split(b"\r\n"):
+                if ligne.lower().startswith(b"content-length:"):
+                    taille = int(ligne.split(b":", 1)[1].strip())
+            if self.delai:
+                tls.sendall(self.interim)
+            while len(corps) < taille:
+                morceau = tls.recv(taille - len(corps))
+                if not morceau:
+                    break
+                corps += morceau
+            self.corps_recus.append(corps)
+            finale = (b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n"
+                      b"connection: close\r\n\r\nok")
+            if self.delai:
+                threading.Event().wait(self.delai)
+                tls.sendall(finale)
+            else:
+                tls.sendall(self.interim + finale)  # les deux d'un coup
+        except OSError:
+            pass
+        finally:
+            tls.close()
+
+
+def _monter_interim(interception, autorite_origine, tmp_path, **kw):
+    origine = OrigineIntermediaire(autorite_origine, tmp_path, **kw)
+    proxy = ForwardProxy(
+        ForwardPolicy(inspect=["127.0.0.1"], tunnel=[]), interception,
+        upstream_context=ssl.create_default_context(
+            cafile=str(autorite_origine.cert_path)),
+        idle_timeout=3.0)
+    proxy.start_in_thread()
+    return origine, proxy
+
+
+def _une_requete(proxy, interception, port, requete, attendre_interim=False):
+    """Une requête, en octets bruts. `attendre_interim` reproduit un client
+    conforme qui n'envoie son corps qu'après le `100 Continue`."""
+    brut = socket.create_connection(("127.0.0.1", proxy.port), timeout=10)
+    brut.sendall(f"CONNECT 127.0.0.1:{port} HTTP/1.1\r\n\r\n".encode())
+    vu = b""
+    while b"\r\n\r\n" not in vu:
+        vu += brut.recv(4096)
+    ctx = ssl.create_default_context(cafile=str(interception.cert_path))
+    tls = ctx.wrap_socket(brut, server_hostname="127.0.0.1")
+    tete, _, corps = requete.partition(b"\r\n\r\n")
+    tls.sendall(tete + b"\r\n\r\n" if attendre_interim else requete)
+    recu = b""
+    try:
+        tls.settimeout(5)
+        while len(recu) < 8192:
+            if attendre_interim and b"100 Continue" in recu:
+                attendre_interim = False
+                tls.sendall(corps)
+            morceau = tls.recv(4096)
+            if not morceau:
+                break
+            recu += morceau
+    except (TimeoutError, OSError):
+        pass
+    finally:
+        tls.close()
+    return recu
+
+
+def test_an_interim_response_is_relayed_and_the_real_one_follows(
+        interception, autorite_origine, tmp_path):
+    """HAUT et SILENCIEUX. Une `1xx` est INTÉRIMAIRE : elle annonce que la
+    vraie réponse suit, sur la MÊME connexion. Traitée comme finale, elle
+    était relayée puis l'amont était fermé derrière — le client recevait le
+    `100 Continue` et attendait un 200 qui n'arriverait jamais. Aucune erreur
+    ne le nommait."""
+    origine, proxy = _monter_interim(interception, autorite_origine, tmp_path,
+                                     delai=0.2)
+    try:
+        recu = _une_requete(proxy, interception, origine.port,
+                            b"POST /x HTTP/1.1\r\nhost: x\r\ncontent-length: 5"
+                            b"\r\nconnection: close\r\n\r\nhello")
+        assert b"100 Continue" in recu, recu[:300]
+        assert b"200 OK" in recu, recu[:300]
+        assert recu.rstrip().endswith(b"ok"), recu[:300]
+    finally:
+        proxy.stop()
+
+
+def test_an_interim_response_bundled_with_the_real_one_is_not_smuggling(
+        interception, autorite_origine, tmp_path):
+    """L'amont a le droit d'envoyer la `1xx` et la finale d'un seul coup. Le
+    contrôle de résidu — qui ferme le VOL de réponse — voyait la vraie réponse
+    comme des octets en trop et refusait un amont parfaitement conforme."""
+    origine, proxy = _monter_interim(interception, autorite_origine, tmp_path)
+    try:
+        recu = _une_requete(proxy, interception, origine.port,
+                            b"POST /x HTTP/1.1\r\nhost: x\r\ncontent-length: 5"
+                            b"\r\nconnection: close\r\n\r\nhello")
+        assert b"502" not in recu, recu[:300]
+        assert b"200 OK" in recu and recu.rstrip().endswith(b"ok"), recu[:300]
+    finally:
+        proxy.stop()
+
+
+def test_a_client_expecting_100_continue_is_not_left_waiting(
+        interception, autorite_origine, tmp_path):
+    """FAUX POSITIF. Un client conforme envoie `Expect: 100-continue` et ATTEND
+    l'accusé avant son corps ; le proxy attendait ce corps avant d'écrire quoi
+    que ce soit. Les deux côtés s'attendaient, et le délai d'inactivité rendait
+    un 502 sur une requête parfaitement légitime."""
+    origine, proxy = _monter_interim(interception, autorite_origine, tmp_path)
+    try:
+        recu = _une_requete(proxy, interception, origine.port,
+                            b"POST /x HTTP/1.1\r\nhost: x\r\ncontent-length: 5"
+                            b"\r\nexpect: 100-continue\r\nconnection: close"
+                            b"\r\n\r\nhello", attendre_interim=True)
+        assert b"100 Continue" in recu, recu[:300]
+        assert b"200 OK" in recu, recu[:300]
+        assert origine.corps_recus == [b"hello"], origine.corps_recus
+    finally:
+        proxy.stop()
+
+
+def test_a_protocol_switch_is_refused_not_relayed_blind(
+        interception, autorite_origine, tmp_path):
+    """Un 101 dit que la suite n'est plus du HTTP, donc n'est plus relisible.
+    La relayer sur une destination déclarée À INSPECTER serait le fail-open
+    silencieux que ce module existe pour éviter."""
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             [b"HTTP/1.1 101 Switching Protocols\r\n"
+                              b"upgrade: websocket\r\n\r\n"])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert b"502" in recu, recu[:300]
+        assert b"101" not in recu.split(b"\r\n\r\n")[0], recu[:300]
+    finally:
+        proxy.stop()
+
+
+def test_an_unreadable_response_header_is_named_not_silent(
+        interception, autorite_origine, tmp_path):
+    """HAUT. `_lire_entete` avalait `LimitOverrunError` et
+    `IncompleteReadError` en rendant `None` : `_echange` sortait alors par un
+    chemin qui n'est PAS une exception, donc à côté de la garde censée
+    garantir qu'aucune interruption ne reste muette. Le client recevait zéro
+    octet sur une socket fermée sans un mot."""
+    enorme = (b"HTTP/1.1 200 OK\r\nx-bourrage: " + b"A" * 100_000 + b"\r\n")
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             [enorme], ferme_apres=True)
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "zéro octet reçu : la socket est morte sans un mot"
+        assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()
+
+
+@pytest.mark.parametrize("reponse", [
+    b"HTTP/1.1 MARQUEUR_DE_L_AMONT STOP\r\ncontent-length: 2\r\n\r\nok",
+    b"HTTP/1.1 200 OK\r\ncontent-length: MARQUEUR_DE_L_AMONT\r\n\r\nok",
+    b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n"
+    b"MARQUEUR_DE_L_AMONT\r\nok\r\n",
+    b"HTTP/1.1 200 OK\r\nx-a\rMARQUEUR_DE_L_AMONT: 1\r\ncontent-length: 2\r\n\r\nok",
+])
+def test_a_refusal_never_quotes_what_the_upstream_wrote(
+        interception, autorite_origine, tmp_path, reponse):
+    """HAUT, et c'est la CLASSE plutôt que le site.
+
+    Un refus qui cite la ligne fautive rend à l'opérateur du texte choisi par
+    l'amont — faux avertissement, fausse commande à lancer — directement dans
+    son terminal, et sans passer par la restauration. J'avais fermé UN site sur
+    quatre : la ligne de statut, le `content-length`, la taille de morceau et
+    le nom d'en-tête citaient tous leur entrée.
+
+    Ce test balaie les quatre par le même marqueur, donc il tient aussi pour
+    le cinquième site que quelqu'un ajoutera. Les NOMBRES restent autorisés :
+    passés par `int()`, ils ne peuvent rien porter d'autre que des chiffres."""
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             [reponse], ferme_apres=True)
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "tâche morte en silence"
+        assert b"502" in recu, recu[:300]
+        assert b"MARQUEUR_DE_L_AMONT" not in recu, recu[:400]
+    finally:
+        proxy.stop()

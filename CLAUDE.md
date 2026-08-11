@@ -1275,6 +1275,69 @@ and stated**: an upstream dripping one byte under the deadline holds an
 exchange (a total ceiling would cut a legitimate slow body — the twin defect,
 and the reason the deadline is written as inactivity).
 
+## Round 10 of the forward loop (2026-08-12) — narrow perimeters, and they held
+
+Four agents on four disjoint, DELIBERATELY NARROW perimeters, told to report
+after the first proven fact rather than at the end. None died; all four ran
+their own reproducers. That is the round-9 lesson applied, and it is what
+changed: the returnable unit has to be small enough to survive.
+
+**Nine defects, and three of them are mine from the day before.**
+
+**A base64 payload at the FIRST level under `params`/`result`/`error` went out
+verbatim — CRITICAL, silent.** Decoding lived in the branch that walks nested
+dicts; the first level has its own branch and did nothing. My original test put
+the payload in `params.arguments` — **the half that worked**.
+
+**The declared media type decided whether to protect — CRITICAL.** It is
+written by the upstream. Labelling text `image/png` made it travel intact, and
+two contradictory spellings of the key (`mimeType` and `mimetype`) let the
+sender pick the one that suited. **Making protection depend on a value written
+by the party you are protecting against is the §7 anti-pattern**, and it had
+been sitting in the gate itself. The DECODE decides now: base64 that yields
+clean UTF-8 is text whatever anyone declares; a real binary fails on its first
+bytes, and `_semble_du_texte` catches the ones that pass by luck.
+
+**Scope file names collided — CRITICAL, four ways.** Substituting characters
+(`:` → `-`, `/` → `_`) cannot be injective, so `proj:client` and `proj-client`
+wrote the same file and a *reveal* crossed between scopes. The fourth case was
+**created by my fix of an hour before**: the `-session-` infix made project
+`acme-session-prod` collide with session `prod` of project `acme` — across the
+scope AND the boundary. Fixing an escaping scheme with another escaping scheme
+reproduces the class; what decides is now a fingerprint of the exact tuple.
+
+**A refusal quoted what the upstream wrote — HIGH, and I had fixed ONE site of
+four.** Round 9 closed the header parser and left the status line, the
+`content-length`, the chunk size. A hostile upstream plants readable text —
+a fake warning, a command to run — straight into the operator's terminal,
+bypassing restoration. The test now sweeps all four with one marker, so it also
+holds for the fifth site someone adds.
+
+**Interim `1xx` responses were not modelled at all — HIGH, one silent.** A 1xx
+announces that the real response follows on the SAME connection. Treated as
+final: a client sending `Expect: 100-continue` deadlocked against a proxy
+waiting for its body (both refused, 502); an upstream bundling 1xx with the
+final response tripped the residue check; and worst, an upstream answering
+later had its real response thrown away — the client got the `100 Continue` and
+waited forever. A `101` is refused: what follows is no longer HTTP, so relaying
+it would be the silent fail-open.
+
+**Small input, disproportionate cost, twice more.** 12 KB of nested JSON blew
+the Python stack (`json.loads` is iterative in C, the walk is not) and killed
+the connection without a word. And `_lire_entete` swallowed `LimitOverrunError`
+and `IncompleteReadError` into `None`, so `_echange` left by a path that is NOT
+an exception — around the guard meant to ensure no interruption stays mute. The
+client received zero bytes.
+
+**An invalid env setting raised on EVERY request** instead of refusing the
+start, so a typo read as a channel failure. The refusal was right; its MOMENT
+was wrong.
+
+**Rejected after proof**: span offsets are characters, not bytes. **Fixed from
+a round-9 lead**: fragments now join across any horizontal whitespace — a
+non-breaking space, which is standard French typography, left `Marguerite
+Vasseur` as two people.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

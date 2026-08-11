@@ -192,12 +192,27 @@ class ForwardProxy:
         finally:
             ecrivain.close()
 
-    async def _lire_entete(self, lecteur: asyncio.StreamReader) -> bytes | None:
+    async def _lire_entete(self, lecteur: asyncio.StreamReader, *,
+                           strict: bool = False) -> bytes | None:
+        """L'en-tête, ou `None` si l'interlocuteur est simplement parti.
+
+        `strict` — côté AMONT, « simplement parti » n'existe pas : on a posé
+        une question. Un en-tête démesuré ou coupé au milieu doit être un refus
+        NOMMÉ. Sans ça, `_echange` sortait par `not reponse`, c'est-à-dire par
+        un chemin qui n'est pas une exception, donc à côté de la garde censée
+        garantir qu'aucune interruption ne reste muette : le client recevait
+        zéro octet, sur une socket fermée sans un mot.
+        """
         try:
             return await lecteur.readuntil(b"\r\n\r\n")
-        except asyncio.LimitOverrunError:
+        except asyncio.LimitOverrunError as exc:
+            if strict:
+                raise _CorpsIllisible("en-tête de réponse démesuré") from exc
             return None
-        except asyncio.IncompleteReadError:
+        except asyncio.IncompleteReadError as exc:
+            if strict:
+                raise _CorpsIllisible(
+                    "en-tête de réponse coupé avant sa fin") from exc
             return None
 
     async def _connect(self, destination: str, lecteur: asyncio.StreamReader,
@@ -332,6 +347,17 @@ class ForwardProxy:
         try:
             ligne, entetes = _analyser(requete)
             methode = ligne.split(" ", 1)[0].upper()
+            if "100-continue" in entetes.pop("expect", "").lower():
+                # Le client ATTEND cet accusé avant d'envoyer son corps, et
+                # nous attendions son corps : les deux côtés s'attendaient, et
+                # le blocage se terminait en 502 sur un client parfaitement
+                # conforme. C'est nous qui le rendons, parce que c'est nous qui
+                # décidons d'accepter le corps : l'interception réécrit la
+                # requête entière, donc elle ne peut pas déléguer cet accusé à
+                # l'amont sans connaître d'abord la longueur substituée.
+                # L'en-tête ne part pas plus loin — l'attente est déjà levée.
+                ce.write(b"HTTP/1.1 100 Continue\r\n\r\n")
+                await ce.drain()
             corps = await self._lire_corps(cl, entetes, reponse=False)
         except _CorpsIllisible as exc:
             await self._echouer(ce, destination, str(exc))
@@ -341,23 +367,47 @@ class ForwardProxy:
         ae.write(_reconstruire(ligne, entetes, corps, avec_corps=bool(corps)))
         await ae.drain()
 
-        try:
-            reponse = await self._attendre(self._lire_entete(al),
-                                           "l'amont n'a pas répondu")
-            if not reponse:
+        # Une réponse 1xx est INTÉRIMAIRE : elle annonce que la vraie réponse
+        # suit, sur la MÊME connexion. Traiter toute réponse comme finale
+        # donnait trois symptômes, dont un silencieux — le client recevait le
+        # `100 Continue`, l'amont était fermé derrière, et la vraie réponse
+        # n'arrivait jamais. Les deux autres étaient des refus : le contrôle de
+        # résidu voyait la vraie réponse comme des octets en trop.
+        while True:
+            try:
+                reponse = await self._attendre(
+                    self._lire_entete(al, strict=True),
+                    "l'amont n'a pas répondu")
+                if not reponse:
+                    return False
+                ligne_r, entetes_r = _analyser(reponse)
+            except _CorpsIllisible as exc:
+                await self._echouer(ce, destination, str(exc))
                 return False
-            ligne_r, entetes_r = _analyser(reponse)
-        except _CorpsIllisible as exc:
-            await self._echouer(ce, destination, str(exc))
-            return False
-        try:
-            statut = int(ligne_r.split(" ")[1])
-        except (IndexError, ValueError):
-            # Remontait jusqu'à `_client`, qui ne l'attrapait pas : la tâche
-            # mourait et le client voyait sa socket coupée sans un mot.
-            await self._echouer(ce, destination,
-                                f"ligne de statut amont illisible : {ligne_r!r}")
-            return False
+            try:
+                statut = int(ligne_r.split(" ")[1])
+            except (IndexError, ValueError):
+                # Remontait jusqu'à `_client`, qui ne l'attrapait pas : la tâche
+                # mourait et le client voyait sa socket coupée sans un mot.
+                await self._echouer(ce, destination,
+                                    "ligne de statut amont non conforme")
+                return False
+            if not 100 <= statut < 200:
+                break
+            if statut == 101:
+                # Changement de protocole : ce qui suit n'est plus du HTTP,
+                # donc plus relisible. Le relayer sur une destination déclarée
+                # À INSPECTER serait le fail-open silencieux que ce module
+                # existe pour éviter.
+                await self._echouer(
+                    ce, destination,
+                    "l'amont change de protocole (101) : la suite n'est plus "
+                    "relisible, et la relayer intacte serait un fail-open")
+                return False
+            # Une 1xx n'a jamais de corps : `avec_corps=False` évite aussi de
+            # lui inventer un `content-length`, que la RFC lui interdit.
+            ce.write(_reconstruire(ligne_r, entetes_r, b"", avec_corps=False))
+            await ce.drain()
         if methode == "HEAD" or statut in _SANS_CORPS:
             ce.write(_reconstruire(ligne_r, entetes_r, b"", avec_corps=False))
             await ce.drain()
@@ -402,7 +452,7 @@ class ForwardProxy:
                 n = int(taille)
             except ValueError as exc:
                 raise _CorpsIllisible(
-                    f"content-length illisible : {taille!r}") from exc
+                    "content-length non numérique") from exc
             if n < 0:
                 raise _CorpsIllisible(f"content-length négatif : {n}")
             if n > _MAX_CORPS:
@@ -479,7 +529,7 @@ class ForwardProxy:
                 taille = int(ligne.split(b";", 1)[0], 16)
             except ValueError as exc:
                 raise _CorpsIllisible(
-                    f"taille de morceau illisible : {ligne!r}") from exc
+                    "taille de morceau non conforme") from exc
             if taille < 0:
                 # `int(b"-5", 16)` vaut -5 sans lever : c'est `readexactly` qui
                 # tombait, plus loin et sans être rattrapé.

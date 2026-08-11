@@ -229,3 +229,78 @@ def test_a_body_just_under_the_bound_still_goes_through(transform):
     sortie = transform.outgoing("h", {"content-encoding": "gzip"},
                                 gzip.compress(clair))
     assert b"hote-fictif.test" in gzip.decompress(sortie)
+
+
+# --------------------------------------------------------------------------- #
+# Tour 10 — ce qui décide qu'une charge est du texte, et ce qui la borne
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("cle", ["params", "result", "error"])
+def test_a_payload_at_the_first_level_is_traversed_too(transform, cle):
+    """CRITIQUE, fuite SILENCIEUSE. Le décodage des charges encodées vivait
+    dans `_libre`, qui traite les sous-dicts ; le PREMIER niveau sous
+    `params`/`result`/`error` a son propre chemin, et il n'en faisait rien.
+
+    Un serveur MCP range le contenu d'une ressource directement sous `result`
+    aussi souvent que sous un sous-objet. La valeur réelle sortait alors en
+    base64 : pas d'entrée au coffre, pas de substitut non résolu, rien à
+    compter. Mon test d'origine plaçait la charge dans `params.arguments` —
+    c'est-à-dire dans la moitié qui marchait."""
+    import base64
+
+    charge = base64.b64encode(b"log: db-01.acme.internal").decode()
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        cle: {"mimeType": "text/plain", "blob": charge}}).encode()
+    rendu = json.loads(transform.outgoing("h", {}, corps))
+    dedans = base64.b64decode(rendu[cle]["blob"]).decode()
+    assert "db-01.acme.internal" not in dedans, dedans
+    assert "hote-fictif.test" in dedans
+
+
+@pytest.mark.parametrize("types", [
+    {"mimeType": "image/png"},                          # étiquette mensongère
+    {"mimeType": "image/png", "mimetype": "text/plain"},  # deux, contradictoires
+    {"mimeType": "application/vnd.acme+json"},          # RFC 6839, structuré
+    {},                                                 # aucune étiquette
+])
+def test_the_declared_media_type_does_not_decide(transform, types):
+    """CRITIQUE. Le type MIME était la porte d'entrée du décodage — or il est
+    écrit par l'AMONT. Étiqueter `image/png` une charge de texte la faisait
+    sortir intacte, et deux déclinaisons contradictoires de la clé suffisaient
+    à choisir celle qui arrange.
+
+    Faire dépendre la protection d'une valeur écrite par celui dont on se
+    protège est l'anti-pattern du projet. C'est le DÉCODAGE qui décide."""
+    import base64
+
+    charge = base64.b64encode(b"db-01.acme.internal").decode()
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {**types, "blob": charge}}).encode()
+    rendu = json.loads(transform.outgoing("h", {}, corps))
+    assert base64.b64decode(rendu["result"]["blob"]).decode() == "hote-fictif.test"
+
+
+def test_a_real_binary_is_still_left_intact(transform):
+    """L'AUTRE MOITIÉ : décider par le décodage ne doit pas corrompre un vrai
+    binaire. Il échoue en UTF-8 dès ses premiers octets ; s'il passait par
+    hasard, ses octets nuls l'arrêtent."""
+    import base64
+
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n\x00\xff\xfe" * 20).decode()
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {"mimeType": "image/png", "blob": png}}).encode()
+    rendu = json.loads(transform.outgoing("h", {}, corps))
+    assert rendu["result"]["blob"] == png
+
+
+def test_a_deeply_nested_body_is_refused_instead_of_killing_the_stack(transform):
+    """HAUT. `json.loads` est itératif en C et avale une profondeur arbitraire ;
+    la traversée, elle, récurse en Python. Douze kilo-octets — très en dessous
+    de la limite d'entrée de 32 Mio — faisaient sauter la pile, et la connexion
+    mourait sans un mot. Même classe que la bombe gzip : une petite entrée, un
+    coût disproportionné."""
+    profond = ('{"a":' * 2000) + "1" + ("}" * 2000)
+    assert len(profond) < 20_000
+    with pytest.raises(BinaryBody, match="trop profond"):
+        transform.outgoing("h", {}, profond.encode())

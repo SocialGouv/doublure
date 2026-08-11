@@ -505,3 +505,71 @@ def test_la_meme_portee_se_retrouve_bien(tmp_path):
     relu = Policy(racine=racine, master_key=MASTER, scope_key="project:alpha",
                   session="s-42")
     assert relu.decide("HOSTNAME", "infra", HOTE)[0] is Decision.REVELER
+
+
+@pytest.mark.parametrize("a,b", [
+    # `:` → `-` : deux notations d'une même intention, ordinaires en pratique.
+    (("proj:client", None), ("proj-client", None)),
+    # `/` → `_`
+    (("team/prod", None), ("team_prod", None)),
+    # le même sur l'identifiant de session
+    (("proj", "s/1"), ("proj", "s_1")),
+    # le pire : un PROJET nommé comme l'infixe de session d'un autre
+    (("acme-session-prod", None), ("acme", "prod")),
+])
+def test_deux_portees_distinctes_n_ecrivent_jamais_le_meme_fichier(tmp_path, a, b):
+    """CRITIQUE. **Substituer des caractères ne peut pas être injectif** : des
+    portées distinctes tombaient sur le même fichier, donc une décision
+    « révéler » de l'une s'appliquait à l'autre.
+
+    Le dernier cas est celui que MON correctif précédent a créé : l'infixe
+    `-session-` posé pour séparer les sessions faisait collisionner le projet
+    `acme-session-prod` avec la session `prod` du projet `acme` — à travers la
+    portée ET le scope_key. Corriger un schéma d'échappement par un autre
+    schéma d'échappement reproduit la classe ; ce qui décide est désormais
+    l'empreinte du tuple exact."""
+    (scope_a, sess_a), (scope_b, sess_b) = a, b
+    racine = tmp_path / "policy"
+    pa = Policy(racine=racine, master_key=MASTER, scope_key=scope_a, session=sess_a)
+    pb = Policy(racine=racine, master_key=MASTER, scope_key=scope_b, session=sess_b)
+
+    fichiers_a = {p: f for p, f in pa._fichiers.items() if p != "global"}
+    fichiers_b = {p: f for p, f in pb._fichiers.items() if p != "global"}
+    communs = set(fichiers_a.values()) & set(fichiers_b.values())
+    assert not communs, f"deux portées écrivent {communs}"
+
+    # Et la conséquence, mesurée : une révélation ne traverse pas.
+    for portee in ("projet", "session"):
+        pa.definir(portee, "type", "HOSTNAME", Decision.REVELER)
+    assert pb.decide("HOSTNAME", "infra", HOTE)[0] is Decision.ANONYMISER
+
+
+def test_un_scope_key_exotique_reste_lisible_et_relisible(tmp_path):
+    """L'AUTRE MOITIÉ : rendre le nom injectif ne doit ni casser la relecture,
+    ni rendre le répertoire illisible pour l'opérateur qui l'inspecte."""
+    racine = tmp_path / "policy"
+    for scope in ("tenant:acme/prod", "projet-accentué-éàü", "a" * 200, "::://"):
+        ecrit = Policy(racine=racine, master_key=MASTER, scope_key=scope)
+        ecrit.definir("projet", "type", "HOSTNAME", Decision.REVELER)
+        relu = Policy(racine=racine, master_key=MASTER, scope_key=scope)
+        assert relu.decide("HOSTNAME", "infra", HOTE)[0] is Decision.REVELER, scope
+        nom = relu._fichiers["projet"].name
+        assert nom.endswith(".json") and "/" not in nom and len(nom) < 80, nom
+
+
+def test_un_reglage_d_environnement_invalide_refuse_le_demarrage(tmp_path, monkeypatch):
+    """HAUT. Un réglage invalide dans l'environnement levait — mais à CHAQUE
+    requête, au fond du pipeline. Une faute de frappe se lisait donc comme une
+    panne du canal : socket coupée, message noyé dans une erreur d'échange.
+
+    Le refus est le bon comportement (jamais de repli silencieux) ; c'est son
+    MOMENT qui était faux. Il appartient au démarrage, comme pour le binaire de
+    contrôle qui refuse de démarrer sans ses chemins d'état."""
+    politique = make_policy(tmp_path)
+    monkeypatch.setenv("ANONPROXY_MODE", "n_importe_quoi")
+    with pytest.raises(ReglageInvalide, match="ANONPROXY_MODE"):
+        politique.reglages_resolus()
+    monkeypatch.delenv("ANONPROXY_MODE")
+    monkeypatch.setenv("ANONPROXY_DOMAINES_FICTIFS", "n_importe")
+    with pytest.raises(ReglageInvalide):
+        politique.reglages_resolus()

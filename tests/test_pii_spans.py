@@ -99,3 +99,52 @@ def test_a_leading_space_is_not_part_of_the_name():
 
 def test_no_spans_is_not_an_error():
     assert merge_fragments([], TEXTE) == []
+
+
+# --------------------------------------------------------------------------- #
+# Tour 10 — ce qui relie deux fragments d'un même nom
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("liaison,nom", [
+    (" ", "espace ordinaire"),
+    (" ", "insécable"),
+    (" ", "insécable fine"),
+    (" ", "espace fine"),
+    ("-", "trait d'union"),
+])
+def test_une_espace_insecable_relie_un_nom_comme_une_espace(liaison, nom):
+    """MOYEN, D1. `_LIAISONS` énumérait les espaces au lieu de tester la
+    propriété : seule l'espace ordinaire reliait deux fragments.
+
+    L'insécable est la convention typographique française et arrive par tout
+    copier-coller d'un traitement de texte ou d'une page web. Sans elle,
+    `Marguerite<insécable>Vasseur` restait DEUX fragments, donc deux identités
+    fictives — le modèle lisait deux individus là où il y en a un. Rien ne
+    fuyait : les deux moitiés étaient substituées. C'est le raisonnement du
+    modèle qui était abîmé."""
+    texte = f"Marguerite{liaison}Vasseur"
+    fragments = [{"start": 0, "end": 10, "type": "PERSON", "score": 0.9},
+                 {"start": 11, "end": len(texte), "type": "PERSON", "score": 0.9}]
+    fusion = merge_fragments(fragments, texte)
+    assert len(fusion) == 1, f"{nom} : {[texte[s['start']:s['end']] for s in fusion]}"
+    assert texte[fusion[0]["start"]:fusion[0]["end"]] == texte
+
+
+@pytest.mark.parametrize("separateur,nom", [
+    ("\t", "tabulation"),
+    ("\n", "saut de ligne"),
+    ("\r\n", "retour chariot"),
+])
+def test_une_marque_de_structure_ne_relie_pas_deux_personnes(separateur, nom):
+    """L'AUTRE MOITIÉ, et elle compte autant : élargir aux espaces ne doit pas
+    coller deux personnes distinctes en une.
+
+    La tabulation sépare des COLONNES, le saut de ligne des LIGNES — dans les
+    deux cas ce sont des marques de structure, et le projet a déjà été brûlé
+    par un identifiant collé à l'entité de la ligne d'à côté."""
+    texte = f"Marguerite{separateur}Vasseur"
+    fragments = [{"start": 0, "end": 10, "type": "PERSON", "score": 0.9},
+                 {"start": 10 + len(separateur), "end": len(texte),
+                  "type": "PERSON", "score": 0.9}]
+    assert len(merge_fragments(fragments, texte)) == 2, nom

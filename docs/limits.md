@@ -175,6 +175,14 @@ It is not a leak — fiction stays fiction — but the operator is shown a
 fictional value with no way to tell, and an unresolved surrogate is counted
 while one nobody recognises as such is not.
 
+**The same name written two ways gets two identities.** Fragments are now
+joined across any horizontal whitespace, so `Marguerite<nbsp>Vasseur` is one
+entity rather than two — but the vault key keeps the exact spacing, so the
+ordinary-space and non-breaking-space spellings are two vault entries and two
+surrogates. Nothing leaks; the model sees two people across two documents.
+Normalising the key would fix it and would also orphan every entry already
+sealed under the old key, so what has been sent could no longer be restored.
+
 That stopped being theoretical: a date field detected as `3 février 2026 à
 14h32` made the whole string the vault key, so the model quoting the date alone
 matched nothing and the operator read a date that never existed. Spans are now
@@ -207,6 +215,13 @@ anyway, so a genuine stream is already refused there for a different reason.
 
 ## Operational
 
+- **Policy files written before 2026-08-12 are no longer read.** Their names
+  came from substituting characters (`:` → `-`, `/` → `_`), which cannot be
+  injective: distinct scopes wrote the same file, so a *reveal* decision taken
+  in one applied to another. Names now carry a fingerprint of the exact scope.
+  A rule that is no longer found falls back to *anonymise*, never to *reveal* —
+  the safe direction — but **reveal decisions already taken must be made
+  again**.
 - **The detector does not reload its lists.** Change `config/` and restart it,
   or you will debug a fix that is not loaded — that has produced three false
   diagnostics in one day.

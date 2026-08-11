@@ -43,6 +43,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import threading
 import time
 from enum import Enum
@@ -80,22 +81,36 @@ GRANULARITES = ("classe", "type", "valeur")
 
 def _fichier_de_portee(racine: Path, portee: str, scope_key: str,
                        session: str | None) -> Path:
-    """Un fichier par portée — et la SESSION porte aussi le scope_key.
+    """Un fichier par portée, et deux portées distinctes n'écrivent JAMAIS le
+    même fichier.
 
-    Sans lui, la portée la plus ÉTROITE débordait plus large que la portée
-    projet, qui, elle, était bien séparée : deux scope_key partageant une
-    racine de politique lisaient le même `session-<id>.json`, et une décision
-    « révéler » y traversait. Le défaut du nom de session est `sans-id`, donc
-    la collision est le cas ORDINAIRE dès que la racine est partagée, pas un
-    cas tordu. Révéler ne s'hérite jamais, et traverser une portée est une
-    forme d'héritage.
+    **Substituer des caractères ne peut pas être injectif** : plusieurs entrées
+    tombent sur la même sortie, et chaque collision fait traverser une décision
+    « révéler » d'une portée à une autre. La normalisation d'origine en
+    produisait trois — `proj:client` et `proj-client` (`:` → `-`), `team/prod`
+    et `team_prod` (`/` → `_`), et les mêmes pour un identifiant de session. Le
+    séparateur `-session-` que j'avais ajouté pour séparer les sessions en
+    créait une quatrième, pire : le PROJET `acme-session-prod` et la SESSION
+    `prod` du projet `acme` — une règle de projet lue par la session d'un
+    autre, à travers la portée ET le scope_key.
+
+    D'où : la partie lisible reste pour l'opérateur qui inspecte le
+    répertoire, mais ce qui DÉCIDE est l'empreinte du tuple exact. Une
+    empreinte ne dépend d'aucun schéma d'échappement — c'est-à-dire d'aucune
+    règle que je puisse écrire de travers une quatrième fois.
+
+    Prix ASSUMÉ : les fichiers écrits sous l'ancien nommage ne sont plus lus.
+    Une règle perdue retombe sur « anonymiser », jamais sur « révéler » — le
+    sens sûr. Les décisions de révélation déjà prises sont à reprendre.
     """
     if portee == "global":
         return racine / "global.json"
-    projet = scope_key.replace(":", "-").replace("/", "_")
-    if portee == "projet":
-        return racine / f"{projet}.json"
-    return racine / f"{projet}-session-{(session or 'sans-id').replace('/', '_')}.json"
+    exact = "\x1f".join((portee, scope_key, session or ""))
+    empreinte = hashlib.sha256(exact.encode("utf-8")).hexdigest()[:16]
+    lisible = re.sub(r"[^A-Za-z0-9_.-]", "-", scope_key)[:40].strip("-.") or "portee"
+    if portee == "session":
+        lisible = f"{lisible}-session"
+    return racine / f"{lisible}-{empreinte}.json"
 
 
 class Policy:
