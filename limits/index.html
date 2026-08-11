@@ -1484,6 +1484,16 @@ narrowed to the entity before they reach the vault — the key is the date, not
 the field carrying it. The class remains for anything the model paraphrases
 rather than quotes; the announcement asks for whole identifiers, which
 mitigates without measuring.</p>
+<p><strong>Two places have no deadline, on purpose.</strong> An inspected exchange gives up on
+an upstream that stops sending — a silence is not a truncation: it produces no
+error, no close, no byte, and the agent waits for a response that never comes.
+The deadline is an <em>inactivity</em> one (a slow body that keeps arriving is
+licit, and cutting it would read as an upstream failure).</p>
+<p>It does not apply to a <strong>tunnelled</strong> destination, where a silence and a
+long-lived stream are indistinguishable — that is what inspection buys: it
+knows what it is waiting for. Nor to a <strong>client</strong> holding its connection open
+between two turns, where no upstream socket is held and closing would cost a
+handshake per pause.</p>
 <h2 id="operational">Operational<a class="headerlink" href="#operational" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>The detector does not reload its lists.</strong> Change <code>config/</code> and restart it,
