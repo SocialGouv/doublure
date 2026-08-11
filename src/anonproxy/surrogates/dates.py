@@ -87,13 +87,40 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
     return None
 
 
+#: Les formes reconnues, CHERCHÉES dans le span plutôt qu'imposées à lui.
+#:
+#: Un détecteur rend le champ tel qu'il est écrit — `3 février 2026 à 14h32`,
+#: `le 3 février 2026`, `du 12 mars 2019 au`. Exiger une date NUE faisait
+#: échouer la lecture, et la valeur retombait sur la substitution générique :
+#: le modèle recevait un mot d'hôte là où le document annonçait une date, et
+#: cessait de pouvoir répondre « quand ». L'entourage n'est pas du bruit, c'est
+#: du texte qu'il faut rendre intact.
+_CHERCHE = (
+    re.compile(r"\d{4}-\d{2}-\d{2}"),
+    re.compile(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}"),
+    re.compile(r"\d{1,2}(?:er)? [^\W\d_]+ \d{4}", re.UNICODE),
+)
+
+
 def shift(valeur: str, jours: int) -> str | None:
-    """Décale la date de `jours`, dans sa forme d'origine. None si illisible."""
+    """Décale la date CONTENUE dans la valeur, en gardant tout le reste.
+
+    None seulement s'il n'y a aucune date lisible — auquel cas l'appelant
+    substitue génériquement, et la nature ne peut pas être tenue.
+    """
     lu = parse(valeur)
-    if lu is None:
-        return None
-    jour, rendre = lu
-    try:
-        return rendre(jour + dt.timedelta(days=jours))
-    except OverflowError:
-        return None
+    if lu is not None:
+        jour, rendre = lu
+        try:
+            return rendre(jour + dt.timedelta(days=jours))
+        except OverflowError:
+            return None
+
+    for motif in _CHERCHE:
+        trouve = motif.search(valeur)
+        if trouve is None:
+            continue
+        decalee = shift(trouve.group(0), jours)
+        if decalee is not None:
+            return valeur[:trouve.start()] + decalee + valeur[trouve.end():]
+    return None

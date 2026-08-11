@@ -125,7 +125,17 @@ def test_two_dates_never_share_a_surrogate(m):
     assert len(set(rendus)) == len(jours)
 
 
-def test_what_cannot_be_parsed_is_still_protected(m):
-    """Rendre la valeur telle quelle serait une fuite silencieuse : une forme
-    inconnue doit sortir substituée, même si le décalage ne s'applique pas."""
+def test_a_span_holding_no_date_falls_back_and_that_is_a_RESIDUAL(m):
+    """Sans date lisible, la valeur reste protégée — mais elle sort en MOT, et
+    la nature n'est plus tenue.
+
+    Cette assertion, écrite « c'est toujours protégé », a couvert un vrai
+    défaut : `3 février 2026 à 14h32` ne se parsait pas non plus, sortait en
+    nom d'hôte, et le modèle a cessé de pouvoir répondre « quand ». Vérifier la
+    protection ne vérifie pas l'invariant — il fallait les deux, et le second
+    était déjà écrit deux modules plus loin.
+
+    Les formes entourées sont désormais couvertes (`test_dates_entourees.py`).
+    Ce qui reste ici est le résidu nommé : un span sans aucune date dedans.
+    """
     assert sub(m, "le jour de la Saint-Glinglin") != "le jour de la Saint-Glinglin"

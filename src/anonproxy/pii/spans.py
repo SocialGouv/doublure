@@ -24,6 +24,44 @@ _ECART_MAX = 2
 _BORDURES = " \t\n\r,;:.!?()[]{}\"'"
 
 
+#: L'ÉCHAFAUDAGE d'une sortie d'outil : un retour à la ligne, des espaces, un
+#: numéro, une tabulation. C'est ainsi que `Read` numérote ce qu'il rend, et
+#: une entité qui court sur deux lignes l'avale.
+#:
+#: La tabulation qui suit immédiatement des chiffres en tête de ligne est ce
+#: qui rend le motif sûr : aucune adresse, aucun nom n'en contient.
+_ECHAFAUDAGE = re.compile(r"\n[ \t]*\d+\t")
+
+
+def couper_echafaudage(spans: list[dict], text: str) -> list[dict]:
+    """Coupe les spans à l'échafaudage plutôt que de le réécrire.
+
+    Mesuré en session réelle : une adresse client à cheval sur deux lignes
+    emportait le numéro de ligne, le générateur le remplaçait par un autre
+    nombre, et le modèle lisait un document dont la numérotation ne
+    correspondait plus — il l'a dit et a refusé de répondre à une partie de la
+    question. Rien n'avait fuité ; le coût est le même que celui d'une erreur.
+
+    Les deux morceaux restent des entités, donc restent substitués. Ce qui
+    n'est jamais touché, c'est ce qui n'appartient pas au document.
+    """
+    sortie: list[dict] = []
+    for span in spans:
+        debut = span["start"]
+        morceaux: list[tuple[int, int]] = []
+        for coupure in _ECHAFAUDAGE.finditer(text, span["start"], span["end"]):
+            morceaux.append((debut, coupure.start()))
+            debut = coupure.end()
+        if not morceaux:
+            sortie.append(span)
+            continue
+        morceaux.append((debut, span["end"]))
+        for a, b in morceaux:
+            if (ajuste := _ajuster({**span, "start": a, "end": b}, text)):
+                sortie.append(ajuste)
+    return sortie
+
+
 #: Vocabulaire de voie : sa présence suffit à faire une adresse d'un seul mot
 #: composé. Sans lui, il faut au moins deux jetons ou une virgule.
 _VOIES = ("rue", "avenue", "boulevard", "impasse", "place", "chemin", "quai",
