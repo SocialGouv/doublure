@@ -38,6 +38,10 @@ anonproxy_state_dir() {
   fi
   mkdir -p "${dir}"
   chmod 700 "${dir}"
+  # Le PARENT aussi : son contenu est protégé, mais son listing donne le nom
+  # de chaque projet passé par ici — et un nom de répertoire, c'est un chemin
+  # de projet. `mkdir -p` le crée avec l'umask, souvent 775.
+  [[ -n "${ANONPROXY_STATE_DIR:-}" ]] || chmod 700 "${HOME}/.doublure"
   printf '%s' "${dir}"
 }
 
