@@ -43,15 +43,21 @@ def autorite_origine(tmp_path_factory):
 class OrigineScriptee:
     """Amont qui répond des OCTETS choisis, une réponse par requête reçue.
 
-    `ferme_apres` : coupe la connexion juste après avoir répondu. C'est ce qui
-    distingue une TRONCATURE (EOF au milieu d'un corps annoncé) d'une ATTENTE
-    (l'amont ne dit plus rien mais tient la ligne) — deux défauts différents,
-    et seul le premier est traité ici.
+    Deux façons de mal finir, et il a fallu les distinguer pour les traiter :
+
+    - `ferme_apres` coupe la connexion juste après avoir répondu — une
+      TRONCATURE, qui arrive comme un EOF et se voit ;
+    - `muette` tient la ligne ouverte et n'envoie plus rien — une ATTENTE, qui
+      n'arrive jamais. C'est le défaut le plus long à trouver parce qu'il ne
+      produit aucun symptôme : ni erreur, ni fermeture, ni octet.
     """
 
     def __init__(self, ca: InterceptionCA, tmp_path, reponses: list[bytes],
-                 ferme_apres: bool = False):
+                 ferme_apres: bool = False, muette: bool = False,
+                 lent: float = 0):
         self.ferme_apres = ferme_apres
+        self.muette = muette
+        self.lent = lent
         cert_pem, cle_pem = ca.leaf_for("127.0.0.1")
         pem = tmp_path / "o.pem"
         pem.write_bytes(cert_pem + cle_pem)
@@ -91,7 +97,12 @@ class OrigineScriptee:
                 self.appels += 1
                 if not self.reponses:
                     return
-                tls.sendall(self.reponses.pop(0))
+                self._envoyer(tls, self.reponses.pop(0))
+                if self.muette:
+                    # Ne rien envoyer, ne rien fermer : le proxy doit décider
+                    # tout seul que ça ne viendra pas.
+                    threading.Event().wait(30)
+                    return
                 if self.ferme_apres:
                     return
         except OSError:
@@ -99,15 +110,33 @@ class OrigineScriptee:
         finally:
             tls.close()
 
+    def _envoyer(self, tls, reponse: bytes) -> None:
+        """En un bloc, ou par à-coups si `lent`.
+
+        Par à-coups, le corps met plus longtemps que le délai à arriver — mais
+        il ARRIVE. C'est le cas licite qu'un bornage à la DURÉE couperait, et
+        c'est exactement la moitié de la boucle qu'on oublie de tester.
+        """
+        if not self.lent:
+            tls.sendall(reponse)
+            return
+        tete, _, corps = reponse.partition(b"\r\n\r\n")
+        tls.sendall(tete + b"\r\n\r\n")
+        for debut in range(0, len(corps), 4):
+            threading.Event().wait(self.lent)
+            tls.sendall(corps[debut:debut + 4])
+
 
 def _monter(interception, autorite_origine, tmp_path, reponses,
-            ferme_apres=False):
+            ferme_apres=False, muette=False, lent=0, idle_timeout=120.0):
     origine = OrigineScriptee(autorite_origine, tmp_path, reponses,
-                              ferme_apres=ferme_apres)
+                              ferme_apres=ferme_apres, muette=muette,
+                              lent=lent)
     proxy = ForwardProxy(
         ForwardPolicy(inspect=["127.0.0.1"], tunnel=[]), interception,
         upstream_context=ssl.create_default_context(
-            cafile=str(autorite_origine.cert_path)))
+            cafile=str(autorite_origine.cert_path)),
+        idle_timeout=idle_timeout)
     proxy.start_in_thread()
     return origine, proxy
 
@@ -416,5 +445,59 @@ def test_no_upstream_handshake_is_paid_for_a_request_never_sent(
         _deux_requetes(proxy, interception, origine.port)
         assert origine.appels <= 2, (
             f"{origine.appels} connexions amont pour 2 requêtes client")
+    finally:
+        proxy.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Le trou connu — un amont qui se TAIT n'est pas un amont qui coupe
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("reponse", [
+    # Rien du tout : pas même une ligne de statut.
+    b"",
+    # Un corps annoncé qui n'arrivera jamais.
+    b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\n",
+    # Un découpage ouvert, dont le morceau suivant n'arrivera jamais.
+    b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n5\r\nhello\r\n",
+])
+def test_an_upstream_that_goes_silent_is_given_up_on(
+        interception, autorite_origine, tmp_path, reponse):
+    """HAUT. Une TRONCATURE arrive comme un EOF et se voit ; un SILENCE
+    n'arrive jamais. Il tient la ligne, n'envoie plus rien, et l'agent attend
+    sa réponse sans fin — le pire des symptômes, parce qu'il ne ressemble à
+    aucune panne et qu'aucune erreur ne le nomme.
+
+    Les trois lectures amont sont couvertes : la ligne de statut, un corps à
+    longueur annoncée, un corps découpé."""
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             [reponse], muette=True, idle_timeout=0.5)
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "le client n'a RIEN reçu : il attend toujours"
+        assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()
+
+
+def test_a_body_that_is_slow_but_arriving_is_not_cut(
+        interception, autorite_origine, tmp_path):
+    """L'AUTRE MOITIÉ, et c'est elle que le correctif pouvait casser.
+
+    Borner la DURÉE d'une lecture aurait coupé un gros corps qui arrive
+    lentement — mais qui arrive —, et le symptôme se serait lu comme une panne
+    d'amont. Le délai porte sur l'INACTIVITÉ : chaque tranche le relance.
+    Ici le corps met quatre fois le délai à arriver, et il doit passer."""
+    corps = b"x" * 40  # dix tranches, une toutes les 0,2 s
+    reponse = (b"HTTP/1.1 200 OK\r\ncontent-length: " +
+               str(len(corps)).encode() + b"\r\nconnection: close\r\n\r\n" +
+               corps)
+    origine, proxy = _monter(interception, autorite_origine, tmp_path,
+                             [reponse], lent=0.2, idle_timeout=0.5)
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert b"200 OK" in recu, recu[:300]
+        assert corps in recu, recu[:300]
     finally:
         proxy.stop()

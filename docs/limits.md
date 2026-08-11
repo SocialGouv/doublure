@@ -182,6 +182,18 @@ the field carrying it. The class remains for anything the model paraphrases
 rather than quotes; the announcement asks for whole identifiers, which
 mitigates without measuring.
 
+**Two places have no deadline, on purpose.** An inspected exchange gives up on
+an upstream that stops sending — a silence is not a truncation: it produces no
+error, no close, no byte, and the agent waits for a response that never comes.
+The deadline is an *inactivity* one (a slow body that keeps arriving is
+licit, and cutting it would read as an upstream failure).
+
+It does not apply to a **tunnelled** destination, where a silence and a
+long-lived stream are indistinguishable — that is what inspection buys: it
+knows what it is waiting for. Nor to a **client** holding its connection open
+between two turns, where no upstream socket is held and closing would cost a
+handshake per pause.
+
 ## Operational
 
 - **The detector does not reload its lists.** Change `config/` and restart it,

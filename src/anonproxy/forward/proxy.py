@@ -44,6 +44,10 @@ _MAX_CORPS = 32 * 1024 * 1024
 _SANS_CORPS = {204, 304}
 #: Au-delà, une remorque n'est plus une remorque mais un déni de service.
 _MAX_REMORQUE = 64
+#: Sans un seul octet pendant ce délai, l'échange est abandonné. C'est une
+#: INACTIVITÉ, jamais une durée : un gros corps lent reste licite tant qu'il
+#: arrive, et un appel d'outil qui calcule une minute avant de répondre aussi.
+_INACTIVITE = 120.0
 
 
 @dataclass(frozen=True)
@@ -82,11 +86,13 @@ class ForwardProxy:
     def __init__(self, policy: ForwardPolicy, ca: InterceptionCA, *,
                  host: str = "127.0.0.1", port: int = 0,
                  upstream_context: ssl.SSLContext | None = None,
-                 transform: "BodyTransform | None" = None):
+                 transform: "BodyTransform | None" = None,
+                 idle_timeout: float = _INACTIVITE):
         self.policy = policy
         self.ca = ca
         self.host = host
         self._port = port
+        self._inactivite = idle_timeout
         #: Le contexte AMONT vérifie le vrai certificat de la destination.
         #: Il n'existe volontairement aucun réglage pour ne pas vérifier :
         #: intercepter ne doit pas AFFAIBLIR ce qu'on remplace, sinon le proxy
@@ -261,6 +267,12 @@ class ForwardProxy:
         amont_e.close()
         try:
             while True:
+                # Seule lecture volontairement SANS délai : ici le client est
+                # notre agent, qui garde sa connexion ouverte entre deux tours
+                # et peut ne rien dire pendant que l'opérateur réfléchit. Aucun
+                # amont n'est tenu à ce moment — la fermer coûterait une
+                # poignée de main à chaque pause. Dès que la requête est là,
+                # tout ce qui suit est borné.
                 requete = await self._lire_entete(lecteur)
                 if not requete:
                     return
@@ -329,10 +341,11 @@ class ForwardProxy:
         ae.write(_reconstruire(ligne, entetes, corps, avec_corps=bool(corps)))
         await ae.drain()
 
-        reponse = await self._lire_entete(al)
-        if not reponse:
-            return False
         try:
+            reponse = await self._attendre(self._lire_entete(al),
+                                           "l'amont n'a pas répondu")
+            if not reponse:
+                return False
             ligne_r, entetes_r = _analyser(reponse)
         except _CorpsIllisible as exc:
             await self._echouer(ce, destination, str(exc))
@@ -395,7 +408,7 @@ class ForwardProxy:
             if n > _MAX_CORPS:
                 raise _CorpsIllisible(
                     f"corps de {n} octets : au-delà de ce qui peut être relu")
-            return await lecteur.readexactly(n) if n else b""
+            return await self._lire_exactement(lecteur, n) if n else b""
         if reponse and ("content-type" in entetes
                         or entetes.get("connection", "").lower() == "close"):
             # Ni longueur ni découpage : la fin du corps est la fermeture de la
@@ -407,11 +420,51 @@ class ForwardProxy:
                 "être relue, et la relayer intacte serait un fail-open")
         return b""
 
+    async def _attendre(self, lecture, attendu: str):
+        """Borne une lecture par l'INACTIVITÉ de sa source.
+
+        Un amont qui se TAIT au milieu d'un échange n'est pas une troncature :
+        il tient la ligne et n'envoie plus rien. Sans délai, l'agent attendait
+        cette réponse sans fin — le pire des symptômes, parce qu'il ne
+        ressemble à aucune panne et qu'aucune erreur ne le nomme.
+        """
+        try:
+            return await asyncio.wait_for(lecture, self._inactivite)
+        except TimeoutError as exc:
+            raise _CorpsIllisible(
+                f"{attendu} : plus un octet depuis {self._inactivite:g} s, "
+                "l'échange est abandonné") from exc
+
+    async def _lire_exactement(self, lecteur: asyncio.StreamReader,
+                               n: int) -> bytes:
+        """`readexactly`, borné par l'INACTIVITÉ et non par la durée.
+
+        `wait_for(readexactly(n))` bornerait la durée TOTALE : un gros corps
+        qui arrive lentement — mais qui arrive — serait coupé au milieu, et le
+        symptôme se lirait comme une panne d'amont. On lit morceau par morceau,
+        et c'est l'absence d'octet qui fait échouer, jamais la lenteur.
+
+        Au passage, une troncature devient un refus NOMMÉ : `readexactly` levait
+        une `IncompleteReadError` que seule la garde large de l'inspection
+        rattrapait, sous un message qui ne disait pas ce qui manquait.
+        """
+        morceaux = bytearray()
+        while len(morceaux) < n:
+            morceau = await self._attendre(
+                lecteur.read(min(_MORCEAU, n - len(morceaux))),
+                f"corps de {n} octets annoncés")
+            if not morceau:
+                raise _CorpsIllisible(
+                    f"corps tronqué : {len(morceaux)} octets reçus sur {n}")
+            morceaux += morceau
+        return bytes(morceaux)
+
     async def _ligne(self, lecteur: asyncio.StreamReader) -> bytes:
         """Une ligne, ou un refus. `LimitOverrunError` n'hérite pas de
         `ConnectionError` : elle traversait tout et tuait la tâche."""
         try:
-            return await lecteur.readuntil(b"\r\n")
+            return await self._attendre(lecteur.readuntil(b"\r\n"),
+                                        "ligne de découpage attendue")
         except asyncio.LimitOverrunError as exc:
             raise _CorpsIllisible(f"ligne démesurée : {exc}") from exc
 
@@ -444,8 +497,8 @@ class ForwardProxy:
                 raise _CorpsIllisible("remorque interminable : framing refusé")
             if len(morceaux) + taille > _MAX_CORPS:
                 raise _CorpsIllisible("corps découpé au-delà de la taille relisible")
-            morceaux += await lecteur.readexactly(taille)
-            await lecteur.readexactly(2)  # CRLF de fin de morceau
+            morceaux += await self._lire_exactement(lecteur, taille)
+            await self._lire_exactement(lecteur, 2)  # CRLF de fin de morceau
 
     async def _echouer(self, ecrivain: asyncio.StreamWriter, destination: str,
                        raison: str) -> None:
@@ -464,6 +517,15 @@ class ForwardProxy:
 
     async def _relayer(self, cl: asyncio.StreamReader, ce: asyncio.StreamWriter,
                        al: asyncio.StreamReader, ae: asyncio.StreamWriter) -> None:
+        """Tunnel : sans délai, et c'est la seule réponse honnête ici.
+
+        Un tunnel est opaque par définition — on ne sait pas où finit un
+        échange, donc un silence peut être une connexion morte comme un flux
+        long-courrier parfaitement licite. Couper au bout de N secondes
+        casserait les seconds sans rien prouver sur les premiers. C'est ce que
+        l'inspection achète en plus : elle sait ce qu'elle attend.
+        """
+
         async def pomper(src: asyncio.StreamReader, dst: asyncio.StreamWriter):
             try:
                 while morceau := await src.read(_MORCEAU):
