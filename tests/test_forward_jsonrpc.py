@@ -200,3 +200,32 @@ def test_a_gzipped_body_is_read_instead_of_killing_the_connection(transform):
                                 gzip.compress(clair))
     assert b"db-01.acme.internal" not in gzip.decompress(sortie)
     assert b"hote-fictif.test" in gzip.decompress(sortie)
+
+
+def test_a_gzip_bomb_is_refused_instead_of_allocated(transform):
+    """HAUT. `_lire_corps` plafonne ce que le proxy LIT à 32 Mio ; la
+    décompression, elle, allouait ce que l'amont décidait.
+
+    Mesuré avant correctif : 199 Kio de zéros gzipés — très en dessous de la
+    limite d'entrée — faisaient 400 Mio de mémoire, et la même charge portée à
+    la limite d'entrée en aurait demandé des milliers de fois plus. La seule
+    borne du chemin portait sur la mauvaise grandeur.
+    """
+    import gzip
+
+    bombe = gzip.compress(b"\x00" * (48 * 1024 * 1024))
+    assert len(bombe) < 1024 * 1024, "la charge doit tenir sous la limite d'entrée"
+    with pytest.raises(BinaryBody, match="détendu au-delà"):
+        transform.incoming("h", {"content-encoding": "gzip"}, bombe)
+
+
+def test_a_body_just_under_the_bound_still_goes_through(transform):
+    """L'AUTRE MOITIÉ : borner ne doit pas casser un corps gzipé ordinaire."""
+    import gzip
+
+    clair = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {"hote": "db-01.acme.internal",
+                                   "bourrage": "x" * 100_000}}).encode()
+    sortie = transform.outgoing("h", {"content-encoding": "gzip"},
+                                gzip.compress(clair))
+    assert b"hote-fictif.test" in gzip.decompress(sortie)

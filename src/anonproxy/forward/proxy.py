@@ -569,21 +569,29 @@ class _CorpsIllisible(RuntimeError):
 
 def _analyser(entete: bytes) -> tuple[str, dict[str, str]]:
     lignes = entete.decode("latin-1").split("\r\n")
-    if "\n" in lignes[0] or "\r" in lignes[0]:
-        # LA JUMELLE du refus ci-dessous : le tour 7 a protégé les VALEURS
-        # d'en-tête et laissé la ligne de statut, recopiée telle quelle par
-        # `_reconstruire`. Un `\n` seul y injecte un en-tête tout aussi bien.
-        raise _CorpsIllisible("ligne de statut : caractère de contrôle interdit")
+    # UNE règle pour toute la tête, et c'est là qu'est le correctif. Le
+    # découpage se fait sur `\r\n` : tout `\r` ou `\n` qui SURVIT est donc un
+    # terminateur nu, recopié tel quel par `_reconstruire`, et un client qui
+    # l'accepte comme fin de ligne — la RFC 7230 le tolère — lit un en-tête
+    # injecté par l'amont.
+    #
+    # Ce contrôle a été écrit TROIS fois : les valeurs au tour 7, la ligne de
+    # statut au tour 8, les NOMS ici — `x-innocent\rset-cookie: PWN=1` était
+    # analysé sans broncher. À chaque fois il visait un endroit au lieu de la
+    # classe. Une seule condition sur toutes les lignes n'a pas de jumelle.
+    #
+    # Le refus ne CITE PAS la ligne fautive. Une première version la recopiait
+    # « pour aider » : l'en-tête injecté revenait alors au client dans le corps
+    # du 502, par la porte du refus lui-même. Le rang suffit à diagnostiquer, et
+    # ne rend rien de ce que l'amont a écrit.
+    for rang, ligne in enumerate(lignes):
+        if "\n" in ligne or "\r" in ligne:
+            quoi = "ligne de statut" if rang == 0 else f"en-tête n°{rang}"
+            raise _CorpsIllisible(
+                f"caractère de contrôle interdit dans la tête ({quoi})")
     entetes: dict[str, str] = {}
     for ligne in lignes[1:]:
         nom, _, valeur = ligne.partition(":")
-        if "\n" in valeur or "\r" in valeur:
-            # Le découpage coupe sur `\r\n` ; un `\n` SEUL au milieu d'une
-            # valeur passait, était recopié tel quel, et un client qui accepte
-            # le `\n` seul comme terminateur — la RFC 7230 le permet — lisait
-            # un en-tête injecté par l'amont.
-            raise _CorpsIllisible(
-                f"en-tête {nom.strip()!r} : caractère de contrôle interdit")
         if nom.strip():
             # Comparés en minuscules : HTTP les déclare insensibles à la casse,
             # et `Content-Length` doit décider comme `content-length`.

@@ -62,8 +62,18 @@ def test_une_adresse_sous_un_domaine_reserve_le_reste(moteur, hote):
 
 
 @pytest.mark.parametrize("hote", ORDINAIRES)
-def test_un_domaine_ordinaire_garde_l_arbitrage_de_l_operateur(moteur, hote):
-    """Le pendant : pour un domaine qui n'était PAS réservé, le choix reste
-    celui du réglage `domaines_fictifs`. Sans réglage, la plausibilité (D1)
-    l'emporte — c'est le défaut documenté, pas une omission."""
-    assert tld(moteur.substitute_value("HOSTNAME", hote)) not in RESERVED_TLDS
+def test_un_domaine_ordinaire_reste_reserve_lui_aussi_par_defaut(moteur, hote):
+    """Arbitrage rendu : le DÉFAUT ferme, y compris sans politique attachée.
+
+    Cette attente était l'inverse — « sans réglage, la plausibilité l'emporte ».
+    Tant que la condition testait `reserves`, tout ce qui n'était pas
+    explicitement FERMÉ était ouvert : pas de politique, politique muette, futur
+    appelant qui oublie de la passer. Or un domaine fictif sous TLD réel peut
+    appartenir à quelqu'un exactement comme une IP routable, et cette
+    question-là avait déjà été tranchée dans l'autre sens (RFC 2544, round 18).
+    Traiter la même classe de risque de deux façons dans un même système,
+    c'était l'incohérence.
+
+    `tld_reels` reste atteignable — il faut le DÉCLARER, ce qui est le sens de
+    l'ouverture dans ce projet."""
+    assert tld(moteur.substitute_value("HOSTNAME", hote)) in RESERVED_TLDS

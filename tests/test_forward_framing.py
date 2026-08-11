@@ -501,3 +501,50 @@ def test_a_body_that_is_slow_but_arriving_is_not_cut(
         assert corps in recu, recu[:300]
     finally:
         proxy.stop()
+
+
+@pytest.mark.parametrize("tete", [
+    # Dans le NOM d'un en-tête : jamais contrôlé jusqu'ici.
+    b"HTTP/1.1 200 OK\r\nx-innocent\rset-cookie: PWN=1; path=/\r\n"
+    b"content-length: 2\r\nconnection: close\r\n\r\nok",
+    # Même chose avec un saut de ligne nu, que plus de clients acceptent.
+    b"HTTP/1.1 200 OK\r\nx-innocent\nset-cookie: PWN=1; path=/\r\n"
+    b"content-length: 2\r\nconnection: close\r\n\r\nok",
+])
+def test_a_header_name_cannot_carry_a_bare_terminator(
+        interception, autorite_origine, tmp_path, tete):
+    """HAUT, et c'est LA JUMELLE POUR LA TROISIÈME FOIS.
+
+    Le tour 7 a refusé les caractères de contrôle dans les VALEURS d'en-tête,
+    le tour 8 dans la ligne de STATUT. Les NOMS n'ont jamais été contrôlés :
+    `x-innocent\\rset-cookie: PWN=1` était analysé sans broncher, recopié tel
+    quel, et un client qui accepte le terminateur nu lisait l'en-tête injecté
+    par l'amont. Vérifié : la clé du dictionnaire valait bien
+    `'x-innocent\\rset-cookie'`.
+
+    Le correctif ne vise pas le troisième endroit mais la CLASSE : le découpage
+    se fait sur `\\r\\n`, donc tout `\\r` ou `\\n` qui survit dans N'IMPORTE
+    quelle ligne de la tête est un terminateur nu. Une seule condition, plus de
+    jumelle possible."""
+    origine, proxy = _monter(interception, autorite_origine, tmp_path, [tete])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "tâche morte en silence"
+        assert b"502" in recu, recu[:300]
+        assert b"set-cookie" not in recu.lower(), recu[:300]
+    finally:
+        proxy.stop()
+
+
+def test_ordinary_headers_still_pass(interception, autorite_origine, tmp_path):
+    """L'AUTRE MOITIÉ : la règle élargie ne doit refuser aucune tête normale."""
+    normale = (b"HTTP/1.1 200 OK\r\ncontent-type: application/json; charset=utf-8"
+               b"\r\nx-request-id: abc-123\r\ncontent-length: 2\r\n"
+               b"connection: close\r\n\r\nok")
+    origine, proxy = _monter(interception, autorite_origine, tmp_path, [normale])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert b"200 OK" in recu, recu[:300]
+        assert b"x-request-id: abc-123" in recu, recu[:300]
+    finally:
+        proxy.stop()

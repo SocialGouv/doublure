@@ -27,6 +27,7 @@ import base64
 import binascii
 import gzip
 import json
+import zlib
 from typing import Callable
 
 #: Clés du protocole, au NIVEAU DU MESSAGE uniquement.
@@ -43,6 +44,12 @@ _TYPES_MIME = ("mimeType", "mime_type", "media_type", "mimetype")
 #: un PNG le corrigerait. Même arbitrage que le walker Anthropic (round 12).
 _MIME_TEXTUELS = ("text/", "application/json", "application/xml",
                   "application/yaml", "application/x-yaml")
+#: Borne de la charge DÉTENDUE. Le proxy plafonne ce qu'il LIT à 32 Mio ; la
+#: décompression, elle, alloue ce que l'amont décide. Même borne, même raison —
+#: ce qui ne tient pas en mémoire ne peut pas être pseudonymisé — mais c'est
+#: ici qu'elle manquait, et l'entrée n'en dit rien : 199 Kio de zéros gzipés
+#: font 200 Mio en sortie, mesurés.
+_MAX_CLAIR = 32 * 1024 * 1024
 
 
 class BinaryBody(RuntimeError):
@@ -81,12 +88,34 @@ class JsonRpcTransform:
         comprime = (headers or {}).get("content-encoding", "").lower() in (
             "gzip", "x-gzip")
         if comprime:
-            try:
-                body = gzip.decompress(body)
-            except (OSError, EOFError) as exc:
-                raise BinaryBody(f"corps gzip illisible : {exc}") from exc
+            body = self._detendre(body)
         rendu = self._appliquer_clair(body, transformer)
         return gzip.compress(rendu) if comprime else rendu
+
+    @staticmethod
+    def _detendre(body: bytes) -> bytes:
+        """Décompresse en BORNANT la sortie.
+
+        `gzip.decompress` alloue ce que l'amont décide : sur du texte répétitif
+        un rapport de 1000:1 est banal, donc les 32 Mio que le proxy accepte en
+        entrée peuvent en demander des milliers en sortie. Mesuré avant
+        correctif : 199 Kio de charge, 400 Mio alloués, et la limite d'entrée
+        n'y voyait rien — c'est la seule borne du chemin qui portait sur la
+        mauvaise grandeur.
+        """
+        moteur = zlib.decompressobj(wbits=31)
+        try:
+            clair = moteur.decompress(body, _MAX_CLAIR)
+        except zlib.error as exc:
+            raise BinaryBody(f"corps gzip illisible : {exc}") from exc
+        if moteur.unconsumed_tail or moteur.unused_data or not moteur.eof:
+            # Détendu au-delà de la borne, ou plusieurs membres gzip : dans les
+            # deux cas on ne peut pas rendre le corps entier, et en rendre une
+            # partie dirait qu'on l'a lu.
+            raise BinaryBody(
+                f"corps gzip détendu au-delà de {_MAX_CLAIR} octets, ou en "
+                "plusieurs membres : il ne peut pas être relu")
+        return clair
 
     def _appliquer_clair(self, body: bytes,
                          transformer: Callable[[str], str]) -> bytes:

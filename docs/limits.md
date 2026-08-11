@@ -159,6 +159,7 @@ that truncates, which answers 502 since round 8. A stalled exchange waits.
 | Residual | Why it stays |
 |---|---|
 | a single-label domain under a ccTLD used as a file extension (`acme.pl`) | removing those extensions turns `main.py` and `lib.rs` into fake domains, which has already broken a real session |
+| a fictional external host on a real TLD (`alpine-relecloud.net`) — **only under `domaines_fictifs=tld_reels`** | the default is now the RFC 2606 reserved space, which is provably nobody's; the real-TLD space stays reachable, but the operator has to declare it |
 | a package under a third-party prefix (`sigs.k8s.io/tenant-acme`) | indistinguishable from a real module without an inventory |
 | a vendor media type (`application/vnd.acme.x+json`) | dotted by nature; only an inventory can separate it |
 | a query parameter *name* without a dot, at-sign or colon (`?jdoe=`) | indistinguishable from an API parameter name |
@@ -193,6 +194,16 @@ long-lived stream are indistinguishable — that is what inspection buys: it
 knows what it is waiting for. Nor to a **client** holding its connection open
 between two turns, where no upstream socket is held and closing would cost a
 handshake per pause.
+
+**What an inactivity deadline cannot catch, by construction**: an upstream
+that sends one byte just under the deadline holds an exchange indefinitely. A
+total ceiling would catch it and would also cut a large body arriving slowly —
+the twin defect, and the reason the deadline is written this way. It stays
+bounded by what an attacker needs first: the destination must be *declared*
+inspectable, and every request is one the agent itself made. Likewise, a
+response that stays silent for over two minutes is given up on even if it
+would have arrived — on an inspected destination the whole body is buffered
+anyway, so a genuine stream is already refused there for a different reason.
 
 ## Operational
 

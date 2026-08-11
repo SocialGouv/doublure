@@ -113,33 +113,58 @@ def test_aucun_substitut_n_est_routable(moteur, etype, reel):
     assert not reseau.is_global, f"{reel} → {faux} est routable"
 
 
-def test_residu_les_domaines_fictifs_ne_sont_pas_prouvablement_libres(moteur):
-    """RÉSIDU MESURÉ, pas affirmé — et volontairement bruyant.
+def test_aucun_domaine_fictif_ne_porte_un_tld_reel_par_defaut(moteur):
+    """L'arbitrage est RENDU, et il ferme (2026-08-12).
 
-    Un nom d'hôte externe fictif combine un mot de société fictive et un TLD
-    RÉEL (`com`, `net`, `io`, `org`, `co`, `dev`) : `alpine-relecloud.net`
-    peut très bien appartenir à quelqu'un. Le vérifier demanderait une requête
-    DNS, donc une sortie réseau que D9 interdit — donc on ne l'affirme pas.
+    Ce test MESURAIT un résidu : 40 hôtes externes sur 40 combinaient un mot de
+    société fictive et un TLD RÉEL, donc `alpine-relecloud.net` pouvait
+    appartenir à quelqu'un. Le vérifier demanderait une requête DNS, donc une
+    sortie réseau que D9 interdit — on ne pouvait ni l'affirmer ni l'exclure.
 
-    Même famille que le défaut « substitut routable », surface plus large.
-    L'alternative (`.example`, `.invalid`, `.test`, RFC 2606) est prouvablement
-    à personne mais se lit comme fictive, ce qui abîme D1. Arbitrage de jo,
-    pas d'implémentation.
+    Même famille que le défaut « substitut routable », qui, lui, avait été
+    tranché en faveur de l'espace réservé (RFC 2544) sans que ce soit
+    négociable. Traiter la même classe de risque de deux façons dans un même
+    système était l'incohérence ; le prix payé est la plausibilité, et son
+    échec est VISIBLE — celui de l'autre branche ne l'est pas.
     """
-    from anonproxy.surrogates.lexicon import EXTERNAL_TLDS
-
+    reserves = {"example", "invalid", "test", "localhost"}
     externes = [moteur.substitute_value("HOSTNAME", f"www-{i:02d}.acmecorp-externe.fr")
                 for i in range(40)]
-    reserves = {"example", "invalid", "test", "localhost"}
-    sur_tld_reel = [h for h in externes
-                    if h.rsplit(".", 1)[-1].lower() not in reserves]
-    print(f"\nRÉSIDU : {len(sur_tld_reel)}/{len(externes)} hôtes externes "
-          f"fictifs portent un TLD RÉEL ({', '.join(EXTERNAL_TLDS)}).")
-    print("        Leur disponibilité n'est pas vérifiable sans requête DNS.")
+    fuyants = [h for h in externes
+               if h.rsplit(".", 1)[-1].lower() not in reserves]
+    assert not fuyants, (
+        f"{len(fuyants)}/{len(externes)} hôtes fictifs portent un TLD réel, "
+        f"donc peuvent désigner la machine de quelqu'un : {fuyants[:3]}")
     # Les hôtes INTERNES, eux, restent sur un suffixe non résolvable.
     internes = [moteur.substitute_value("HOSTNAME", f"db-{i:02d}-prod.acmecorp.internal")
                 for i in range(40)]
     assert all(h.endswith(".internal") for h in internes), internes[:3]
+
+
+def test_residu_le_tld_reel_reste_atteignable_mais_se_declare(tmp_path):
+    """Le résidu ne disparaît pas : il change de statut.
+
+    Sous `domaines_fictifs=tld_reels`, les hôtes externes retrouvent un TLD
+    réel — c'est le but du réglage, et l'opérateur qui l'écrit accepte
+    l'exposition. Ce que le défaut ne fait plus, c'est la choisir pour lui."""
+    from anonproxy.modes import DOMAINES_TLD_REELS
+    from anonproxy.policy import Policy
+    from anonproxy.surrogates.lexicon import EXTERNAL_TLDS
+
+    politique = Policy(racine=tmp_path / "policy", master_key=MASTER,
+                       scope_key=SCOPE)
+    politique.definir_reglage("projet", "domaines_fictifs", DOMAINES_TLD_REELS)
+    ouvert = SurrogateEngine(vault=Vault(tmp_path / "o.db", master_key=MASTER),
+                             master_key=MASTER, scope_key=SCOPE,
+                             policy=politique)
+    externes = [ouvert.substitute_value("HOSTNAME", f"www-{i:02d}.acmecorp-externe.fr")
+                for i in range(40)]
+    sur_tld_reel = [h for h in externes
+                    if h.rsplit(".", 1)[-1].lower() in EXTERNAL_TLDS]
+    print(f"\nRÉSIDU SOUS OUVERTURE DÉCLARÉE : {len(sur_tld_reel)}/{len(externes)} "
+          f"hôtes portent un TLD réel ({', '.join(EXTERNAL_TLDS)}) ; leur "
+          "disponibilité n'est pas vérifiable sans requête DNS.")
+    assert sur_tld_reel, "le réglage doit rester effectif"
 
 
 # --------------------------------------------------------------------------- #

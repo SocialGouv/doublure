@@ -78,6 +78,19 @@ make a fictional domain plausible (D1) at the risk that it really exists;
 RFC 2606 reserved names guarantee the opposite at the cost of plausibility.
 Neither is "the right one" — which is exactly why it is configurable.
 
+**But a setting still has a default, and the default closes.** That one had
+drifted: the default mode carried the permissive value while the other two
+carried the safe one, so *choosing a mode opened something* — the thing the
+line above says no mode may do. And the engine's own condition tested for the
+closed value, which made everything not explicitly closed open: no policy, a
+silent policy, a caller who forgets to pass one. The condition now tests for
+the OPENING. A fictional domain under a real TLD can name someone's machine
+exactly as a routable IP can, and that question had already been settled the
+other way (RFC 2544) without being negotiable.
+
+The general form: **write the condition so that the opening is what has to be
+declared.** Same inversion as the walker's list of opaque deltas.
+
 **An accepted residual must be counted, never silent.** `/detect` returns
 `public_by_shape`: the deduplicated list of tokens a *form* rule made public,
 with their span types and the rule at fault. What fails must fail loudly — the

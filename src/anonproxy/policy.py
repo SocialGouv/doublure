@@ -80,11 +80,22 @@ GRANULARITES = ("classe", "type", "valeur")
 
 def _fichier_de_portee(racine: Path, portee: str, scope_key: str,
                        session: str | None) -> Path:
+    """Un fichier par portée — et la SESSION porte aussi le scope_key.
+
+    Sans lui, la portée la plus ÉTROITE débordait plus large que la portée
+    projet, qui, elle, était bien séparée : deux scope_key partageant une
+    racine de politique lisaient le même `session-<id>.json`, et une décision
+    « révéler » y traversait. Le défaut du nom de session est `sans-id`, donc
+    la collision est le cas ORDINAIRE dès que la racine est partagée, pas un
+    cas tordu. Révéler ne s'hérite jamais, et traverser une portée est une
+    forme d'héritage.
+    """
     if portee == "global":
         return racine / "global.json"
+    projet = scope_key.replace(":", "-").replace("/", "_")
     if portee == "projet":
-        return racine / f"{scope_key.replace(':', '-').replace('/', '_')}.json"
-    return racine / f"session-{(session or 'sans-id').replace('/', '_')}.json"
+        return racine / f"{projet}.json"
+    return racine / f"{projet}-session-{(session or 'sans-id').replace('/', '_')}.json"
 
 
 class Policy:

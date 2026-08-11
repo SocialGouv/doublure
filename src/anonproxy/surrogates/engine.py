@@ -26,7 +26,7 @@ from typing import Any, Callable
 from urllib.parse import unquote_plus
 
 from ..modes import (ARBITRAGE_BLOQUANT, CHEMINS_COMPLET, CHEMINS_UTILISATEUR,
-                     CHEMINS_UTILISATEUR_PROJET, DOMAINES_RESERVES)
+                     CHEMINS_UTILISATEUR_PROJET, DOMAINES_TLD_REELS)
 from ..policy import Decision, Policy
 from ..vault import SurrogateConflict, Vault
 from .canonical import (
@@ -274,24 +274,33 @@ class SurrogateEngine:
         `tld_reels` privilégie la plausibilité (D1) et accepte qu'un domaine
         fictif puisse exister vraiment ; `reserves` garantit l'inverse au prix
         de la plausibilité. Aucun des deux n'est « le bon » : c'est pourquoi
-        c'est un réglage.
+        c'est un réglage — mais un réglage a un DÉFAUT, et celui-là ferme.
 
-        Sauf quand le réel est DÉJÀ réservé : là il n'y a rien à peser.
+        La condition est écrite dans ce sens exprès. Tant qu'elle testait
+        `reserves`, tout ce qui n'était pas explicitement fermé était OUVERT :
+        pas de politique, une politique muette, un futur appelant qui oublie de
+        la passer. C'est l'ouverture qui doit être DÉCLARÉE, jamais la
+        fermeture — même inversion que la liste des deltas opaques du walker.
+
+        Un substitut ne doit désigner aucune entité du monde réel : c'est
+        l'invariant du round 18, déjà tranché pour les adresses IP (RFC 2544,
+        non négociable). `alpine-relecloud.net` peut appartenir à quelqu'un, et
+        une commande que le modèle propose partirait chez lui. Le prix payé est
+        la plausibilité, et son échec est VISIBLE.
+
+        Quand le réel est DÉJÀ réservé, il n'y a rien à peser :
         `acmecorp.example` sortait en `parnell-alpine.co`, donc un domaine
         garanti à personne devenait un domaine qui peut appartenir à quelqu'un
         — la substitution rendait la valeur MOINS sûre qu'elle ne l'était.
-        Rester dans le réservé ne coûte aucune plausibilité, puisque l'original
-        était réservé : c'est un attribut déjà présent qu'on préserve, comme
-        « interne vs externe » et la co-appartenance /24 (§3.4).
         """
         bas = zone.lower()
         if any(bas == r.lstrip(".") or bas.endswith(r)
                for r in self._RESERVES_RFC2606):
             return RESERVED_TLDS
         if self.policy is not None \
-                and self.policy.reglage("domaines_fictifs") == DOMAINES_RESERVES:
-            return RESERVED_TLDS
-        return EXTERNAL_TLDS
+                and self.policy.reglage("domaines_fictifs") == DOMAINES_TLD_REELS:
+            return EXTERNAL_TLDS
+        return RESERVED_TLDS
 
     # -- dérivation --------------------------------------------------------- #
 

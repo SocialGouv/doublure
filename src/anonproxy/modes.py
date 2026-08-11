@@ -44,7 +44,12 @@ ANNONCE_ANNONCE = "annonce"
 ARBITRAGE_DIFFERE = "differe"      # substitue, consigne, continue
 ARBITRAGE_BLOQUANT = "bloquant"    # attend la décision avant de substituer
 
-#: Espace des noms de domaine fictifs.
+#: Espace des noms de domaine fictifs. Le DÉFAUT est `reserves`, et aucun mode
+#: ne s'en écarte : un mode choisit QUAND l'opérateur est sollicité, jamais SI
+#: la protection s'applique. Un substitut ne doit désigner aucune entité du
+#: monde réel — déjà tranché pour les adresses IP (RFC 2544), et un domaine
+#: sous TLD réel peut appartenir à quelqu'un tout autant qu'une IP routable.
+#: `tld_reels` reste atteignable, mais il faut le DÉCLARER.
 DOMAINES_TLD_REELS = "tld_reels"   # plausible (D1), collision possible
 DOMAINES_RESERVES = "reserves"     # RFC 2606/6761 : prouvablement à personne
 
@@ -76,11 +81,20 @@ VALEURS: dict[str, tuple[str, ...]] = {
 #: mode bloquant. À l'échéance, on ANONYMISE — jamais l'inverse.
 DELAI_ARBITRAGE = "delai_arbitrage"
 
+#: Réglages qui décident de la PROTECTION, par opposition à ceux qui décident
+#: de l'INTERACTION (`annonce`, `arbitrage`, `delai_arbitrage` : QUAND
+#: l'opérateur est sollicité). Aucun mode ne peut s'écarter des premiers, sinon
+#: choisir un mode revient à ouvrir — ce que la philosophie du projet réserve à
+#: une décision explicite de l'opérateur. L'invariant est vérifié par un test,
+#: pas seulement énoncé ici : `auto` avait justement dérivé sur
+#: `domaines_fictifs`, et rien ne le voyait.
+REGLAGES_DE_PROTECTION = frozenset({"domaines_fictifs", "chemins"})
+
 MODES: dict[str, dict[str, object]] = {
     "auto": {
         "annonce": ANNONCE_ANNONCE,
         "arbitrage": ARBITRAGE_DIFFERE,
-        "domaines_fictifs": DOMAINES_TLD_REELS,
+        "domaines_fictifs": DOMAINES_RESERVES,
         "chemins": CHEMINS_UTILISATEUR_PROJET,
         DELAI_ARBITRAGE: 0,
     },

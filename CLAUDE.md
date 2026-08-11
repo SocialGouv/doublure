@@ -50,6 +50,16 @@ exists, `reserves` (RFC 2606) guarantees the opposite at the cost of
 plausibility. Neither is "the right one" — which is exactly why it is
 configurable.
 
+**A setting still has a default, and the default CLOSES** (jo delegated the
+call, settled 2026-08-12: `reserves`). Two faces had to be closed, or the
+class stays half-shut: the default MODE (`auto` carried `tld_reels` while the
+other two carried `reserves` — so choosing a mode opened something, which no
+mode may do), and the engine's own condition, which tested for the CLOSED
+value and therefore made everything not explicitly closed open — no policy, a
+silent policy, a future caller who forgets to pass one. **Write the condition
+so that the OPENING is what has to be declared.** `REGLAGES_DE_PROTECTION`
+names the settings a mode may not vary, and a test enforces it.
+
 **Design corollary**: an accepted residual must be COUNTED, never silent
 (`public_by_shape`, the arbitration queue, checks written inverted in the E2E
 proofs). What fails must fail loudly.
@@ -1224,6 +1234,46 @@ vocabulary. Rounds 8 and 9 had already settled the principle for everything
 else: the gate applies to the PROGRAM POSITION, not to the word appearing in
 the text. That rule had simply never been migrated to it. Recognising it by
 position also covers the wrappers by construction rather than by accident.
+
+## Round 9 of the forward loop (2026-08-12) — three agents died, and it still paid
+
+All three subagents died mid-stream before executing anything — the SAME
+failure mode as rounds 13 and 21, despite the numbered-batch instruction those
+rounds prescribed. **They were RESUMED** (a dead agent keeps its transcript;
+one message asking for an immediate report recovers it) and each returned its
+reading as SUSPICIONS. Nothing was proven by them. Three of their leads turned
+out to be real once I proved them myself, one was a false positive, the rest
+are documented residuals. The lesson is not "agents are useless" — it is that
+**the returnable unit has to be one message, not one investigation.**
+
+**Gzip bomb, HIGH — my own `edc85df`.** `_lire_corps` bounds what the proxy
+READS to 32 MiB; `gzip.decompress` allocated whatever the upstream decided.
+Measured: 199 KiB of payload → 400 MiB resident, and at the input limit it
+would be thousands of times more. **The only bound on the path applied to the
+wrong quantity.** Decompression is now bounded on its OUTPUT, and a multi-member
+stream is refused rather than silently truncated.
+
+**A `\r` in a header NAME, HIGH — the JUMELLE for the THIRD time.** Round 7
+refused control characters in header VALUES, round 8 in the STATUS line; names
+were never checked. `x-innocent\rset-cookie: PWN=1` parsed fine, was copied
+verbatim, and a client accepting a bare terminator reads the injected header.
+Fixed at the CLASS this time: the split is on `\r\n`, so any `\r` or `\n`
+surviving in ANY line of the head is a bare terminator — one condition, no
+twin left. **My first version of the fix quoted the offending line in the 502
+body**, so the injected header came back to the client through the refusal
+itself; my own existing test caught it.
+
+**A session-scope reveal crossed scope keys, HIGH.** `session-<id>.json`
+carried no scope key while the project file did: the NARROWEST scope leaked
+WIDER than the wider one. Default session name being `sans-id`, the collision
+is the ORDINARY case once a policy root is shared. Revealing is never
+inherited — and crossing a scope is a form of inheritance.
+
+**Rejected after proof**: span offsets are CHARACTERS, not bytes — both
+detectors slice exactly on a text carrying five bytes of accents. **Accepted
+and stated**: an upstream dripping one byte under the deadline holds an
+exchange (a total ceiling would cut a legitimate slow body — the twin defect,
+and the reason the deadline is written as inactivity).
 
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 

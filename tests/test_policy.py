@@ -362,6 +362,25 @@ def test_une_valeur_de_reglage_inconnue_est_refusee(tmp_path, nom, valeur):
         make_policy(tmp_path).definir_reglage("projet", nom, valeur)
 
 
+def test_aucun_mode_ne_s_ecarte_d_un_reglage_de_protection():
+    """L'invariant que le test suivant PORTAIT dans son nom sans le vérifier.
+
+    Il montrait qu'un hôte est bien substitué sous chaque mode — vrai, mais
+    beaucoup plus étroit que « aucun mode n'ouvre ». `auto`, le mode par
+    DÉFAUT, tirait ses domaines fictifs de TLD réels quand les deux autres
+    restaient dans l'espace réservé : choisir un mode revenait donc à ouvrir,
+    et rien ne le voyait. Un réglage de protection doit être identique partout ;
+    seuls ceux qui décident de l'INTERACTION peuvent varier.
+    """
+    from anonproxy.modes import MODES, REGLAGES_DE_PROTECTION
+
+    for reglage in REGLAGES_DE_PROTECTION:
+        valeurs = {nom: mode[reglage] for nom, mode in MODES.items()}
+        assert len(set(valeurs.values())) == 1, (
+            f"le réglage de protection {reglage!r} varie selon le mode : "
+            f"{valeurs} — un mode ne choisit pas SI on protège")
+
+
 def test_aucun_mode_n_ouvre_quoi_que_ce_soit(tmp_path):
     """Un mode choisit QUAND l'opérateur est sollicité, jamais SI on protège."""
     from anonproxy.modes import MODES
@@ -408,7 +427,17 @@ def test_le_mode_bloquant_prend_la_decision_rendue(tmp_path):
 
 
 def test_les_domaines_reserves_ne_sont_a_personne(tmp_path):
-    """L'arbitrage que je proposais devient un réglage : les deux marchent."""
+    """Les deux réglages marchent — mais le DÉFAUT ferme, et il a changé.
+
+    Ce test épinglait l'inverse : sans réglage explicite, un hôte externe
+    recevait un TLD réel. C'était l'ouverture par défaut, et elle tenait à ce
+    que la condition du moteur teste `reserves` — donc à ce que tout ce qui
+    n'était pas explicitement FERMÉ soit ouvert. Le mode `auto`, mode par
+    DÉFAUT, portait la valeur permissive quand les deux autres portaient
+    l'autre : choisir un mode revenait à ouvrir.
+
+    `tld_reels` reste atteignable ; il faut le DÉCLARER."""
+    from anonproxy.modes import DOMAINES_TLD_REELS
     from anonproxy.surrogates.lexicon import EXTERNAL_TLDS, RESERVED_TLDS
 
     externe = "www-01.acmecorp-externe.fr"
@@ -417,7 +446,62 @@ def test_les_domaines_reserves_ne_sont_a_personne(tmp_path):
     faux = make_engine(tmp_path, politique).substitute_value("HOSTNAME", externe)
     assert faux.rsplit(".", 1)[-1] in RESERVED_TLDS, faux
 
-    politique2 = make_policy(tmp_path / "b")
-    faux2 = make_engine(tmp_path / "b", politique2, nom="c").substitute_value(
+    ouverte = make_policy(tmp_path / "b")
+    ouverte.definir_reglage("projet", "domaines_fictifs", DOMAINES_TLD_REELS)
+    faux2 = make_engine(tmp_path / "b", ouverte, nom="c").substitute_value(
         "HOSTNAME", externe)
     assert faux2.rsplit(".", 1)[-1] in EXTERNAL_TLDS, faux2
+
+    muette = make_policy(tmp_path / "c")
+    faux3 = make_engine(tmp_path / "c", muette, nom="d").substitute_value(
+        "HOSTNAME", externe)
+    assert faux3.rsplit(".", 1)[-1] in RESERVED_TLDS, faux3
+
+
+def test_une_revelation_de_portee_session_ne_traverse_pas_les_portees(tmp_path):
+    """HAUT. La portée la plus ÉTROITE débordait plus large que la portée
+    projet, qui, elle, était bien séparée.
+
+    `session-<id>.json` ne portait pas le scope_key : deux portées partageant
+    une racine de politique lisaient le MÊME fichier, et une décision
+    « révéler » y traversait. Le nom de session par défaut étant `sans-id`, la
+    collision était le cas ORDINAIRE dès que la racine est partagée.
+
+    « Révéler ne s'hérite jamais d'un défaut » — et traverser une portée est
+    une forme d'héritage."""
+    racine = tmp_path / "policy"
+    alpha = Policy(racine=racine, master_key=MASTER, scope_key="project:alpha",
+                   session="s-42")
+    beta = Policy(racine=racine, master_key=MASTER, scope_key="project:beta",
+                  session="s-42")
+
+    alpha.definir("session", "valeur", alpha.empreinte("HOSTNAME", HOTE),
+                  Decision.REVELER)
+    assert alpha.decide("HOSTNAME", "infra", HOTE)[0] is Decision.REVELER
+    assert beta.decide("HOSTNAME", "infra", HOTE)[0] is Decision.ANONYMISER, \
+        "la révélation d'une portée a traversé vers une autre"
+
+
+def test_deux_portees_sans_identifiant_de_session_ne_se_melangent_pas(tmp_path):
+    """Le cas ORDINAIRE : sans `ANONPROXY_SESSION`, les deux retombaient sur
+    `session-sans-id.json`, donc sur le même fichier."""
+    racine = tmp_path / "policy"
+    alpha = Policy(racine=racine, master_key=MASTER, scope_key="project:alpha")
+    beta = Policy(racine=racine, master_key=MASTER, scope_key="project:beta")
+    assert alpha._fichiers["session"] != beta._fichiers["session"]
+
+    alpha.definir("session", "type", "HOSTNAME", Decision.REVELER)
+    assert beta.decide("HOSTNAME", "infra", HOTE)[0] is Decision.ANONYMISER
+
+
+def test_la_meme_portee_se_retrouve_bien(tmp_path):
+    """L'AUTRE MOITIÉ : séparer ne doit pas empêcher une portée de relire ce
+    qu'elle a elle-même écrit, dans un autre processus."""
+    racine = tmp_path / "policy"
+    ecrit = Policy(racine=racine, master_key=MASTER, scope_key="project:alpha",
+                   session="s-42")
+    ecrit.definir("session", "valeur", ecrit.empreinte("HOSTNAME", HOTE),
+                  Decision.REVELER)
+    relu = Policy(racine=racine, master_key=MASTER, scope_key="project:alpha",
+                  session="s-42")
+    assert relu.decide("HOSTNAME", "infra", HOTE)[0] is Decision.REVELER
