@@ -855,3 +855,49 @@ def test_a_lone_surrogate_survives_the_round_trip(transform):
     corps = json.dumps(message).encode()
     assert json.loads(transform.incoming(
         "h", {}, transform.outgoing("h", {}, corps))) == message
+
+
+@pytest.mark.parametrize("cle,valeur", [
+    ("id", {"correlation": "PORTEUR"}),
+    ("id", ["PORTEUR", 1]),
+    ("method", {"reel": "PORTEUR", "verbe": "call"}),
+])
+@pytest.mark.parametrize("sens", ["outgoing", "incoming"])
+def test_an_envelope_key_is_verbatim_only_in_its_own_SHAPE(
+        transform, cle, valeur, sens):
+    """HAUT dans les deux sens — la JUMELLE de la clé de routage, laissée
+    ouverte le tour d'avant.
+
+    `_ENVELOPPE` était recopiée SANS regarder la valeur, alors que la clé
+    voisine venait d'être durcie sur (position ET forme scalaire). JSON-RPC
+    impose une chaîne à `jsonrpc` et `method`, et une chaîne, un nombre ou
+    `null` à `id` : y glisser un objet ou une liste suffisait à faire traverser
+    n'importe quoi verbatim — donc une fuite en sortie, une restauration perdue
+    au retour, et c'est l'ÉMETTEUR qui choisissait.
+
+    Aucun test ne l'a vu parce que `test_the_envelope_stays_verbatim` ne met
+    qu'un SCALAIRE dans `id`."""
+    porte = "db-01.acme.internal" if sens == "outgoing" else "hote-fictif.test"
+    attendu = "hote-fictif.test" if sens == "outgoing" else "db-01.acme.internal"
+    charge = json.loads(json.dumps(valeur).replace("PORTEUR", porte))
+    message = {"jsonrpc": "2.0", "id": 1, "method": "x", "params": {}}
+    message[cle] = charge
+
+    sortie = getattr(transform, sens)(
+        "h", {}, json.dumps(message).encode()).decode()
+    assert porte not in sortie, sortie
+    assert attendu in sortie, sortie
+
+
+def test_a_well_shaped_envelope_is_still_verbatim(transform):
+    """L'AUTRE MOITIÉ : dans sa forme légitime, l'enveloppe reste intacte —
+    c'est elle qui corrèle la requête et la réponse."""
+    sortie = _sortant(transform, {
+        "jsonrpc": "2.0", "id": "db-01.acme.internal",
+        "method": "tools/call", "params": {}})
+    assert sortie["id"] == "db-01.acme.internal"
+    assert sortie["jsonrpc"] == "2.0" and sortie["method"] == "tools/call"
+    for identifiant in (42, 3.5, None):
+        rendu = _sortant(transform, {"jsonrpc": "2.0", "id": identifiant,
+                                     "method": "x", "params": {}})
+        assert rendu["id"] == identifiant

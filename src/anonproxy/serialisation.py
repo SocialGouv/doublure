@@ -21,9 +21,16 @@ from __future__ import annotations
 import json
 
 
-def dumps_utf8(valeur) -> bytes:
-    """Le JSON de `valeur`, toujours encodable, sans rien perdre."""
+def dumps_utf8(valeur, **options) -> bytes:
+    """Le JSON de `valeur`, toujours encodable, sans rien perdre.
+
+    `options` va à `json.dumps` : le flux SSE, par exemple, sérialise en forme
+    compacte. Il PASSE par ici — et il ne le faisait pas : c'était la troisième
+    implantation de la même règle, la seule oubliée, et un demi-substitut y
+    tuait le flux ENTIER, tous les événements suivants compris, `message_stop`
+    jamais délivré, donc un client qui attend sans fin.
+    """
     try:
-        return json.dumps(valeur, ensure_ascii=False).encode("utf-8")
+        return json.dumps(valeur, ensure_ascii=False, **options).encode("utf-8")
     except UnicodeEncodeError:
-        return json.dumps(valeur, ensure_ascii=True).encode("utf-8")
+        return json.dumps(valeur, ensure_ascii=True, **options).encode("utf-8")

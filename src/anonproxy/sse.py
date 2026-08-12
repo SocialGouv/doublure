@@ -6,6 +6,8 @@ fait la traduction octets ⇄ dict, et rien d'autre.
 from __future__ import annotations
 
 import json
+
+from anonproxy.serialisation import dumps_utf8
 import re
 from typing import Any
 
@@ -32,9 +34,14 @@ def parse_sse_block(block: str) -> dict[str, Any] | None:
 
 def encode_sse(event: dict[str, Any]) -> bytes:
     """Sérialise un événement au format SSE Anthropic (``event:`` + ``data:``)."""
-    etype = event.get("type", "message")
-    data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-    return f"event: {etype}\ndata: {data}\n\n".encode("utf-8")
+    # La sérialisation passe par `dumps_utf8`, comme les deux autres chemins :
+    # un demi-substitut Unicode y faisait lever l'encodeur, et le flux mourait
+    # sur un événement `error` — tous les événements SUIVANTS jetés, y compris
+    # `message_stop`, donc un client qui attend sans fin. Troisième implantation
+    # d'une même règle, et la seule qui ne l'avait pas héritée.
+    etype = str(event.get("type", "message"))
+    return (b"event: " + etype.encode("utf-8") + b"\ndata: "
+            + dumps_utf8(event, separators=(",", ":")) + b"\n\n")
 
 
 #: Séparateur de blocs SSE : DEUX fins de ligne consécutives, chacune pouvant

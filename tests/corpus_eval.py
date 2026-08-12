@@ -70,6 +70,7 @@ def evaluate(examples: list[dict], detect_url: str) -> tuple[dict, int]:
     secret_recall = {"attendu": 0, "trouvé": 0}
     by_type: dict[str, dict[str, int]] = {}
     invalid_json = 0
+    documents_json = 0
 
     for run_idx in range(2):  # deux exécutions : mesure de la variance
         engine = SurrogateEngine(
@@ -118,8 +119,9 @@ def evaluate(examples: list[dict], detect_url: str) -> tuple[dict, int]:
             # mathématiquement pas s'incrémenter, et la ligne « JSON invalide :
             # 0 » du rapport ne mesurait rien. Ce qu'il faut vérifier est que la
             # substitution ne CASSE pas un document déjà structuré.
-            if _est_du_json(ex["text"]) and not _est_du_json(out):
-                invalid_json += 1
+            if _est_du_json(ex["text"]):
+                documents_json += 1
+                invalid_json += int(not _est_du_json(out))
 
         runs.append(outputs)
 
@@ -154,6 +156,7 @@ def evaluate(examples: list[dict], detect_url: str) -> tuple[dict, int]:
         "variance": variance,
         "collisions": collisions,
         "json_invalide": invalid_json,
+        "documents_json": documents_json,
         "latence_p50_ms": round(statistics.median(lat), 1) if lat else 0.0,
         "latence_p95_ms": round(p95, 1),
     }, 0
@@ -179,7 +182,14 @@ def report(m: dict) -> int:
         sec["trouvé"] == sec["attendu"])
     row("variance (2 exécutions)", "0", m["variance"], m["variance"] == 0)
     row("collisions de substituts", "0", m["collisions"], m["collisions"] == 0)
-    row("JSON invalide", "0", m["json_invalide"], m["json_invalide"] == 0)
+    # Le DÉNOMINATEUR est imprimé, sinon le critère se lit « vert » alors qu'il
+    # ne mesure rien : il a d'abord été tautologique dans sa conclusion
+    # (`json.dumps` d'une chaîne réussit toujours), puis vide dans sa prémisse
+    # (aucun document du corpus n'est du JSON). Un critère qui ne peut pas
+    # rougir doit le DIRE — c'est la règle du projet sur les résidus, appliquée
+    # à une mesure.
+    row(f"JSON invalide (sur {m['documents_json']} doc. JSON)", "0",
+        m["json_invalide"], m["json_invalide"] == 0)
     total_clear = sum(1 for _ in m["faux_positifs"])
     row("faux positifs (chaînes techniques)", "< 2 %", total_clear, total_clear == 0)
 

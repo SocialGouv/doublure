@@ -35,6 +35,15 @@ from anonproxy.serialisation import dumps_utf8
 
 #: Clés du protocole, au NIVEAU DU MESSAGE uniquement.
 _ENVELOPPE = frozenset({"jsonrpc", "id", "method"})
+#: …et la FORME que JSON-RPC 2.0 leur impose. Recopier ces clés sans regarder
+#: leur valeur suffisait à faire sortir n'importe quoi : un `id` porteur d'un
+#: objet ou d'une liste traversait verbatim dans un sens et n'était pas restauré
+#: dans l'autre, et c'est l'ÉMETTEUR qui choisissait. Même défaut que la clé de
+#: routage voisine, durcie au tour précédent sur (position ET forme) — la règle
+#: n'avait pas été portée aux trois autres. `id` accepte une chaîne, un nombre
+#: ou `null` ; `jsonrpc` et `method` sont des chaînes.
+_FORME_ENVELOPPE = {"jsonrpc": str, "method": str,
+                    "id": (str, int, float, type(None))}
 #: Clé de routage d'un appel d'outil : verbatim, fuite assumée.
 _ROUTAGE = frozenset({"name"})
 #: Sous-arbres de données libres d'un message JSON-RPC.
@@ -221,7 +230,7 @@ class JsonRpcTransform:
             return self._libre(noeud, transformer)
         rendu = {}
         for cle, valeur in noeud.items():
-            if cle in _ENVELOPPE:
+            if cle in _ENVELOPPE and isinstance(valeur, _FORME_ENVELOPPE[cle]):
                 rendu[cle] = valeur
             elif cle in _DONNEES:
                 # Le ROUTAGE ne vit que sous `params` : c'est la requête qui

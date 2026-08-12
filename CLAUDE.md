@@ -1761,6 +1761,47 @@ verified the round-17 fixes redden per function and per form, and noted that the
 key test exercised only the outgoing path: a regression of the return path would
 not have reddened. Extended.
 
+## Round 19 (2026-08-12) — the third implantation, and a vacuity that moved
+
+Three defects, and the round is the clearest illustration of the trap this
+project pays most: **the same rule written in three places, and only two of them
+were fixed.**
+
+**The SSE stream was the third implantation — HIGH.** Round 18 routed the
+non-streamed body and the MCP channel through one serialiser, and its own commit
+message said that three implantations of a rule are the definition of the twin
+defect. `sse.py` was the third, and it kept `json.dumps(...).encode("utf-8")`.
+A lone surrogate there does not cost one event: the encoder raises, the proxy
+emits an `error` event, and **every subsequent event is dropped, `message_stop`
+included — so the client waits forever.** Worse than the case that motivated the
+fix, in the file next to it.
+
+**The envelope was copied without looking at its value — HIGH, both ways.**
+Round 18 had just hardened the neighbouring routing key on (position AND scalar
+shape); `jsonrpc`, `id` and `method` kept being copied unconditionally. An `id`
+carrying an object or a list travelled verbatim outgoing and was not restored
+incoming, and it is the SENDER who chooses. JSON-RPC gives each of the three a
+shape; that shape is now the guard. No test saw it because
+`test_the_envelope_stays_verbatim` only ever puts a SCALAR in `id`.
+
+**A vacuity that moved rather than closed.** Round 18 fixed a tautological
+metric — "invalid JSON" counted with `json.loads(json.dumps({"text": out}))`,
+which succeeds for every Python string. The replacement asks whether a document
+that WAS JSON still is; but no entry of the synthetic corpus is JSON, so the
+premise is empty and the criterion still cannot redden. **Fixing a vacuous
+conclusion with a vacuous premise is not fixing it**: the denominator is printed
+now, so a criterion that measures nothing says so.
+
+**Method — an interrupted agent is worth resuming.** The machine rebooted with
+three agents in flight. All three returned their reading from their transcript
+alone, without re-running anything, and two of the three findings above come
+from that recovery. Confirms round 9's lesson, this time on a hard interruption
+rather than a stream timeout.
+
+**Checked and rejected**: a bodied 204/304 through the restored-response path —
+the branch requires `content-type: application/json` and an empty body makes
+`upstream.json()` raise, so it fails closed on a 502, before as after the change.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth
