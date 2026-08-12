@@ -724,3 +724,47 @@ def test_base64_without_padding_is_still_substituted(transform, reel):
     lu = rendu.rstrip("=")
     assert reel not in base64.b64decode(
         (lu + "=" * (-len(lu) % 4)).encode("utf-8")).decode("utf-8", "replace")
+
+
+@pytest.mark.parametrize("chemin", ["params", "result", "profond"])
+def test_a_payload_in_a_KEY_is_traversed_too(transform, chemin):
+    """CRITIQUE, septième occurrence — et le code contredisait son docstring.
+
+    `_libre` annonce « la clé est une valeur comme une autre », et c'était vrai
+    du TEXTE mais pas de ce qu'il ENCODE : les clés ne recevaient que le
+    transformateur, jamais le lecteur de charges. Un serveur MCP qui range ses
+    ressources sous `{"<base64>": {...}}` — la forme d'un dictionnaire indexé
+    par identifiant — faisait donc sortir la valeur réelle verbatim, à toute
+    profondeur et dans les deux sens.
+
+    Aucun des seize tours précédents ne l'a vu parce que TOUS les tests de
+    charge la mettent dans une VALEUR. Une position non testée est une position
+    non protégée."""
+    import base64
+
+    reel = "db-01.acme.internal"
+    charge = base64.b64encode(reel.encode()).decode()
+    message = {
+        "params": {"jsonrpc": "2.0", "id": 1, "method": "x",
+                   "params": {charge: {"etat": "ok"}}},
+        "result": {"jsonrpc": "2.0", "id": 1,
+                   "result": {"resources": {charge: {"a": 1}}}},
+        "profond": {"jsonrpc": "2.0", "id": 1,
+                    "result": {"items": [{"l1": {"l2": {charge: 1}}}]}},
+    }[chemin]
+    sortie = transform.outgoing("h", {}, json.dumps(message).encode()).decode()
+    assert charge not in sortie, sortie
+    assert reel not in sortie
+
+
+def test_a_key_that_is_an_opaque_payload_comes_back_identical(transform):
+    """L'AUTRE MOITIÉ : une clé qui ressemble à du base64 sans rien porter doit
+    traverser l'aller-retour inchangée, sinon le destinataire ne retrouve plus
+    son index."""
+    import base64
+
+    opaque = base64.b64encode(b"nothing sensitive here").decode()
+    message = {"jsonrpc": "2.0", "id": 1, "result": {"r": {opaque: 1}}}
+    corps = json.dumps(message).encode()
+    assert json.loads(transform.incoming("h", {}, transform.outgoing(
+        "h", {}, corps))) == message

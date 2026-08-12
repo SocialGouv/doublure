@@ -460,6 +460,7 @@ def test_une_date_de_BORD_se_relit_dans_la_forme_litterale(ecrit):
 @pytest.mark.parametrize("source,cible", [
     ("3 oct. 2020", "mars"), ("1er janv. 2020", "août"),
     ("15 avr. 2020", "mai"), ("Feb. 3, 2020", "May"),
+    ("3 fév. 2020", "juin"),   # les CINQ mois concernés, pas quatre
 ])
 def test_un_mois_SANS_abreviation_ne_recoit_pas_de_point(source, cible):
     """HAUT, restauration perdue en SILENCE — TROISIÈME occurrence du motif.
@@ -497,3 +498,29 @@ def test_le_premier_du_mois_recoit_son_ordinal():
     # Mais une source qui écrit `1 mars` sans `er` garde SON choix.
     _, sans = _dates.parse("1 mars 2020")
     assert sans(dt.date(2022, 8, 1)) == "1 août 2022"
+
+
+@pytest.mark.parametrize("source,attendu", [
+    ("3 May 2020", "1 November 2021"),        # anglais en ordre jour-mois
+    ("31 August 2020", "1 November 2021"),
+    ("3 mars 2020", "1er novembre 2021"),     # français : `1er` est canonique
+    ("15 mars 2020", "1er novembre 2021"),
+    ("1 mars 2020", "1 novembre 2021"),       # la source a dit non
+])
+def test_l_ordinal_suit_la_LANGUE_pas_l_ordre_des_champs(source, attendu):
+    """HAUT, restauration perdue en silence — et la moitié non portée d'un
+    correctif d'il y a une heure.
+
+    Le motif jour-mois reconnaît aussi les mois ANGLAIS (`3 May 2020`, la forme
+    internationale). Décider le marqueur ordinal sur l'ORDRE des champs plutôt
+    que sur la table résolue produisait `1er November 2021` — un marqueur
+    français devant un mois anglais, que le modèle retire en recopiant, donc un
+    substitut que le coffre ne reconnaît plus.
+
+    C'est la même correction que celle du tour 13 pour `sept`, qui appartient
+    aux deux langues : la langue se lit sur la TABLE, jamais sur le motif qui a
+    reconnu."""
+    import datetime as dt
+
+    _, rendre = _dates.parse(source)
+    assert rendre(dt.date(2021, 11, 1)) == attendu

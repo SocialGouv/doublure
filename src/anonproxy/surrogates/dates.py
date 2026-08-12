@@ -228,7 +228,15 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
         # pense que si ELLE tombait un premier : sinon `15 mars 2020` décalé
         # sur un premier rendait `1 août 2022`, le modèle recopiait
         # `1er août 2022`, et le coffre ne reconnaissait plus rien.
-        ordinal = "" if ordre_en else (m[2] or ("" if int(m[1]) == 1 else "er"))
+        #
+        # Ce qui décide est la LANGUE — donc la table résolue — et non l'ordre
+        # des champs. Le motif jour-mois reconnaît aussi les mois anglais
+        # (`3 May 2020`, la forme internationale), et s'appuyer sur l'ordre
+        # produisait `1er November 2021` : un marqueur français devant un mois
+        # anglais, que le modèle retire en recopiant. Même correction que le
+        # tour 13 pour `sept`, portée cette fois sur le marqueur ordinal.
+        ordinal = "" if table is MOIS_EN else (
+            m[2] or ("" if int(m[1]) == 1 else "er"))
 
         def rendre(d: dt.date, _en=ordre_en, _nom=nom_mois, _pt=point,
                    _t=table, _v=virgule, _src=mois, _ord=ordinal) -> str:

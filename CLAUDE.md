@@ -1694,6 +1694,34 @@ three fixes are covered — 4, 4 and 20+ tests redden when their fix is reverted
 **Two rounds, two missing witnesses, both on the same shape**: a fix that closes
 several forms needs a witness per form, not per fix.
 
+## Round 17 (2026-08-12) — a position nobody tested, and the proof perimeter comes back clean
+
+**A base64 payload in a KEY went out verbatim — CRITICAL, silent, and the code
+contradicted its own docstring.** `_libre` states "a key is a value like any
+other"; that was true of the TEXT but not of what it ENCODES, since keys only
+ever received the transformer, never the payload reader. A MCP server that
+indexes its resources as `{"<base64>": {…}}` — the ordinary shape of a
+dictionary keyed by identifier — therefore sent the real value out at any
+depth, in both directions, with nothing in the clear for the egress harness or
+the corpus to count. Seventh occurrence of the same family, and the reason
+sixteen rounds missed it is worth keeping: **every payload test puts the payload
+in a VALUE.** A position that is not tested is a position that is not protected.
+
+**The ordinal followed the field ORDER instead of the LANGUAGE.** The day-month
+pattern also recognises English months — `3 May 2020` is the international form
+— so deciding `1er` on the parser that matched produced `1er November 2021`, a
+French marker in front of an English month, which the model drops when it copies.
+Exactly the correction round 13 made for `sept`, which belongs to both
+languages, left unported to the ordinal marker: **the language is read off the
+resolved TABLE, never off the pattern that matched.**
+
+**The proof perimeter returns its first CLEAN report**, after finding something
+in each of its three previous rounds. Every round-16 fix has a witness that
+reddens when the fix is reverted — verified fix by fix on a copy. It reported
+two redundant parametrized cases and one gap (`juin` missing from the five
+months with no abbreviation), which is closed. That a perimeter goes quiet is
+information, not silence: it is the stopping criterion applying to one surface.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

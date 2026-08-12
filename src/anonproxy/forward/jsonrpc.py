@@ -234,7 +234,12 @@ class JsonRpcTransform:
             return self._libre(noeud, transformer)
         rendu: dict = {}
         for cle, valeur in noeud.items():
-            _poser(rendu, cle if cle in _ROUTAGE else transformer(cle),
+            # La clé passe par `_chaine`, pas par le transformateur seul :
+            # une charge base64 est une charge où qu'elle soit, et la placer en
+            # CLÉ suffisait à ce qu'elle traverse verbatim. Le docstring de
+            # `_libre` disait déjà « la clé est une valeur comme une autre » ;
+            # le code ne le tenait que pour le texte, pas pour ce qu'il encode.
+            _poser(rendu, cle if cle in _ROUTAGE else self._chaine(cle, transformer),
                    valeur if cle in _ROUTAGE
                    else self._libre(valeur, transformer))
         return rendu
@@ -327,7 +332,8 @@ class JsonRpcTransform:
         if isinstance(noeud, dict):
             rendu: dict = {}
             for c, v in noeud.items():
-                _poser(rendu, transformer(c), self._libre(v, transformer))
+                _poser(rendu, self._chaine(c, transformer),
+                       self._libre(v, transformer))
             return rendu
         if isinstance(noeud, list):
             return [self._libre(v, transformer) for v in noeud]
