@@ -339,3 +339,45 @@ def test_une_source_ascii_reste_ascii():
     jour, rendre = _dates.parse("dec 25, 2020")
     rendu = rendre(jour + dt.timedelta(days=250))
     assert rendu == rendu.encode("ascii", "ignore").decode(), rendu
+
+
+def test_chercher_ne_devient_pas_quadratique_sur_un_texte_DENSE_en_dates():
+    """HAUT, déni de service — et le test qui existait passait à côté.
+
+    `test_chercher_ne_backtracke_pas_sur_un_long_texte_sans_date` mesure du
+    texte SANS date : c'est là que le défaut PRÉCÉDENT vivait. Celui-ci naît à
+    l'inverse, quand tout matche : la déduplication comparait chaque candidat à
+    TOUS les retenus. Mesuré : 30 000 dates = 12,6 s, 100 000 ne finissaient
+    pas. J'ai testé là où le défaut d'avant était, pas là où le nouveau
+    pouvait naître."""
+    import time
+
+    texte = " ".join(["2020-03-15"] * 30_000)
+    debut = time.monotonic()
+    trouves = _dates.chercher_toutes(texte)
+    ecoule = time.monotonic() - debut
+    assert len(trouves) == 30_000
+    assert ecoule < 1.0, f"30 000 dates en {ecoule:.1f} s"
+
+
+@pytest.mark.parametrize("ecrit,attendu_mois", [
+    ("1er janv. 2020", "nov."),      # `nove.` ne s'écrit nulle part
+    ("3 févr. 2026", "déc."),        # ni `déce.`
+    ("Feb 3, 2026", "Dec"),
+])
+def test_une_abreviation_rendue_est_une_abreviation_QUI_S_ECRIT(ecrit, attendu_mois):
+    """HAUT, restauration perdue en SILENCE. La garde précédente prouvait que
+    le PARSEUR sait relire ce qu'il écrit — pas qu'un humain l'écrirait.
+    `janv.` faisait rendre `nove.`, `févr.` faisait rendre `déce.` : le modèle
+    normalise vers l'écriture standard, le coffre ne contient que l'aberration,
+    et l'opérateur lit une date fictive sans le savoir."""
+    jour, rendre = _dates.parse(ecrit)
+    rendu = rendre(jour + dt.timedelta(days=321))
+    assert attendu_mois in rendu, rendu
+    assert _dates.parse(rendu) is not None
+
+
+def test_un_prefixe_qui_n_est_pas_une_abreviation_n_est_pas_une_date():
+    """`Marc` préfixe `march` sans être une abréviation de mois. Accepter tout
+    préfixe non ambigu faisait d'un prénom une date décalée."""
+    assert _dates.parse("Marc 3, 2020") is None

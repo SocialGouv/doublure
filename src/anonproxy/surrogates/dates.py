@@ -55,9 +55,21 @@ def _sans_accents(table: tuple[str, ...]) -> tuple[str, ...]:
 
 
 _MOIS_FR_NUS = _sans_accents(MOIS_FR)
-#: En dessous, un préfixe ne désigne plus un mois : `ju` vaut juin ET juillet,
-#: `ma` vaut mars ET mai. Trois lettres suffisent partout ailleurs.
-_ABREV_MIN = 3
+#: Les abréviations qu'un humain ÉCRIT, et rien d'autre. Accepter n'importe
+#: quel préfixe non ambigu produisait des formes que personne n'utilise —
+#: `janv.` faisait rendre `nove.`, `févr.` faisait rendre `déce.`, et `Marc`
+#: passait pour mars. Le modèle normalise alors vers l'écriture standard, le
+#: coffre ne contient que la forme aberrante, et la restauration se perd EN
+#: SILENCE. Prouver qu'une forme se relit par le PARSEUR ne prouve pas qu'elle
+#: s'écrit.
+#: Plusieurs formes sont ACCEPTÉES par mois, la PREMIÈRE est celle qu'on écrit.
+_ABREV_FR = (("janv", "jan"), ("févr", "fév"), ("mars",), ("avr",), ("mai",),
+             ("juin",), ("juil",), ("août", "aout"), ("sept", "sep"),
+             ("oct",), ("nov",), ("déc",))
+#: `sept` s'écrit aussi en anglais, et sans lui `sept 15, 2020` — une forme
+#: anglophone — retombait sur la table française : le mois hybride revenait.
+_ABREV_EN = (("jan",), ("feb",), ("mar",), ("apr",), ("may",), ("jun",),
+             ("jul",), ("aug",), ("sep", "sept"), ("oct",), ("nov",), ("dec",))
 
 
 def _mois_index(nom: str, preferee: tuple[str, ...] = MOIS_FR
@@ -86,12 +98,11 @@ def _mois_index(nom: str, preferee: tuple[str, ...] = MOIS_FR
     for table, nus in tables:
         if nu in nus:
             return nus.index(nu) + 1, table
-    if len(nu) < _ABREV_MIN:
-        return None
-    for table, nus in tables:
-        candidats = [i for i, m in enumerate(nus) if m.startswith(nu)]
-        if len(candidats) == 1:
-            return candidats[0] + 1, table
+    for table, _ in tables:
+        abrevs = _ABREV_FR if table is MOIS_FR else _ABREV_EN
+        for i, formes in enumerate(abrevs):
+            if nu in (_sans_accent(f) for f in formes):
+                return i + 1, table
     return None
 
 
@@ -120,15 +131,13 @@ def _rendre_mois(nom_source: str, point: str, table: tuple[str, ...],
     if _sans_accent(canonique) != canonique and \
             _sans_accent(nom_source) == nom_source.lower():
         nom = _sans_accent(nom)
-    coupe = len(_sans_accent(nom_source))
-    if coupe < len(_sans_accent(table[mois_source - 1])):
-        tronque = nom[:coupe]
-        # **Ce qu'on écrit doit pouvoir se relire.** `juillet` coupé à trois
-        # donne `jui`, précisément le préfixe que `_mois_index` REFUSE parce
-        # qu'il vaut juin ET juillet : la restauration s'y perdait en silence.
-        relu = _mois_index(tronque, table)
-        if relu is not None and relu[0] == mois:
-            nom = tronque
+    if len(_sans_accent(nom_source)) < len(_sans_accent(table[mois_source - 1])):
+        # La source était ABRÉGÉE : on abrège aussi, mais avec la forme
+        # STANDARD du mois d'arrivée — pas une troncature à la même longueur.
+        # `janv.` faisait rendre `nove.`, qui ne s'écrit nulle part : le modèle
+        # le normalise, et le coffre ne connaît que l'aberration.
+        standard = (_ABREV_FR if table is MOIS_FR else _ABREV_EN)[mois - 1][0]
+        nom = _sans_accent(standard) if nom != table[mois - 1] else standard
     if nom_source.isupper():
         nom = nom.upper()
     elif nom_source[:1].isupper():
@@ -266,11 +275,15 @@ def chercher_toutes(valeur: str) -> list[tuple[int, int]]:
         for m in motif.finditer(valeur):
             if parse(m.group(0)) is not None:
                 trouves.append((m.start(), m.end()))
+    # Comparer chaque candidat à TOUS les retenus était quadratique : 30 000
+    # dates dans un texte de 300 Ko coûtaient 12,6 s. Les candidats étant triés
+    # par début croissant, un candidat ne peut chevaucher que le DERNIER retenu
+    # — leurs fins sont croissantes par construction.
     retenus: list[tuple[int, int]] = []
     for debut, fin in sorted(trouves, key=lambda b: (b[0], -(b[1] - b[0]))):
-        if all(fin <= d or debut >= f for d, f in retenus):
+        if not retenus or debut >= retenus[-1][1]:
             retenus.append((debut, fin))
-    return sorted(retenus)
+    return retenus
 
 
 def chercher(valeur: str) -> tuple[int, int] | None:

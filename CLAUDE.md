@@ -1493,6 +1493,16 @@ alphabet, not canonicity, so non-zero padding bits decoded and re-encoded
 NORMALISED — an opaque token came back changed. The round trip is now required
 to reproduce what was read, or the string is not touched.
 
+**Two more in the date parser, both mine from three hours earlier.** The
+overlap dedup compared each candidate to ALL kept ones — quadratic: 30 000
+dates in 300 KB cost 12.6 s, 100 000 never finished. **My own regression test
+measured text WITHOUT dates** — where the PREVIOUS defect lived. I tested where
+the last one was, not where the new one could be born. Now 0.22 s on 100 000.
+And truncating a month to the source's length produced forms nobody writes
+(`nove.`, `déce.`, and `Marc 3, 2020` read as March): proving the PARSER can
+re-read what it writes does not prove a human would write it. Only standard
+abbreviations are produced now, and only they are accepted.
+
 **Still open, stated**: a base64 payload encoded TWICE hides its content from
 one decode pass; the sweep calls the detector about twice more than needed per
 base64 string; a signed state token whose payload is UTF-8 JSON is modified,
