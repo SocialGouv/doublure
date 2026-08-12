@@ -1508,6 +1508,52 @@ without it remain. Reachable only if a detector spans such a concatenation.</p>
 <p><strong>A version-shaped string can be read as a date.</strong> <code>v3.14.2020</code> shifts to
 <code>v11.6.2022</code>. Nothing real leaves; something that was never a date comes back
 changed, and only if a detector marked it.</p>
+<p><strong>A date within about three years of <code>9999-12-31</code> loses its interval.</strong> The
+shift rotates within the representable range rather than overflowing, because
+overflowing meant copying the real date VERBATIM into the surrogate — and
+<code>9999-12-31</code> is the ordinary "no end date" of a contract, not a laboratory
+case. Rotating keeps the surrogate a date and keeps the mapping injective; what
+it costs is the gap to the other dates of the document, for those few values
+only. The alternative — shifting them the other way — would let two distinct
+real dates land on the same surrogate.</p>
+<p><strong>A readable fragment shorter than 16 bytes, surrounded by bytes that are not
+readable, is not submitted.</strong> A base64 payload is now read in PIECES — what
+decodes as text is protected, what does not is handed back byte for byte — which
+is what closed the aligned-prefix leak and the binary-header family. The floor
+is a COST decision, measured, not a judgement about what a value looks like: the
+decode of ordinary prose is dense noise, thousands of one-to-three byte
+fragments, and submitting them cost one detector call each — on ordinary text,
+so permanently, and protecting nothing. At three bytes the noise is turned away
+by the per-payload cap but a binary header over 64 bytes is turned away with it;
+at eight, noise qualifies just often enough to DOUBLE detector traffic; at
+sixteen, no noise qualifies and headers of any length stay read. Measured over
+three hundred one-kilobyte prose strings: 2.09 detector calls per string against
+2.00 before.</p>
+<p>This floor is not the minimum length this project condemned: that one was
+sixteen characters applied to the WHOLE string, so every encoded IPv4 travelled
+intact, and it DISABLED an existing protection. This one applies only to a
+fragment drowned in unreadable bytes — where nothing at all was read before this
+round. What it leaves is therefore the previous state, not a regression.</p>
+<p><strong>Beyond 1024 unreadable regions, the sweep stops reading and the rest goes
+through verbatim.</strong> Without that bound a megabyte of prose cost TWO SECONDS —
+nothing stopped the restart scan before the end of a buffer in which no fragment
+would ever qualify. It leaves two kilobytes of binary header readable, well past
+what real formats write. Both bounds are pinned by tests that assert the
+residual, so they go red the day either moves, and by a cost test that reddens
+on the two-second regression rather than just above it.</p>
+<p><strong>A JWT that carries a detected value comes back broken.</strong> Its three parts are
+still not read one by one, but the concatenated decode now yields readable
+fragments, so a real value in the payload (<code>iss</code>, <code>aud</code>) no longer leaves in the
+clear. The price: the token is re-encoded as a single base64 run and loses its
+dots, so it no longer validates. That is the project's arbitration — a call that
+fails is VISIBLE, a value that leaves is silent — and it applies only to a token
+that carried a detected value: otherwise the round trip is the identity and the
+token passes through untouched. Both halves are pinned.</p>
+<p><strong>A date-shaped string that is not a valid date stays verbatim.</strong>
+<code>2020-02-30</code>, common in an export, is not parsed, so it is carried through as
+ordinary text inside a larger value, like any word the module preserves around
+a date. Its year is real. Closing it would mean substituting anything with the
+SHAPE of a date, which would take <code>v3.14.2020</code> above with it.</p>
 <p><strong>Two keys that denote the same entity abort the exchange, loudly.</strong> If a JSON
 object carries <code>Alice.Dupont@acme.internal</code> and <code>alice.dupont@acme.internal</code> as
 two distinct keys, canonicalisation gives them one surrogate — correctly, since
