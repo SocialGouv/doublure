@@ -31,6 +31,8 @@ import re
 import zlib
 from typing import Callable
 
+from anonproxy.serialisation import dumps_utf8
+
 #: Clés du protocole, au NIVEAU DU MESSAGE uniquement.
 _ENVELOPPE = frozenset({"jsonrpc", "id", "method"})
 #: Clé de routage d'un appel d'outil : verbatim, fuite assumée.
@@ -211,7 +213,7 @@ class JsonRpcTransform:
             rendu = [self._message(m, transformer) for m in message]
         else:
             rendu = self._message(message, transformer)
-        return json.dumps(rendu, ensure_ascii=False).encode("utf-8")
+        return dumps_utf8(rendu)
 
     def _message(self, noeud, transformer):
         """Niveau MESSAGE : l'enveloppe est du protocole, le reste des données."""
@@ -222,26 +224,43 @@ class JsonRpcTransform:
             if cle in _ENVELOPPE:
                 rendu[cle] = valeur
             elif cle in _DONNEES:
-                rendu[cle] = self._donnees(valeur, transformer)
+                # Le ROUTAGE ne vit que sous `params` : c'est la requête qui
+                # nomme l'outil à appeler. `result` et `error` sont ce que le
+                # serveur REND, et un `name` y est une donnée comme une autre.
+                rendu[cle] = self._donnees(valeur, transformer,
+                                           routage=cle == "params")
             else:
                 rendu[cle] = self._libre(valeur, transformer)
         return rendu
 
-    def _donnees(self, noeud, transformer):
-        """Premier niveau sous `params`/`result` : seule la clé de ROUTAGE y
-        est du protocole, et uniquement à ce niveau."""
+    def _donnees(self, noeud, transformer, *, routage: bool):
+        """Premier niveau sous `params`/`result`/`error`.
+
+        La clé de ROUTAGE n'y est du protocole que sous `params`, et seulement
+        si sa valeur a la FORME d'un nom d'outil. Exempter les trois surfaces
+        indistinctement traitait `result.name` et `error.name` — que le serveur
+        ÉCRIT — comme du routage : la clé ET la valeur sortaient verbatim dans
+        un sens, et n'étaient pas restaurées dans l'autre, l'opérateur lisant
+        alors le substitut. Une valeur non scalaire emportait tout son
+        sous-arbre avec elle.
+
+        C'est la règle que le walker a mise huit tours à formuler : une clé de
+        protocole est gardée par sa POSITION ou par la FORME de sa valeur,
+        jamais recopiée inconditionnellement. Elle n'avait jamais été portée
+        sur ce canal.
+        """
         if not isinstance(noeud, dict):
             return self._libre(noeud, transformer)
         rendu: dict = {}
         for cle, valeur in noeud.items():
+            protege = routage and cle in _ROUTAGE and isinstance(valeur, str)
             # La clé passe par `_chaine`, pas par le transformateur seul :
             # une charge base64 est une charge où qu'elle soit, et la placer en
             # CLÉ suffisait à ce qu'elle traverse verbatim. Le docstring de
             # `_libre` disait déjà « la clé est une valeur comme une autre » ;
             # le code ne le tenait que pour le texte, pas pour ce qu'il encode.
-            _poser(rendu, cle if cle in _ROUTAGE else self._chaine(cle, transformer),
-                   valeur if cle in _ROUTAGE
-                   else self._libre(valeur, transformer))
+            _poser(rendu, cle if protege else self._chaine(cle, transformer),
+                   valeur if protege else self._libre(valeur, transformer))
         return rendu
 
     @staticmethod

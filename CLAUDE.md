@@ -1722,6 +1722,45 @@ two redundant parametrized cases and one gap (`juin` missing from the five
 months with no abbreviation), which is closed. That a perimeter goes quiet is
 information, not silence: it is the stopping criterion applying to one surface.
 
+## Round 18 (2026-08-12) — the exemption covered three surfaces for one, and a metric that measured nothing
+
+**The routing exemption reached what the SERVER writes — HIGH, both ways.**
+`name` routes a tool call, and that is true under `params`, which the CLIENT
+writes. Under `result` and `error` it is the server writing, and `name` there is
+data: outgoing it left verbatim, incoming it was not restored, so the operator
+read the surrogate with nothing to tell them. A non-scalar value carried its
+whole subtree with it. The rule applied is the one the walker took eight rounds
+to formulate — **a protocol key is guarded by its POSITION or by the SHAPE of
+its value, never copied unconditionally** — and it had never been carried to
+this channel. No test saw it because `test_the_tool_name_stays_verbatim` covers
+`params.name` and nothing else: the same forgotten position as the payload-in-a-
+key of the round before, in the same file.
+
+**A lone Unicode surrogate killed the exchange, in BOTH directions.** `"\ud800"`
+is valid JSON and is not valid UTF-8: `json.loads` accepts it, re-encoding
+refuses it, and the exchange died on an unnamed exception — reachable by any MCP
+server on purpose, and produced by accident by a UTF-16 export or mis-encoded
+CJK. The vault had settled the same question at round 12 (*a value traverses the
+whole chain or enters nowhere*) and the channel had not inherited it. Re-escaping
+renders the form the SENDER itself used, so valid UTF-8 losing nothing, where
+`surrogatepass` would put WTF-8 on the wire. **And it had a twin one leg
+further**, in the reverse proxy, where `JSONResponse` raises on the same input —
+so the decision now lives in ONE place (`anonproxy/serialisation.py`) called by
+both paths, because three implantations of one rule is the definition of the
+trap this project has paid most often.
+
+**A metric that could not fire.** `corpus_eval.py` reported "invalid JSON: 0" as
+a hard criterion while checking `json.loads(json.dumps({"text": out}))`, which
+succeeds for every Python string — the counter was mathematically incapable of
+incrementing. It now checks what it claims: a document that WAS valid JSON must
+still be after substitution. Low severity (the criterion gates nothing), but it
+is the same shape as the missing witness — a claim with nothing behind it.
+
+**Method — a witness must cover both DIRECTIONS too.** The proof perimeter
+verified the round-17 fixes redden per function and per form, and noted that the
+key test exercised only the outgoing path: a regression of the return path would
+not have reddened. Extended.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

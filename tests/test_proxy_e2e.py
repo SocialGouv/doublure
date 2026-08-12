@@ -116,6 +116,18 @@ class FakeUpstream:
                     json={"type": "error",
                           "error": {"type": "invalid_request_error",
                                     "message": f"hôte invalide : {self.cite}"}})
+            if self.mode == "demi_substitut":
+                # `"\ud800"` est du JSON valide et n'est PAS de l'UTF-8 valide.
+                return httpx.Response(
+                    200, headers={"content-type": "application/json"},
+                    content=json.dumps({
+                        "id": "msg_01", "type": "message", "role": "assistant",
+                        "model": "claude-fable-5",
+                        "content": [{"type": "text",
+                                     "text": "data\ud800fin " + (found[0] if found else "")}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    }).encode("utf-8"))
             if self.mode == "sse":
                 return httpx.Response(200, headers={"content-type": "text/event-stream"},
                                       content=self._sse(found))
@@ -362,3 +374,22 @@ def test_erreur_amont_en_streaming_est_restauree(proxy):
         f"substitut non restauré dans l'erreur streamée : {corps!r}")
     assert REAL_HOST in corps, f"valeur réelle absente de l'erreur : {corps!r}"
     assert "invalid_request_error" in corps, "type d'erreur amont perdu"
+
+
+def test_un_demi_substitut_de_l_amont_ne_tue_pas_la_reponse(proxy):
+    """HAUT — la JUMELLE du même défaut dans le canal MCP, une jambe plus loin.
+
+    `"\\ud800"` est du JSON VALIDE et n'est pas de l'UTF-8 valide : l'encodeur
+    de `JSONResponse` levait, et la réponse mourait sur une exception non
+    nommée. Un export UTF-16 ou un texte CJK mal encodé en produit sans le
+    vouloir.
+
+    La règle vit maintenant dans `anonproxy.serialisation`, appelée par les
+    DEUX chemins — c'est la seule façon de ne pas la réécrire une troisième
+    fois de travers."""
+    client, upstream, _ = proxy
+    upstream.mode = "demi_substitut"
+    reponse = client.post("/v1/messages", json=sample_body())
+    assert reponse.status_code == 200, reponse.text
+    texte = reponse.json()["content"][0]["text"]
+    assert "\ud800" in texte, texte

@@ -726,8 +726,9 @@ def test_base64_without_padding_is_still_substituted(transform, reel):
         (lu + "=" * (-len(lu) % 4)).encode("utf-8")).decode("utf-8", "replace")
 
 
+@pytest.mark.parametrize("sens", ["outgoing", "incoming"])
 @pytest.mark.parametrize("chemin", ["params", "result", "profond"])
-def test_a_payload_in_a_KEY_is_traversed_too(transform, chemin):
+def test_a_payload_in_a_KEY_is_traversed_too(transform, chemin, sens):
     """CRITIQUE, septième occurrence — et le code contredisait son docstring.
 
     `_libre` annonce « la clé est une valeur comme une autre », et c'était vrai
@@ -742,8 +743,10 @@ def test_a_payload_in_a_KEY_is_traversed_too(transform, chemin):
     non protégée."""
     import base64
 
-    reel = "db-01.acme.internal"
-    charge = base64.b64encode(reel.encode()).decode()
+    # Les DEUX sens : le même chemin de code, un transformateur différent.
+    # Ne témoigner que du sortant laisserait une régression du retour passer.
+    porte = "db-01.acme.internal" if sens == "outgoing" else "hote-fictif.test"
+    charge = base64.b64encode(porte.encode()).decode()
     message = {
         "params": {"jsonrpc": "2.0", "id": 1, "method": "x",
                    "params": {charge: {"etat": "ok"}}},
@@ -752,9 +755,10 @@ def test_a_payload_in_a_KEY_is_traversed_too(transform, chemin):
         "profond": {"jsonrpc": "2.0", "id": 1,
                     "result": {"items": [{"l1": {"l2": {charge: 1}}}]}},
     }[chemin]
-    sortie = transform.outgoing("h", {}, json.dumps(message).encode()).decode()
+    sortie = getattr(transform, sens)(
+        "h", {}, json.dumps(message).encode()).decode()
     assert charge not in sortie, sortie
-    assert reel not in sortie
+    assert porte not in sortie
 
 
 def test_a_key_that_is_an_opaque_payload_comes_back_identical(transform):
@@ -768,3 +772,86 @@ def test_a_key_that_is_an_opaque_payload_comes_back_identical(transform):
     corps = json.dumps(message).encode()
     assert json.loads(transform.incoming("h", {}, transform.outgoing(
         "h", {}, corps))) == message
+
+
+@pytest.mark.parametrize("surface", ["result", "error"])
+def test_the_routing_exemption_does_not_reach_what_the_server_writes(
+        transform, surface):
+    """HAUT, dans les DEUX sens — l'exemption couvrait trois surfaces pour une.
+
+    `name` route l'appel d'outil, et c'est vrai sous `params`, que le CLIENT
+    écrit. Sous `result` et `error`, c'est le SERVEUR qui écrit, et `name` y est
+    une donnée : sortante elle partait verbatim, entrante elle n'était pas
+    restaurée — l'opérateur lisait le substitut sans rien pour le lui dire.
+
+    Aucun test ne l'a vu parce que `test_the_tool_name_stays_verbatim` couvre
+    `params.name` et rien d'autre. C'est la même position oubliée que la charge
+    en clé, dans le même fichier, au tour d'avant."""
+    sortant = transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "method": "x",
+         surface: {"name": "db-01.acme.internal"}}).encode()).decode()
+    assert "db-01.acme.internal" not in sortant, sortant
+
+    entrant = json.loads(transform.incoming("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1,
+         surface: {"name": "hote-fictif.test"}}).encode()))
+    assert entrant[surface]["name"] == "db-01.acme.internal"
+
+
+def test_a_routing_key_carrying_a_subtree_is_not_protocol(transform):
+    """La FORME de la valeur décide autant que la position : une clé de routage
+    nomme un outil, donc porte une CHAÎNE. Un sous-arbre sous `name` emportait
+    tout son contenu verbatim — clé de protocole recopiée inconditionnellement,
+    exactement ce que le walker a mis huit tours à cesser de faire."""
+    entrant = json.loads(transform.incoming("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1,
+         "params": {"name": {"hote": "hote-fictif.test",
+                             "liste": ["hote-fictif.test"]}}}).encode()))
+    assert "hote-fictif.test" not in json.dumps(entrant), entrant
+
+
+def test_the_tool_name_is_still_verbatim_where_it_routes(transform):
+    """L'AUTRE MOITIÉ : sous `params`, avec une valeur scalaire, `name` reste
+    la clé de routage du serveur MCP. La substituer casserait l'appel en
+    silence — c'est la fuite assumée, pas un oubli."""
+    sortie = _sortant(transform, {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "acme-billing", "arguments": {}}})
+    assert sortie["params"]["name"] == "acme-billing"
+
+
+@pytest.mark.parametrize("sens", ["outgoing", "incoming"])
+def test_a_lone_surrogate_does_not_kill_the_exchange(transform, sens):
+    """HAUT — un demi-substitut Unicode est du JSON VALIDE et n'est PAS de
+    l'UTF-8 valide.
+
+    `json.loads` l'accepte, le ré-encoder le refusait, et l'échange mourait sur
+    une `UnicodeEncodeError` que seul le filet générique du proxy rattrapait —
+    donc un 502 portant un message d'exception. Déclenchable par n'importe quel
+    serveur MCP, et produit sans le vouloir par un export UTF-16 ou un texte
+    CJK mal encodé. Les DEUX sens tombaient.
+
+    Le coffre avait tranché la même question au tour 12 : une valeur traverse
+    la chaîne entière ou n'y entre nulle part. Le canal ne l'avait pas héritée.
+    """
+    reel, fictif = "db-01.acme.internal", "hote-fictif.test"
+    porte = reel if sens == "outgoing" else fictif
+    attendu = fictif if sens == "outgoing" else reel
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {
+        "content": [{"type": "text", "text": f"data\ud800end {porte}"}]}}
+    ).encode("utf-8", "surrogatepass")
+
+    rendu = json.loads(getattr(transform, sens)("h", {}, corps))
+    texte = rendu["result"]["content"][0]["text"]
+    assert "\ud800" in texte, "le demi-substitut a été perdu"
+    assert attendu in texte
+
+
+def test_a_lone_surrogate_survives_the_round_trip(transform):
+    """Et il revient à l'identique : le ré-échapper rend la forme même que
+    l'émetteur a employée, là où `surrogatepass` mettrait du WTF-8 sur le fil."""
+    message = {"jsonrpc": "2.0", "id": 1,
+               "result": {"t": "data\ud800end", "h": "db-01.acme.internal"}}
+    corps = json.dumps(message).encode()
+    assert json.loads(transform.incoming(
+        "h", {}, transform.outgoing("h", {}, corps))) == message

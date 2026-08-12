@@ -28,6 +28,8 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from anonproxy.serialisation import dumps_utf8
+
 ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))  # anthropic_walker.py vit à la racine du dépôt
@@ -272,9 +274,14 @@ async def messages(request: Request):
                 # rattrapage, le fail-closed devenait un 500 non structuré.
                 return _fail(502, "api_error", f"corps amont inexploitable : {exc}")
             _note_unresolved(state, unresolved)
-            return JSONResponse(
+            # Le corps est sérialisé ICI plutôt que par `JSONResponse` : un
+            # demi-substitut Unicode renvoyé par l'amont fait lever son
+            # encodeur, et la réponse mourait sur une exception non nommée.
+            # Même règle, même endroit unique que le canal MCP.
+            return Response(
+                content=dumps_utf8(restored),
                 status_code=upstream.status_code,
-                content=restored,
+                media_type="application/json",
                 headers=_drop_len(_response_headers(upstream)),
             )
         return Response(

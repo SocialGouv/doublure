@@ -46,6 +46,15 @@ def load(path: Path) -> list[dict]:
     return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
 
+def _est_du_json(texte: str) -> bool:
+    """Ce texte se parse-t-il comme du JSON ?"""
+    try:
+        json.loads(texte)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 def evaluate(examples: list[dict], detect_url: str) -> tuple[dict, int]:
     detector = DetectClient(detect_url)
     try:
@@ -104,9 +113,12 @@ def evaluate(examples: list[dict], detect_url: str) -> tuple[dict, int]:
                 if class_of(etype) is DataClass.SECRET:
                     secret_recall["attendu"] += 1
                     secret_recall["trouvé"] += int(substituted)
-            try:
-                json.loads(json.dumps({"text": out}))
-            except (TypeError, ValueError):
+            # Ce contrôle vérifiait `json.loads(json.dumps({"text": out}))`,
+            # qui réussit pour TOUTE chaîne Python : le compteur ne pouvait
+            # mathématiquement pas s'incrémenter, et la ligne « JSON invalide :
+            # 0 » du rapport ne mesurait rien. Ce qu'il faut vérifier est que la
+            # substitution ne CASSE pas un document déjà structuré.
+            if _est_du_json(ex["text"]) and not _est_du_json(out):
                 invalid_json += 1
 
         runs.append(outputs)
