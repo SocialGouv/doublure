@@ -10,6 +10,7 @@ message level routes the response; `id` inside `params` is a customer record.
 """
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -586,30 +587,38 @@ def test_a_jwt_that_carries_nothing_real_comes_out_intact(transform):
     assert rendu["result"]["token"] == jwt
 
 
-def test_a_jwt_payload_is_a_stated_residual(transform):
-    """RÉSIDU ASSUMÉ, épinglé pour qu'il ne soit pas SILENCIEUX.
+def test_a_jwt_payload_no_longer_leaves_in_the_clear(transform):
+    """Le residu JWT tombe, et c'est un EFFET de la lecture par morceaux.
 
-    Un JWT est du base64URL sans bourrage : ce n'est pas notre alphabet, et ses
-    trois parties ne sont pas lues séparément. Une valeur réelle posée dans sa
-    charge (`iss`) SORT DONC EN CLAIR pour qui décode la partie, et le sort du
-    jeton dépend de l'alignement de ses longueurs — traversé quand la
-    concaténation se décode, intact sinon. Ni l'un ni l'autre n'est un
-    invariant défendable.
+    Un JWT est du base64URL sans bourrage : ses trois parties ne sont pas lues
+    une a une, la concatenation se decode en un melange ou seule la CHARGE est
+    du texte. Exiger que tout se lise laissait donc `iss` sortir en clair ; lire
+    les fragments lisibles la protege sans que les parties aient ete separees.
 
-    Le test dit ce qui EST, pas ce qu'on voudrait : il rougira le jour où les
-    parties seront lues une à une, et c'est exactement le signal attendu. La
-    correction est au tour suivant ; ce qui compte ici est que le résidu soit
-    compté."""
-    import base64
-
+    PRIX ASSUME, et il faut le voir : le jeton ressort en un seul bloc, ses
+    points perdus, donc il ne valide plus. C'est l'arbitrage du projet — un
+    appel qui echoue est VISIBLE, une valeur qui sort est silencieuse — et il ne
+    vaut que pour un jeton qui portait une valeur detectee : sinon le tour est
+    l'identite et le jeton passe intact.
+    """
     jwt = _jwt({"iss": "https://db-01.acme.internal/auth"})
     sortie = json.loads(transform.outgoing("h", {}, json.dumps(
         {"jsonrpc": "2.0", "id": 1, "result": {"token": jwt}}).encode())
     )["result"]["token"]
-    charge = sortie.split(".")[1]
-    lue = base64.urlsafe_b64decode(charge + "=" * (-len(charge) % 4))
-    assert b"db-01.acme.internal" in lue, \
-        "les parties d'un JWT sont lues : mettre à jour docs/limits.md"
+    assert b"db-01.acme.internal" not in _ce_que_lit_un_recepteur(sortie)
+    assert sortie.count(".") == 0, \
+        "la structure est preservee : mettre a jour docs/limits.md"
+
+
+def test_un_jeton_qui_ne_porte_rien_traverse_INTACT(transform):
+    """L'AUTRE MOITIE du prix ci-dessus : sans valeur detectee, le jeton doit
+    ressortir octet pour octet — points compris. Sans ce temoin, « le JWT est
+    casse » se lirait comme une regle generale."""
+    jwt = _jwt({"iss": "https://auth.example.com/", "sub": "service-account"})
+    sortie = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"token": jwt}}).encode())
+    )["result"]["token"]
+    assert sortie == jwt
 
 
 @pytest.mark.parametrize("prose", [
@@ -1010,30 +1019,229 @@ def test_une_charge_courte_seule_reste_intacte(transform):
         assert rendu["result"]["v"] == opaque
 
 
-@pytest.mark.parametrize("prefixe", ["aaaa", "abcd", "ZZZZ"])
-def test_RESIDU_un_prefixe_aligne_sur_quatre_masque_la_charge(transform, prefixe):
-    """RÉSIDU MESURÉ, épinglé pour qu'il ne soit pas SILENCIEUX.
+def _ce_que_lit_un_recepteur(chaine: str) -> bytes:
+    """Ce qu'un decodeur permissif (Python, `Buffer.from` de Node) en tire.
 
-    Un préfixe de longueur multiple de QUATRE preserve l'alignement base64 :
-    tout recepteur lit au travers et retrouve la valeur reelle, alors que le
-    balayage, lui, decode le tout d'un bloc, obtient des octets non-UTF-8, et
-    conclut qu'il n'y a pas de charge. La valeur sort donc encodee, sans entree
-    au coffre ni rien a compter.
-
-    Ce n'est PAS le residu deja assume (« precede de lettres ») : celui-la
-    decale l'alignement, donc personne ne lit la valeur. Ici l'alignement tient.
-
-    Le correctif demande d'essayer les alignements decales (offsets 4, 8, 12)
-    quand la lecture ancree echoue, ce qui touche le coeur du balayage — il est
-    porte au tour suivant plutot que precipite. Ce test AFFIRME la fuite : il
-    rougira le jour ou elle est fermee, et c'est le signal attendu.
+    C'est le contrat du DESTINATAIRE qui decide s'il y a fuite, pas le notre :
+    quatre formulations plus etroites que lui ont ete payees dans ce fichier.
     """
     import base64
 
+    noyau = "".join(c for c in chaine if c.isalnum() or c in "+/")
+    if len(noyau) % 4 == 1:  # ce que Node tronque
+        noyau = noyau[:-1]
+    return base64.b64decode(noyau + "=" * (-len(noyau) % 4), validate=False)
+
+
+@pytest.mark.parametrize("prefixe", [
+    "aaaa", "abcd", "ZZZZ", "aaaaaaaa",
+    # Ce que compacte `data:application/octet-stream;base64,` : les caracteres
+    # d'alphabet d'un en-tete parfaitement ordinaire, et ils sont TRENTE-DEUX.
+    "dataapplicationoctetstreambase64",
+])
+def test_un_prefixe_aligne_sur_quatre_ne_masque_plus_la_charge(transform, prefixe):
+    """CRITIQUE — la fuite que le tour precedent avait mesuree sans la fermer.
+
+    Un prefixe de longueur multiple de QUATRE preserve l'alignement base64 :
+    tout recepteur lit au travers et retrouve la valeur reelle, alors que le
+    balayage decodait le tout d'un bloc, obtenait des octets non-UTF-8 et
+    concluait qu'il n'y avait pas de charge. La valeur sortait encodee, sans
+    entree au coffre ni rien a compter.
+
+    Ce qui la ferme n'est PAS la liste d'alignements a essayer (4, 8, 12…) que
+    la note du tour d'avant annoncait : c'est la propriete dont ces offsets ne
+    sont que des cas — des octets qu'on ne sait pas lire, SUIVIS d'un texte
+    qu'on sait lire. Elle vaut pour un prefixe de n'importe quelle longueur.
+    """
     reel = "db-01.acme.internal"
     charge = prefixe + base64.b64encode(reel.encode()).decode()
+    assert reel.encode() in _ce_que_lit_un_recepteur(charge), \
+        "le cas de test ne reproduit rien : le recepteur ne lisait deja pas la valeur"
     rendu = json.loads(transform.outgoing("h", {}, json.dumps(
         {"jsonrpc": "2.0", "id": 1, "result": {"v": charge}}).encode()))["result"]["v"]
-    lu = base64.b64decode(rendu.encode(), validate=False)
-    assert reel.encode() in lu, \
-        "le prefixe aligne est traite : mettre a jour docs/limits.md"
+    assert reel.encode() not in _ce_que_lit_un_recepteur(rendu)
+
+
+@pytest.mark.parametrize("prefixe", ["aaaa", "dataapplicationoctetstreambase64"])
+def test_un_prefixe_aligne_est_aussi_traite_AU_RETOUR(transform, prefixe):
+    """L'AUTRE SENS. Un temoin qui n'exerce que l'aller ne rougirait pas d'une
+    regression du retour — et au retour, ce qui est perdu est ce que le serveur
+    a REELLEMENT repondu : l'operateur lit un nom fictif, sans rien pour le lui
+    dire."""
+    charge = prefixe + base64.b64encode(b"hote-fictif.test").decode()
+    rendu = json.loads(transform.incoming("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": charge}}).encode()))["result"]["v"]
+    assert b"db-01.acme.internal" in _ce_que_lit_un_recepteur(rendu)
+
+
+@pytest.mark.parametrize("entete", range(1, 8))
+def test_des_octets_binaires_PUIS_du_texte_sont_traites(transform, entete):
+    """La forme que la note du tour d'avant ne nommait pas, et que la propriete
+    ferme au passage : un en-tete binaire et du texte encodes ENSEMBLE.
+
+    L'alignement n'y est pour rien — le recepteur decode le tout d'un bloc et
+    lit le texte derriere l'en-tete, quelle que soit la longueur de celui-ci.
+    Raisonner en offsets de quatre caracteres aurait laisse ouvertes les
+    longueurs qui ne sont pas multiples de trois octets.
+    """
+    reel = "db-01.acme.internal"
+    charge = base64.b64encode(
+        bytes(range(0x80, 0x80 + entete)) + reel.encode()).decode()
+    assert reel.encode() in _ce_que_lit_un_recepteur(charge)
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": charge}}).encode()))["result"]["v"]
+    assert reel.encode() not in _ce_que_lit_un_recepteur(rendu)
+
+
+def test_les_octets_de_tete_repartent_INTACTS(transform):
+    """Le COMMENT du correctif, qui merite son propre temoin : les octets qu'on
+    n'a pas su lire sont rendus tels quels devant le substitut.
+
+    Les reconstruire — les retransformer en texte, les jeter, les re-encoder —
+    changerait leur longueur, donc l'alignement, donc ce que le recepteur lit
+    APRES : le substitut lui-meme deviendrait illisible. Ici c'est vrai par
+    construction, ce sont les memes octets.
+    """
+    entete = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x80\x81"
+    charge = base64.b64encode(entete + b"db-01.acme.internal").decode()
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": charge}}).encode()))["result"]["v"]
+    lu = _ce_que_lit_un_recepteur(rendu)
+    assert lu.startswith(entete), lu
+    assert lu[len(entete):] == b"hote-fictif.test"
+
+
+@pytest.mark.parametrize("bourrage", range(4090, 4100))
+def test_un_texte_multioctet_n_est_pas_coupe_par_le_balayage(transform, bourrage):
+    """Le decoupage avance par ERREUR de decodage, pas par tranche fixe : un
+    caractere multi-octets ne doit jamais etre coupe en deux, sinon ses octets
+    de continuation deviendraient un faux trou et le texte serait rendu par
+    fragments — dont aucun ne porterait la valeur.
+
+    Le pas de dix couvre les deux parites d'un caractere de deux octets, ce
+    qu'une seule taille de charge ne prouverait pas.
+    """
+    reel = "db-01.acme.internal"
+    texte = "é" * bourrage + " " + reel
+    charge = base64.b64encode(b"\x80\x81\x82" + texte.encode()).decode()
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": charge}}).encode()))["result"]["v"]
+    lu = _ce_que_lit_un_recepteur(rendu)
+    assert reel.encode() not in lu
+    assert lu.startswith(b"\x80\x81\x82"), "les octets de tete ont bouge"
+    assert ("é" * bourrage).encode() in lu, "le texte lisible a ete perdu"
+
+
+@pytest.mark.parametrize("forme,charge", [
+    ("texte PUIS binaire", b"db-01.acme.internal" + b"\x80\x81\x82"),
+    ("binaire des DEUX cotes", b"\x80\x81" + b"db-01.acme.internal" + b"\x82\x83"),
+    # Un tronçon coupé au milieu d'un caractère : `\xc3` attend son second
+    # octet. C'est ce que produit un flux découpé, pas une attaque.
+    ("multioctet tronque en fin", "db-01.acme.internal caf".encode() + b"\xc3"),
+    ("trous multiples", b"\x80" + b"db-01.acme.internal" + b"\x81"
+     + b"srv-02.acme.internal is here" + b"\x82"),
+])
+def test_le_texte_est_lu_des_DEUX_cotes_des_octets_illisibles(transform, forme, charge):
+    """LA JUMELLE. Ne lire que ce qui SUIT les octets illisibles aurait ferme le
+    prefixe et laisse ouvert son symetrique — un en-tete traite, un pied de
+    charge ignore. C'est le defaut que ce projet paie le plus souvent, et il
+    aurait ete ecrit sciemment.
+
+    Le cas du caractere tronque n'est meme pas hostile : il suffit qu'un flux
+    UTF-8 soit decoupe en tronçons.
+    """
+    encodee = base64.b64encode(charge).decode()
+    assert b"db-01.acme.internal" in _ce_que_lit_un_recepteur(encodee)
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": encodee}}).encode()))["result"]["v"]
+    assert b"db-01.acme.internal" not in _ce_que_lit_un_recepteur(rendu)
+
+
+def test_RESIDU_un_fragment_plus_court_que_le_plancher_n_est_pas_lu(transform):
+    """RESIDU MESURE, epingle pour qu'il ne soit pas silencieux.
+
+    Un fragment lisible NOYE dans des octets qui ne le sont pas n'est soumis au
+    detecteur qu'a partir de seize octets. En dessous, le bruit — le decodage de
+    la prose, celui d'un vrai binaire — qualifierait a son tour et couterait un
+    appel de detecteur par miette, sur du texte ordinaire et en permanence :
+    mesure, ca DOUBLAIT le trafic du detecteur.
+
+    Ce que ca laisse est l'etat ANTERIEUR a ce tour, ou aucun fragment n'etait
+    lu — pas une regression. Le test rougira le jour ou le plancher tombe.
+    """
+    court = "10.1.2.3"  # huit octets
+    assert len(court) < 16
+    charge = base64.b64encode(b"\x80\x81" + court.encode() + b"\x82\x83").decode()
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": charge}}).encode()))["result"]["v"]
+    assert court.encode() in _ce_que_lit_un_recepteur(rendu), \
+        "le plancher a bouge : mettre a jour docs/limits.md"
+
+
+def test_RESIDU_un_entete_binaire_demesure_arrete_la_lecture(transform):
+    """RESIDU MESURE, l'autre bout de la meme decision.
+
+    Au dela de mille vingt-quatre regions illisibles traversees, on arrete de
+    LIRE et le reste part verbatim. Sans cette borne, un megaoctet de prose
+    coutait DEUX SECONDES — le defaut du tour d'avant sous une forme neuve.
+
+    Deux kilo-octets d'en-tete binaire restent lus, ce qu'aucun format reel ne
+    depasse ; au-dela, on retombe sur l'etat anterieur.
+    """
+    import random
+
+    alea = random.Random(20260812)
+    enorme = bytes(alea.randrange(0x80, 0x100) for _ in range(8192))
+    charge = base64.b64encode(enorme + b"db-01.acme.internal").decode()
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": charge}}).encode()))["result"]["v"]
+    assert b"db-01.acme.internal" in _ce_que_lit_un_recepteur(rendu), \
+        "la borne a bouge : mettre a jour docs/limits.md"
+
+
+def test_de_la_prose_ordinaire_ne_coute_pas_le_balayage_elargi(transform):
+    """LE COUT, mesure sur l'usage LEGITIME — la lecon du tour d'avant, ou une
+    borne posee contre un attaquant avait fait REFUSER 1,8 Ko de prose.
+
+    Le decodage de la prose est du bruit dense : sans arret anticipe, la
+    recherche des fragments lisibles parcourait le tampon entier par reprises
+    successives. Mesure avant correctif : 1 965 ms sur un megaoctet, contre 47
+    avant ce tour et 55 apres.
+
+    Le seuil est a DIX FOIS la mesure, pas juste au-dessus de la regression :
+    ecrire `< 2.0 s` l'aurait laissee passer de trente-cinq millisecondes, ce
+    qui est un temoin complaisant — il aurait eu l'air de couvrir le defaut
+    qu'il ne couvrait pas.
+    """
+    import time
+
+    mots = ("le serveur applicatif redemarre apres la migration des donnees "
+            "clients vers le nouveau cluster de production qui repond aux "
+            "sondes de vivacite sans erreur ni latence pendant la fenetre ")
+    texte = (mots * (1024 * 1024 // len(mots) + 1))[:1024 * 1024]
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {"v": texte}}).encode()
+    depart = time.perf_counter()
+    rendu = json.loads(transform.outgoing("h", {}, corps))["result"]["v"]
+    ecoule = time.perf_counter() - depart
+    assert rendu == texte, "de la prose ne doit pas devenir une charge"
+    assert ecoule < 0.55, f"un megaoctet de prose a coute {ecoule:.2f} s"
+
+
+@pytest.mark.parametrize("opaque", [
+    # Les 256 valeurs d'octet : un binaire, pas un texte.
+    base64.b64encode(bytes(range(256))).decode(),
+    base64.b64encode(b"\x89PNG\r\n\x1a\n" + bytes(200)).decode(),
+    # Un prefixe aligne qui ne porte rien : la lecture aboutit, et ne trouve
+    # rien a substituer.
+    "aaaa" + base64.b64encode(b"rien de sensible ici").decode(),
+    "aGk=", "QUJDREVGRw9=",
+])
+def test_l_AUTRE_moitie_ce_qui_ne_porte_rien_ressort_identique(transform, opaque):
+    """La lecture elargie ne vaut que parce que le tour est l'IDENTITE quand
+    rien n'est detecte : un jeton opaque, un binaire, une charge sans valeur
+    ressortent octet pour octet — bourrage non canonique compris."""
+    for sens in (transform.outgoing, transform.incoming):
+        rendu = json.loads(sens("h", {}, json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "result": {"v": opaque}}).encode()))
+        assert rendu["result"]["v"] == opaque

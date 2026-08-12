@@ -216,25 +216,42 @@ it costs is the gap to the other dates of the document, for those few values
 only. The alternative — shifting them the other way — would let two distinct
 real dates land on the same surrogate.
 
-**A four-aligned prefix hides a base64 payload from the sweep.** Prepending a
-number of alphabet characters that is a multiple of four preserves the base64
-alignment, so every receiver reads straight through and recovers the real value
-— while the sweep decodes the whole run at once, gets non-UTF-8 bytes and
-concludes there is no payload. The value therefore leaves encoded, with no vault
-entry and nothing to count. Distinct from the accepted residual below, where
-letters glued in front SHIFT the alignment so that nobody reads the value.
-Closing it means trying the shifted alignments when the anchored reading fails,
-which touches the core of the sweep; it is pinned by a test that ASSERTS the
-leak so that it is counted rather than silent, and that test goes red the day it
-is closed.
+**A readable fragment shorter than 16 bytes, surrounded by bytes that are not
+readable, is not submitted.** A base64 payload is now read in PIECES — what
+decodes as text is protected, what does not is handed back byte for byte — which
+is what closed the aligned-prefix leak and the binary-header family. The floor
+is a COST decision, measured, not a judgement about what a value looks like: the
+decode of ordinary prose is dense noise, thousands of one-to-three byte
+fragments, and submitting them cost one detector call each — on ordinary text,
+so permanently, and protecting nothing. At three bytes the noise is turned away
+by the per-payload cap but a binary header over 64 bytes is turned away with it;
+at eight, noise qualifies just often enough to DOUBLE detector traffic; at
+sixteen, no noise qualifies and headers of any length stay read. Measured over
+three hundred one-kilobyte prose strings: 2.09 detector calls per string against
+2.00 before.
 
-**A JWT's parts are not read one by one.** A JWT is base64URL without padding —
-not the alphabet this proxy reads — and its three parts are decoded as one
-stream or not at all. A real value placed in its payload (`iss`, `aud`) therefore
-leaves in the clear for whoever decodes that part, and whether the token is
-traversed at all depends on how its parts' lengths align: neither behaviour is a
-defensible invariant. Pinned by a test that asserts the leak, so that it is
-counted rather than silent; it goes red the day the parts are read.
+This floor is not the minimum length this project condemned: that one was
+sixteen characters applied to the WHOLE string, so every encoded IPv4 travelled
+intact, and it DISABLED an existing protection. This one applies only to a
+fragment drowned in unreadable bytes — where nothing at all was read before this
+round. What it leaves is therefore the previous state, not a regression.
+
+**Beyond 1024 unreadable regions, the sweep stops reading and the rest goes
+through verbatim.** Without that bound a megabyte of prose cost TWO SECONDS —
+nothing stopped the restart scan before the end of a buffer in which no fragment
+would ever qualify. It leaves two kilobytes of binary header readable, well past
+what real formats write. Both bounds are pinned by tests that assert the
+residual, so they go red the day either moves, and by a cost test that reddens
+on the two-second regression rather than just above it.
+
+**A JWT that carries a detected value comes back broken.** Its three parts are
+still not read one by one, but the concatenated decode now yields readable
+fragments, so a real value in the payload (`iss`, `aud`) no longer leaves in the
+clear. The price: the token is re-encoded as a single base64 run and loses its
+dots, so it no longer validates. That is the project's arbitration — a call that
+fails is VISIBLE, a value that leaves is silent — and it applies only to a token
+that carried a detected value: otherwise the round trip is the identity and the
+token passes through untouched. Both halves are pinned.
 
 **A date-shaped string that is not a valid date stays verbatim.**
 `2020-02-30`, common in an export, is not parsed, so it is carried through as

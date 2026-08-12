@@ -96,12 +96,135 @@ _MAX_CHARGES = 256
 _TETE_BOURRAGE = 8
 
 
+#: Ce qui sépare un fragment de TEXTE d'une miette de bruit, et le nombre de
+#: fragments qu'on soumet au détecteur pour une seule charge.
+#:
+#: Deux décisions de COÛT, énoncées comme telles. Le décodage de la prose ou
+#: d'un vrai binaire est du bruit dense — des milliers de fragments d'un à trois
+#: octets, dont chacun coûterait un appel de détecteur, sur du texte ordinaire,
+#: donc en permanence, et sans jamais rien protéger.
+#:
+#: Le seuil a été MESURÉ, pas choisi : à trois octets le bruit est écarté par le
+#: plafond, mais un en-tête binaire de plus de soixante-quatre octets l'est
+#: aussi, donc la charge n'est plus lue ; à huit, le bruit qualifie juste assez
+#: pour DOUBLER le trafic du détecteur ; à seize, plus rien du bruit ne qualifie
+#: et les en-têtes de toute longueur restent lus. Coût mesuré sur trois cents
+#: chaînes de mille octets de prose : 2,09 appels par chaîne contre 2,00.
+#:
+#: Ce n'est PAS la longueur minimale que ce fichier a condamnée : celle-là
+#: valait seize caractères sur la chaîne ENTIÈRE, donc toute IPv4 encodée
+#: passait intacte, et elle DÉSACTIVAIT une protection existante. Celle-ci ne
+#: s'applique qu'à un fragment lisible NOYÉ dans des octets qui ne le sont
+#: pas — cas où RIEN n'était lu avant ce tour. Ce qu'elle laisse est donc l'état
+#: antérieur, pas une régression : un fragment de moins de seize octets coincé
+#: dans du binaire n'est pas lu. Énoncé dans `docs/limits.md`.
+_MIN_TEXTE = 16
+_MAX_LECTURES = 16
+
+#: Régions illisibles traversées avant d'arrêter de LIRE — le reste part alors
+#: verbatim, ce qui est l'état antérieur, pas une perte.
+#:
+#: Sans cette borne, un mégaoctet de prose coûtait DEUX SECONDES : son décodage
+#: est du bruit dense, aucun fragment n'y qualifie, donc rien n'arrêtait la
+#: boucle avant la fin du tampon — deux cent cinquante mille reprises. C'est le
+#: défaut du tour d'avant sous une forme neuve, une borne posée contre un
+#: attaquant qui étrangle l'usage ordinaire, et c'est la mesure sur de la PROSE
+#: qui l'a montré, pas un raisonnement.
+#:
+#: Mille vingt-quatre laisse passer un en-tête binaire de deux kilo-octets, très
+#: au-delà de ce qu'écrivent les formats réels, et ramène la prose à sa vitesse
+#: d'avant.
+_MAX_TROUS = 1024
+
+
+def _octets(base64_lu: str) -> bytes | None:
+    """Les octets que ces caractères encodent, ou None si ce n'en est pas."""
+    try:
+        return base64.b64decode(base64_lu, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
 def _decoder(base64_lu: str) -> str | None:
     """Le texte que ces caractères encodent, ou None si ce n'en est pas."""
-    try:
-        return base64.b64decode(base64_lu, validate=True).decode("utf-8")
-    except (binascii.Error, UnicodeDecodeError, ValueError):
+    octets = _octets(base64_lu)
+    if octets is None:
         return None
+    try:
+        return octets.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _fin_dans_original(valeur: str, compact: str, lus: int) -> int:
+    """Où s'arrête, dans la chaîne d'origine, une lecture de `lus` caractères.
+
+    Le compactage a supprimé des caractères : les positions ne se correspondent
+    plus, on recompte. Ce recomptage est une boucle Python sur toute la chaîne —
+    cinquante millisecondes sur un mégaoctet — donc il n'est fait QUE pour une
+    lecture qu'on garde, et pas du tout quand rien n'a été retiré.
+    """
+    if len(compact) == len(valeur):
+        return lus
+    restant = lus
+    for i, c in enumerate(valeur):
+        if _HORS_ALPHABET.match(c) is None:
+            restant -= 1
+            if restant == 0:
+                return i + 1
+    return len(valeur)
+
+
+def _morceaux(octets: bytes) -> list[str | bytes] | None:
+    """Le tampon découpé en ce qui se lit et ce qui ne se lit pas.
+
+    Une charge encodée peut porter des octets illisibles autour de son texte :
+    un en-tête binaire, un préfixe collé devant une charge déjà encodée, un
+    caractère multi-octets tronqué en fin de tronçon. Le récepteur, lui, décode
+    le tout d'un bloc et lit ce qui se lit — donc exiger que TOUT se lise
+    laissait sortir la valeur. Cinquième formulation d'une même erreur : un
+    contrat plus étroit que celui du destinataire.
+
+    Découper les DEUX bords plutôt que le seul préfixe n'est pas du zèle. La
+    note du tour d'avant annonçait des alignements à essayer (4, 8, 12…), ce qui
+    n'aurait couvert qu'un bord et qu'un pas : la jumelle laissée ouverte est le
+    défaut que ce projet paie le plus souvent, et l'énumération à la place de la
+    propriété vient juste derrière.
+
+    Rendu : une alternance, `str` pour ce qui se lit, `bytes` pour le reste —
+    rendus tels quels, donc de même longueur, donc sans décalage pour ce que le
+    récepteur lit ensuite. `None` quand il y a trop de trous : voir `_MAX_TROUS`.
+    """
+    vue = memoryview(octets)  # tranché en O(1) : l'erreur avance, le coût reste
+    morceaux: list[str | bytes] = []
+    lectures = trous = 0
+    p = 0
+    while p < len(octets):
+        if trous >= _MAX_TROUS or len(octets) - p < _MIN_TEXTE:
+            # Plus assez d'octets pour qu'un fragment qualifie : continuer ne
+            # peut rien trouver.
+            morceaux.append(octets[p:])
+            break
+        try:
+            texte, bord, suite = str(vue[p:], "utf-8"), len(octets), len(octets)
+        except UnicodeDecodeError as exc:
+            bord, suite = p + exc.start, p + exc.end
+            texte = str(vue[p:bord], "utf-8")
+        if texte:
+            if bord - p < _MIN_TEXTE:
+                # Trop court pour porter une valeur, et le soumettre coûterait
+                # un appel de détecteur par miette de bruit.
+                morceaux.append(octets[p:bord])
+            elif lectures >= _MAX_LECTURES:
+                return None
+            else:
+                morceaux.append(texte)
+                lectures += 1
+        if suite > bord:
+            morceaux.append(octets[bord:suite])
+            trous += 1
+        p = suite
+    return morceaux if lectures else None
 
 
 class BinaryBody(RuntimeError):
@@ -295,7 +418,7 @@ class JsonRpcTransform:
         return rendu
 
     @staticmethod
-    def _lectures(valeur: str) -> list[tuple[int, str]]:
+    def _lectures(valeur: str) -> list[tuple[int, list[str | bytes]]]:
         """Les textes que les RÉCEPTEURS peuvent tirer de cette chaîne.
 
         Ce qui décide n'est pas « cette chaîne EST-elle du base64 » mais « que
@@ -307,7 +430,10 @@ class JsonRpcTransform:
         substitue dès que l'une d'elles porte une valeur.
 
         Chaque lecture dit aussi où elle s'arrête dans la chaîne d'origine : la
-        suite est du texte, à protéger comme tel plutôt qu'à effacer.
+        suite est du texte, à protéger comme tel plutôt qu'à effacer. Elle rend
+        une ALTERNANCE, parce qu'une charge n'est pas toujours lisible d'un bout
+        à l'autre : `str` pour ce qui se lit et se substitue, `bytes` pour ce
+        qu'on rend tel quel.
 
         Trois formulations successives de la même erreur ont été payées ici, et
         c'est la même à chaque fois — un contrat plus ÉTROIT que celui du
@@ -316,23 +442,23 @@ class JsonRpcTransform:
         l'éteignait), puis on exigeait que la chaîne ENTIÈRE ait la forme (quatre
         caractères collés derrière le bourrage l'éteignaient).
         """
-        lectures: list[tuple[int, str]] = []
+        lectures: list[tuple[int, list[str | bytes]]] = []
         compact = _HORS_ALPHABET.sub("", valeur)
         lu = _BASE64.match(compact)
-        if lu is not None and (clair := _decoder(lu.group())) is not None:
-            # Le compactage a supprimé des caractères : les positions ne se
-            # correspondent plus, on recompte pour retrouver la fin dans
-            # l'original.
-            restant, fin = lu.end(), len(valeur)
-            for i, c in enumerate(valeur):
-                if _HORS_ALPHABET.match(c) is None:
-                    restant -= 1
-                    if restant == 0:
-                        fin = i + 1
-                        break
-            lectures.append((fin, clair))
-            if lu.end() == len(compact):
-                return lectures  # la première a tout couvert : rien à ajouter
+        if lu is not None and (octets := _octets(lu.group())) is not None:
+            try:
+                clair = octets.decode("utf-8")
+            except UnicodeDecodeError:
+                # Tout ne se lit pas — mais ce que le récepteur obtient autour
+                # des octets illisibles, lui, se lit.
+                if (morceaux := _morceaux(octets)) is not None:
+                    lectures.append(
+                        (_fin_dans_original(valeur, compact, lu.end()), morceaux))
+            else:
+                lectures.append(
+                    (_fin_dans_original(valeur, compact, lu.end()), [clair]))
+                if lu.end() == len(compact):
+                    return lectures  # la première a tout couvert : rien à ajouter
         # La lecture la plus LARGE sert dès que la première ne couvre pas tout,
         # et le déclencheur a déjà été trop étroit une fois. Je l'avais restreint
         # au `=` posé hors bourrage final — le seul cas connu alors — et le
@@ -347,7 +473,7 @@ class JsonRpcTransform:
         if len(noyau) % 4 == 1:
             noyau = noyau[:-1]
         if noyau and (clair := _decoder(noyau + "=" * (-len(noyau) % 4))) is not None:
-            lectures.append((len(valeur), clair))
+            lectures.append((len(valeur), [clair]))
         return lectures
 
     def _chaine(self, valeur: str, transformer) -> str:
@@ -382,12 +508,17 @@ class JsonRpcTransform:
                     "chaîne : forme illégitime, relayer sans l'avoir lue serait "
                     "un fail-open")
             lectures = self._lectures(reste)
-            for fin, clair in lectures:
-                rendu = transformer(clair)
-                if rendu == clair:
+            for fin, lus in lectures:
+                # Les `bytes` sont ce qu'on n'a pas su lire et que le récepteur,
+                # lui, décode : ils repartent tels quels, donc de même longueur,
+                # donc sans décaler ce qui les suit.
+                rendus = [m if isinstance(m, bytes) else transformer(m)
+                          for m in lus]
+                if rendus == lus:
                     continue
-                morceaux.append(
-                    base64.b64encode(rendu.encode("utf-8")).decode("ascii"))
+                morceaux.append(base64.b64encode(b"".join(
+                    m if isinstance(m, bytes) else m.encode("utf-8")
+                    for m in rendus)).decode("ascii"))
                 reste, substitue = reste[fin:], True
                 charges += 1
                 break

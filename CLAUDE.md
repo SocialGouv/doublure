@@ -1970,6 +1970,48 @@ finding.** It reported a first defect, then wrote back that it had read a cached
 version of the file and that the defect was already closed. Retracting costs
 nothing and saves a round; not retracting costs a fix built on a false proof.
 
+## Round 24 (2026-08-12) — the enumeration the note itself prescribed
+
+**The aligned prefix, closed — and not the way the previous round said to close
+it.** Round 23 measured the leak and wrote the remedy into `docs/limits.md`:
+"try the shifted alignments (offsets 4, 8, 12) when the anchored reading fails".
+That is the ENUMERATION where a PROPERTY was available, the motif this project
+has already paid three times — and it would have covered one bord and one step.
+What the bytes actually say is simpler: `b'i\xa6\x9a' + b'db-01.acme.internal'`
+— **unreadable bytes, then readable text**. So a payload is read in PIECES: what
+decodes as text is protected, what does not is handed back byte for byte, which
+preserves the alignment by construction because they are the SAME bytes.
+
+**Written as one bord, it would have shipped its own twin.** Reading only what
+FOLLOWS the unreadable bytes closes the prefix and leaves the footer open — and
+the footer case is not even hostile: a UTF-8 stream cut into chunks ends on a
+truncated character. Both bords are read, and the four shapes are witnessed
+separately (`prefix`, `footer`, `both sides`, `truncated multibyte`).
+
+**Closed as a side effect: the JWT payload.** The concatenated decode of a
+token's three parts is a mixture where only the payload is text; a real value in
+`iss` no longer leaves in the clear. **Price, stated and pinned**: a token that
+carried a detected value comes back as one base64 run without its dots, so it no
+longer validates. Only such a token — otherwise the round trip is the identity.
+
+**And the bound I added against noise strangled ordinary prose — 1 965 ms per
+megabyte**, forty times the baseline. Exactly round 23's defect in a new form,
+and only measuring on PROSE showed it: with no fragment qualifying, nothing
+stopped the restart scan before the end of the buffer. Fixed by stopping after
+1024 unreadable regions, the rest going through verbatim.
+
+**Two bounds, both MEASURED rather than chosen**, and the measurement was not
+monotone: at three bytes the noise is turned away by the per-payload cap but a
+64-byte binary header goes with it; at eight, noise qualifies just often enough
+to DOUBLE detector traffic; at sixteen, no noise qualifies and headers of any
+length stay read. Final cost: detector calls at the baseline (2.09 against 2.00
+per prose string), 1 MB of prose at 55 ms against 47.
+
+**Method — my own cost witness was complacent.** I wrote `< 2.0 s` where the
+regression measured 1.965 s: it would have passed by thirty-five milliseconds
+while looking like it covered the defect. The threshold belongs at ten times the
+measurement, and it was verified to redden on the regression it names.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth
