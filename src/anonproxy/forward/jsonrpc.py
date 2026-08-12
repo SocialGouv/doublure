@@ -90,6 +90,11 @@ _MAX_CLAIR = 32 * 1024 * 1024
 #: légitime n'en aligne autant dans une seule chaîne.
 _MAX_CHARGES = 256
 
+#: Fenêtre où chercher le bourrage d'une charge COURTE qui bloque le motif
+#: à l'origine. Une charge d'un ou deux octets fait quatre caractères : au
+#: delà de cette fenêtre, un `=` n'est plus ce qui bloque.
+_TETE_BOURRAGE = 8
+
 
 def _decoder(base64_lu: str) -> str | None:
     """Le texte que ces caractères encodent, ou None si ce n'en est pas."""
@@ -369,9 +374,13 @@ class JsonRpcTransform:
         morceaux: list[str] = []
         reste = valeur
         substitue = False
-        for _ in range(_MAX_CHARGES):
-            if not reste:
-                break
+        charges = 0
+        while reste:
+            if charges >= _MAX_CHARGES:
+                raise BinaryBody(
+                    f"plus de {_MAX_CHARGES} charges encodées dans une seule "
+                    "chaîne : forme illégitime, relayer sans l'avoir lue serait "
+                    "un fail-open")
             lectures = self._lectures(reste)
             for fin, clair in lectures:
                 rendu = transformer(clair)
@@ -380,22 +389,30 @@ class JsonRpcTransform:
                 morceaux.append(
                     base64.b64encode(rendu.encode("utf-8")).decode("ascii"))
                 reste, substitue = reste[fin:], True
+                charges += 1
                 break
             else:
                 if not lectures:
                     # Aucune lecture ICI ne veut pas dire aucune lecture PLUS
-                    # LOIN. Une charge d'un ou deux octets (`aGk=`, `YQ==`)
-                    # n'a que trois caractères avant son bourrage, donc le
-                    # motif échoue à l'origine — et tout ce qui suivait était
-                    # abandonné au texte, charge du réel comprise. On avance
-                    # jusqu'au prochain candidat ; s'il commence ici, on passe
-                    # au-delà, sinon la boucle ne progresserait pas.
-                    suivant = _BASE64.search(reste)
-                    if suivant is None:
+                    # LOIN — mais seulement dans UN cas : une charge d'un ou
+                    # deux octets (`aGk=`, `YQ==`) n'a que trois caractères
+                    # avant son bourrage, donc le motif échoue à l'origine et
+                    # tout ce qui suivait était abandonné au texte, charge du
+                    # réel comprise. Ce bourrage-là est forcément dans les
+                    # premiers caractères : on saute au-delà et on reprend.
+                    #
+                    # Chercher un candidat n'importe où faisait avancer MOT À
+                    # MOT dans de la prose — le compactage fusionne les mots en
+                    # une seule suite, donc chaque pas coûtait la longueur
+                    # entière. Deux kilo-octets de texte ordinaire suffisaient
+                    # alors à épuiser la borne et à faire REFUSER l'échange.
+                    coupe = reste.find("=", 0, _TETE_BOURRAGE)
+                    if coupe == -1:
                         morceaux.append(transformer(reste))
                         reste = ""
                         break
-                    coupe = suivant.start() or suivant.end()
+                    while coupe < len(reste) and reste[coupe] == "=":
+                        coupe += 1
                     morceaux.append(transformer(reste[:coupe]))
                     reste = reste[coupe:]
                     continue
@@ -406,15 +423,7 @@ class JsonRpcTransform:
                 fin = lectures[0][0]
                 morceaux.append(transformer(reste[:fin]))
                 reste = reste[fin:]
-        else:
-            # Le nombre de charges d'une chaîne est borné, sinon le balayage
-            # coûte le carré de sa longueur : mesuré, huit mille charges
-            # collées tiennent le proxy huit secondes. Refuser bruyamment vaut
-            # mieux que relayer sans avoir lu.
-            raise BinaryBody(
-                f"plus de {_MAX_CHARGES} charges encodées dans une seule "
-                "chaîne : forme illégitime, relayer sans l'avoir lue serait "
-                "un fail-open")
+                charges += 1
         # Rien n'a été substitué : la chaîne est du TEXTE. C'est là que tient
         # l'IDENTITÉ — un jeton opaque n'y rencontre rien à substituer et
         # ressort tel quel, bourrage non canonique compris.

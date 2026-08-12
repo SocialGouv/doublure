@@ -216,6 +216,18 @@ it costs is the gap to the other dates of the document, for those few values
 only. The alternative — shifting them the other way — would let two distinct
 real dates land on the same surrogate.
 
+**A four-aligned prefix hides a base64 payload from the sweep.** Prepending a
+number of alphabet characters that is a multiple of four preserves the base64
+alignment, so every receiver reads straight through and recovers the real value
+— while the sweep decodes the whole run at once, gets non-UTF-8 bytes and
+concludes there is no payload. The value therefore leaves encoded, with no vault
+entry and nothing to count. Distinct from the accepted residual below, where
+letters glued in front SHIFT the alignment so that nobody reads the value.
+Closing it means trying the shifted alignments when the anchored reading fails,
+which touches the core of the sweep; it is pinned by a test that ASSERTS the
+leak so that it is counted rather than silent, and that test goes red the day it
+is closed.
+
 **A JWT's parts are not read one by one.** A JWT is base64URL without padding —
 not the alphabet this proxy reads — and its three parts are decoded as one
 stream or not at all. A real value placed in its payload (`iss`, `aud`) therefore

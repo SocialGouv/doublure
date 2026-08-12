@@ -1008,3 +1008,32 @@ def test_une_charge_courte_seule_reste_intacte(transform):
         rendu = json.loads(transform.outgoing("h", {}, json.dumps(
             {"jsonrpc": "2.0", "id": 1, "result": {"v": opaque}}).encode()))
         assert rendu["result"]["v"] == opaque
+
+
+@pytest.mark.parametrize("prefixe", ["aaaa", "abcd", "ZZZZ"])
+def test_RESIDU_un_prefixe_aligne_sur_quatre_masque_la_charge(transform, prefixe):
+    """RÉSIDU MESURÉ, épinglé pour qu'il ne soit pas SILENCIEUX.
+
+    Un préfixe de longueur multiple de QUATRE preserve l'alignement base64 :
+    tout recepteur lit au travers et retrouve la valeur reelle, alors que le
+    balayage, lui, decode le tout d'un bloc, obtient des octets non-UTF-8, et
+    conclut qu'il n'y a pas de charge. La valeur sort donc encodee, sans entree
+    au coffre ni rien a compter.
+
+    Ce n'est PAS le residu deja assume (« precede de lettres ») : celui-la
+    decale l'alignement, donc personne ne lit la valeur. Ici l'alignement tient.
+
+    Le correctif demande d'essayer les alignements decales (offsets 4, 8, 12)
+    quand la lecture ancree echoue, ce qui touche le coeur du balayage — il est
+    porte au tour suivant plutot que precipite. Ce test AFFIRME la fuite : il
+    rougira le jour ou elle est fermee, et c'est le signal attendu.
+    """
+    import base64
+
+    reel = "db-01.acme.internal"
+    charge = prefixe + base64.b64encode(reel.encode()).decode()
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": charge}}).encode()))["result"]["v"]
+    lu = base64.b64decode(rendu.encode(), validate=False)
+    assert reel.encode() in lu, \
+        "le prefixe aligne est traite : mettre a jour docs/limits.md"

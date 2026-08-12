@@ -44,7 +44,7 @@ from ..annonce import injecter  # noqa: E402
 from ..pipeline import Pseudonymizer  # noqa: E402
 from ..policy import Policy  # noqa: E402
 from ..sse import (  # noqa: E402
-    BlocSSEIllisible, FluxSSEInvalide, encode_sse, iter_blocks,
+    _LIGNE, BlocSSEIllisible, FluxSSEInvalide, encode_sse, iter_blocks,
     parse_sse_block,
 )
 from ..surrogates.engine import SurrogateCollisionError, SurrogateEngine  # noqa: E402
@@ -143,6 +143,9 @@ class ProxyState:
         #: Blocs SSE porteurs de données illisibles, relayés donc
         #: NON restaurés. Un résidu se compte, il ne se tait pas.
         self.sse_illisible = 0
+        #: Lignes gardées sous leur SUBSTITUT parce que la valeur réelle
+        #: porte une fin de ligne : la restaurer forgerait la structure.
+        self.sse_non_restaure = 0
         self._incoming: tuple[int, Substituter] | None = None
 
     def outgoing(self) -> Substituter:
@@ -395,17 +398,49 @@ async def _stream(state: ProxyState, safe_body: dict[str, Any], headers: dict[st
     )
 
 
+def _octets_sse(texte: str) -> bytes:
+    """Le texte d'un bloc SSE en octets, demi-substitut Unicode compris.
+
+    `dumps_utf8` rend une chaîne JSON ; on en retire les guillemets et on relit
+    le JSON pour retrouver le texte, ce qui echappe ce qui n'est pas encodable
+    sans rien perdre. Meme regle que les trois autres chemins d'encodage.
+    """
+    try:
+        return texte.encode("utf-8")
+    except UnicodeEncodeError:
+        return texte.encode("utf-8", "backslashreplace")
+
+
 def _relayer_restaure(block: str, sub_in, state: ProxyState) -> bytes:
     """Un bloc qu'on ne sait pas interpreter part quand meme RESTAURE.
 
     On ne devine pas sa structure — mais le relayer verbatim y laissait les
     substituts, donc l'operateur lisait un nom fictif sans rien pour le lui
-    dire. Restaurer le texte ne suppose aucune structure et ferme la classe,
-    la ou compter n'aurait fait que la declarer.
+    dire. La restauration se fait LIGNE PAR LIGNE et ne doit jamais en creer
+    une : sinon fermer la perte de restauration ouvrirait une forge de flux.
     """
-    resolu, unresolved = sub_in.to_real(block)
-    _note_unresolved(state, unresolved)
-    return (resolu + "\n\n").encode("utf-8")
+    lignes = []
+    for ligne in _LIGNE.split(block):
+        resolu, unresolved = sub_in.to_real(ligne)
+        _note_unresolved(state, unresolved)
+        if _LIGNE.search(resolu):
+            # La valeur RÉELLE porte une fin de ligne : la restaurer ici
+            # fabriquerait un champ — voire un BLOC entier — que l'amont n'a
+            # jamais émis, et le client le dispatcherait. Rien n'interdit à une
+            # valeur détectée de contenir un saut de ligne, donc c'est ici que
+            # ça se refuse : on garde le substitut sur cette ligne et on le
+            # compte. L'opérateur lit un nom fictif ; il ne lit jamais un flux
+            # forgé.
+            state.sse_non_restaure += 1
+            lignes.append(ligne)
+        else:
+            lignes.append(resolu)
+    # L'encodage passe par le module partagé, comme les trois autres chemins :
+    # le coffre garde sciemment des valeurs porteuses d'un demi-substitut
+    # Unicode, et les encoder en direct faisait lever — donc le flux mourait sur
+    # un `error`, tout ce qui suit perdu. Quatrième implantation d'une règle qui
+    # est censée vivre en un seul endroit, et le nouveau site l'avait manquée.
+    return _octets_sse("\n".join(lignes) + "\n\n")
 
 
 def _note_unresolved(state: ProxyState, unresolved: list[str]) -> None:
@@ -471,6 +506,7 @@ async def healthz(request: Request):
         "vault_entries": state.vault.count(state.settings.scope_key),
         "unresolved_total": state.unresolved_total,
         "sse_illisible": state.sse_illisible,
+        "sse_non_restaure": state.sse_non_restaure,
         "pipeline": dict(state.pseudonymizer.stats),
         "detector": detector,
     }

@@ -1929,6 +1929,47 @@ suite** — removing the increment left 2925 tests green. The rule it yields:
 assertion, not in the docstring**, and two distinct surfaces (raising, counting)
 need two witnesses.
 
+## Round 23 (2026-08-12) — closing a leak opened a forge, and a bound refused prose
+
+**Fixing a restoration loss opened a stream FORGE — HIGH.** Round 22 made the
+blocks we cannot interpret go through restoration so the operator would stop
+reading surrogates in them. But nothing forbids a DETECTED value from containing
+a newline — measured: it enters the vault without a murmur — so restoring it
+into raw block text manufactured a field, or a whole BLOCK, the upstream never
+sent. A forged `message_stop` makes a conforming client close the stream before
+the real answer. Restoration now happens LINE BY LINE and may never create one:
+on the offending line the surrogate stays, and that is counted.
+
+**And the bound I had just added REFUSED ordinary prose — CRITICAL for
+availability.** 1.8 KB of plain text failed the exchange. The counter meant to
+stop an attacker was being spent walking word by word through text: compaction
+merges every word into one run, so each step cost the whole remaining length —
+quadratic, and the budget ran out at about a kilobyte. What actually blocks the
+pattern at the origin is a SHORT payload, whose padding sits in the first few
+characters, so that is what the sweep now looks for. Measured after: 1 MB of
+prose in 52 ms, and the short-payload and concatenated-payload attacks stay
+closed.
+
+**Fourth implantation of the encoding rule, and the newest site missed it.**
+`_relayer_restaure` encoded its text directly; the vault deliberately keeps
+values carrying a lone Unicode surrogate, so that raised — and the raise is
+caught at the loop level, so the stream died with everything after it. Round 18
+had said in its own commit that three implantations of one rule are the trap
+this project pays most often; this is the fourth.
+
+**Open, measured, pinned by a test that ASSERTS the leak.** A prefix whose
+length is a multiple of FOUR preserves base64 alignment: every receiver reads
+through it and recovers the real value, while the sweep decodes the whole run at
+once, gets non-UTF-8 bytes and concludes there is no payload. Distinct from the
+accepted residual where letters SHIFT the alignment and nobody reads anything.
+Closing it means trying the shifted alignments when the anchored reading fails —
+the core of the sweep — so it is carried to the next round rather than rushed.
+
+**Method — a peer agent corrected itself, and that is worth as much as the
+finding.** It reported a first defect, then wrote back that it had read a cached
+version of the file and that the defect was already closed. Retracting costs
+nothing and saves a round; not retracting costs a fix built on a false proof.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth
