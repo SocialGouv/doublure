@@ -1495,6 +1495,13 @@ narrowed to the entity before they reach the vault — the key is the date, not
 the field carrying it. The class remains for anything the model paraphrases
 rather than quotes; the announcement asks for whole identifiers, which
 mitigates without measuring.</p>
+<p><strong>A base64 payload that decodes as UTF-8 is treated as text, whatever it is
+declared to be</strong> — and nothing is layered on top of that decision. A guard that
+asked "does this look like text?" was tried and removed: it refused on a NUL
+byte, so the sender only had to slip one in to switch the substitution off, and
+nothing counted it. Residual, stated: a binary made only of bytes that form
+valid UTF-8 gets traversed, so it may come out modified. That failure is
+visible; the other one is not.</p>
 <p><strong>Two places have no deadline, on purpose.</strong> An inspected exchange gives up on
 an upstream that stops sending — a silence is not a truncation: it produces no
 error, no close, no byte, and the agent waits for a response that never comes.
