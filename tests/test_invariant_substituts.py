@@ -178,3 +178,39 @@ def test_les_natures_couvertes_sont_enumerees(moteur):
     """
     vues = {canonicalize(t, v).kind for t, v in CAS}
     assert vues == {"ip", "cidr", "host", "email", "repo", "image", "generic"}, vues
+
+
+@pytest.mark.parametrize("valeur,interdit", [
+    ("2020-02-30", "2020"),   # la FORME d'une date, sans en être une
+    ("Q3 2024", "2024"),
+    ("hiver 1998", "1998"),
+])
+def test_une_date_qui_tombe_au_generique_n_emporte_pas_son_annee(moteur, valeur,
+                                                                 interdit):
+    """Le repli générique recopie le premier groupe de CHIFFRES de la valeur.
+
+    C'est un INDEX gardé pour la plausibilité (`srv-42` → `glacier-vault42`).
+    Pour une DATE, ces chiffres sont le CONTENU : l'année réelle repartait dans
+    le substitut, sans entrée au coffre pour elle, sans substitut non résolu,
+    rien à compter.
+    """
+    from anonproxy.surrogates import dates
+    assert dates.shift(valeur, 654) is None, \
+        "cette valeur se décale, donc elle ne passe PAS par le repli : le cas " \
+        "ne prouverait rien"
+    substitut = moteur.substitute_value("DATE", valeur)
+    assert interdit not in substitut, substitut
+
+
+def test_une_date_au_bord_de_la_plage_ne_repart_pas_en_clair(moteur):
+    """`9999-12-31` — la date « sans fin » des contrats — débordait à
+    l'addition et repartait VERBATIM dans le substitut. Elle tourne désormais
+    dans la plage, donc elle reste une date ET ne fuit plus."""
+    substitut = moteur.substitute_value("DATE", "expire le 9999-12-31")
+    assert "9999" not in substitut and "12-31" not in substitut, substitut
+
+
+def test_le_repli_garde_l_index_pour_les_autres_types(moteur):
+    """La contrepartie : l'index reste recopié là où il est un index, sinon la
+    correction aurait échangé une fuite contre une perte de plausibilité."""
+    assert "42" in moteur.substitute_value("HOSTNAME", "srv-42.acme.internal")

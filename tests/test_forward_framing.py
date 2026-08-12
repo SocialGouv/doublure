@@ -920,3 +920,70 @@ def test_a_duplicated_framing_header_is_refused(
         assert b"502" in recu, recu[:300]
     finally:
         proxy.stop()
+
+
+@pytest.mark.parametrize("tete", [
+    # NUL dans le NOM d'un en-tête de cadrage : un client qui tronque au NUL
+    # lit un `content-length` que le proxy n'a jamais reconnu comme tel.
+    b"HTTP/1.1 200 OK\r\ncontent-length\x00x: 999\r\n"
+    b"content-length: 2\r\nconnection: close\r\n\r\nok",
+    # NUL dans le nom d'un en-tête sensible.
+    b"HTTP/1.1 200 OK\r\nset-cookie\x00y: PWN=1; path=/\r\n"
+    b"content-length: 2\r\nconnection: close\r\n\r\nok",
+    # DEL dans une valeur : contrôle interdit par la RFC dans un champ.
+    b"HTTP/1.1 200 OK\r\nx-note: bonjour\x7f\r\n"
+    b"content-length: 2\r\nconnection: close\r\n\r\nok",
+])
+def test_no_control_character_survives_in_the_head(
+        interception, autorite_origine, tmp_path, tete):
+    """HAUT — la classe est « notre lecture diffère de celle du destinataire ».
+
+    Le contrôle ne visait que les TERMINATEURS, parce que l'injection d'en-tête
+    en demande un. Mais un NUL coupe une chaîne pour un client écrit en C sans
+    rien couper pour nous : `content-length\\x00x: 999` traversait verbatim, et
+    ce client lisait DEUX cadrages — le sien tronqué et le nôtre. C'est la
+    racine commune des trois vols de réponse déjà fermés ici, atteinte cette
+    fois par un octet qui n'est pas un terminateur.
+    """
+    origine, proxy = _monter(interception, autorite_origine, tmp_path, [tete])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "tâche morte en silence"
+        assert b"502" in recu, recu[:300]
+        assert b"\x00" not in recu and b"\x7f" not in recu, recu[:300]
+        assert b"set-cookie" not in recu.lower(), recu[:300]
+    finally:
+        proxy.stop()
+
+
+def test_a_tab_in_a_header_value_still_passes(interception, autorite_origine,
+                                              tmp_path):
+    """L'AUTRE MOITIÉ : la tabulation est autorisée dans une valeur par la RFC.
+    L'interdire avec les autres contrôles refuserait des réponses légitimes."""
+    normale = (b"HTTP/1.1 200 OK\r\nx-note: a\tb\r\ncontent-length: 2\r\n"
+               b"connection: close\r\n\r\nok")
+    origine, proxy = _monter(interception, autorite_origine, tmp_path, [normale])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu and b"200" in recu, recu[:300]
+    finally:
+        proxy.stop()
+
+
+def test_two_different_framing_headers_are_refused(interception,
+                                                   autorite_origine, tmp_path):
+    """La JUMELLE du refus voisin : j'avais fermé « le MÊME en-tête de cadrage
+    deux fois » et laissé « content-length ET transfer-encoding », qui est le
+    primitif de resynchronisation classique. Rien ne l'exploite ici — on
+    préfère `chunked` et l'amont ne sert qu'un échange — mais c'est l'invariant
+    qu'un jour de réutilisation de connexion transformerait en faille."""
+    piege = (b"HTTP/1.1 200 OK\r\ncontent-length: 10\r\n"
+             b"transfer-encoding: chunked\r\nconnection: close\r\n"
+             b"\r\n2\r\nok\r\n0\r\n\r\n")
+    origine, proxy = _monter(interception, autorite_origine, tmp_path, [piege])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "tâche morte en silence"
+        assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()

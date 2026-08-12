@@ -237,20 +237,20 @@ class JsonRpcTransform:
         producteurs parfaitement standards dont la charge ne correspondait à
         rien et sortait donc VERBATIM.
 
-        Le tour doit être l'IDENTITÉ quand rien n'est substitué, et il ne
-        l'était pas : `b64decode(validate=True)` ne valide que l'ALPHABET, pas
-        la canonicité, donc `SGVsbG9=` (bits de bourrage non nuls) se décodait
-        et se ré-encodait en `SGVsbG8=`. Un jeton opaque ressortait CHANGÉ. On
-        exige donc que le ré-encodage rende exactement ce qu'on a lu.
+        Le tour doit être l'IDENTITÉ quand rien n'est substitué, et c'est
+        `_chaine` qui la tient : quand la substitution ne change rien, il rend
+        la chaîne D'ORIGINE, non-canonicité et blancs compris. Exiger ici que
+        le ré-encodage reproduise la lecture était donc inutile à l'identité —
+        et c'était un interrupteur : `…bA==` et `…bB==` décodent tous deux vers
+        la même valeur, tout décodeur du monde réel étant permissif sur les
+        bits de bourrage. Il suffisait donc de changer UN caractère pour que la
+        charge cesse d'être vue, et la valeur réelle sortait sans trace.
         """
         compact = "".join(valeur.split())
         if not compact or not _BASE64.fullmatch(compact):
             return None
         try:
-            brut = base64.b64decode(compact, validate=True)
-            if base64.b64encode(brut).decode("ascii") != compact:
-                return None  # forme non canonique : la réécrire la changerait
-            return brut.decode("utf-8")
+            return base64.b64decode(compact, validate=True).decode("utf-8")
         except (binascii.Error, UnicodeDecodeError, ValueError):
             return None
 

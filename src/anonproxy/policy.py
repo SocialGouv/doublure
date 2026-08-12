@@ -118,8 +118,17 @@ def _fichier_de_portee(racine: Path, portee: str, scope_key: str,
     # donnaient la même chaîne, donc le même fichier, donc une révélation qui
     # traverse — la classe même que ce nommage devait fermer, une couche plus
     # bas. Les deux valeurs viennent de variables d'environnement, sans filtre.
-    exact = "".join(f"{len(c)}:{c}" for c in champs)
-    empreinte = hashlib.sha256(exact.encode("utf-8")).hexdigest()[:16]
+    #
+    # La longueur se compte en OCTETS, sur la forme même qui est hachée. En
+    # caractères, elle divergeait du Go — qui compte des octets — dès qu'un
+    # accent entrait dans la clé de portée : `projet-café` vaut 11 d'un côté et
+    # 12 de l'autre, donc deux empreintes, donc deux fichiers, donc l'arbitrage
+    # de l'opérateur invisible au moteur. `surrogateescape` est l'inverse exact
+    # de la lecture d'`os.environ` : on retrouve les octets que le système a
+    # donnés, ceux-là mêmes que le Go tient dans sa chaîne.
+    octets = [c.encode("utf-8", "surrogateescape") for c in champs]
+    exact = b"".join(b"%d:%s" % (len(o), o) for o in octets)
+    empreinte = hashlib.sha256(exact).hexdigest()[:16]
     lisible = re.sub(r"[^A-Za-z0-9_.-]", "-", scope_key)[:40].strip("-.") or "portee"
     if portee == "session":
         lisible = f"{lisible}-session"

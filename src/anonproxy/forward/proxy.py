@@ -666,6 +666,12 @@ class _CorpsIllisible(RuntimeError):
     """Ce corps ne peut pas être relu, donc pas réécrit, donc pas relayé."""
 
 
+#: Contrôles C0 et DEL. La tabulation est ABSENTE : la RFC l'autorise dans une
+#: valeur d'en-tête, la refuser casserait des réponses légitimes. Les octets
+#: 0x80-0xFF non plus — ils sont de l'`obs-text`, opaque mais permis.
+_CONTROLES = frozenset(chr(c) for c in range(0x20) if c != 0x09) | {chr(0x7F)}
+
+
 def _analyser(entete: bytes) -> tuple[str, dict[str, str]]:
     lignes = entete.decode("latin-1").split("\r\n")
     # UNE règle pour toute la tête, et c'est là qu'est le correctif. Le
@@ -683,8 +689,16 @@ def _analyser(entete: bytes) -> tuple[str, dict[str, str]]:
     # « pour aider » : l'en-tête injecté revenait alors au client dans le corps
     # du 502, par la porte du refus lui-même. Le rang suffit à diagnostiquer, et
     # ne rend rien de ce que l'amont a écrit.
+    # Le refus porte sur TOUS les caractères de contrôle, pas seulement sur les
+    # terminateurs. Un NUL ne coupe pas une ligne pour NOUS, mais il coupe une
+    # chaîne pour un client écrit en C : `content-length\x00x: 999` était
+    # recopié verbatim, et ce client lisait un `content-length` que le proxy
+    # n'avait jamais reconnu comme tel — à côté du nôtre. La classe est « notre
+    # lecture diffère de celle du destinataire », et c'est la racine des trois
+    # défauts de resynchronisation déjà fermés ici. La tabulation reste : la
+    # RFC l'autorise dans une valeur.
     for rang, ligne in enumerate(lignes):
-        if "\n" in ligne or "\r" in ligne:
+        if any(c in _CONTROLES for c in ligne):
             quoi = "ligne de statut" if rang == 0 else f"en-tête n°{rang}"
             raise _CorpsIllisible(
                 f"caractère de contrôle interdit dans la tête ({quoi})")
@@ -707,6 +721,16 @@ def _analyser(entete: bytes) -> tuple[str, dict[str, str]]:
             # Comparés en minuscules : HTTP les déclare insensibles à la casse,
             # et `Content-Length` doit décider comme `content-length`.
             entetes[nom.strip().lower()] = valeur.strip()
+    # La JUMELLE du refus ci-dessus : j'avais fermé « le MÊME en-tête de cadrage
+    # deux fois » et laissé « DEUX en-têtes de cadrage différents », qui est le
+    # primitif de resynchronisation classique. Rien ne l'exploite aujourd'hui —
+    # on préfère `chunked` et la connexion amont ne sert qu'un échange — mais
+    # c'est le genre d'invariant qu'un jour de réutilisation de connexion
+    # transforme en faille, et il se ferme ici en une ligne.
+    if "content-length" in entetes and "transfer-encoding" in entetes:
+        raise _CorpsIllisible(
+            "content-length et transfer-encoding ensemble : le cadrage est "
+            "ambigu")
     return lignes[0], entetes
 
 

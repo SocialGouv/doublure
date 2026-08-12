@@ -1,0 +1,86 @@
+[
+  {
+    "portee": "projet",
+    "scope_key": "project:control-proof",
+    "session": "",
+    "attendu": "project-control-proof-061aed50418cd255.json"
+  },
+  {
+    "portee": "session",
+    "scope_key": "project:control-proof",
+    "session": "s-42",
+    "attendu": "project-control-proof-session-6cf7f5ee649ee882.json"
+  },
+  {
+    "portee": "projet",
+    "scope_key": "team/prod",
+    "session": "x",
+    "attendu": "team-prod-304a320b1e1c0edf.json"
+  },
+  {
+    "portee": "session",
+    "scope_key": "a:b/c",
+    "session": "",
+    "attendu": "a-b-c-session-9a18584f8d73ee66.json"
+  },
+  {
+    "portee": "global",
+    "scope_key": "peu:importe",
+    "session": "",
+    "attendu": "global.json"
+  },
+  {
+    "portee": "projet",
+    "scope_key": ".hidden-project-with-a-name-that-is-quite-long",
+    "session": "",
+    "attendu": "hidden-project-with-a-name-that-is-quit-1fae027e96055500.json"
+  },
+  {
+    "portee": "session",
+    "scope_key": ".hidden-project-with-a-name-that-is-quite-long",
+    "session": "s-1",
+    "attendu": "hidden-project-with-a-name-that-is-quit-session-e48a9d0744439bb5.json"
+  },
+  {
+    "portee": "projet",
+    "scope_key": "aaaaaaaaaaaaaaaaaaaa--------------------aaaaaaaaaaaaaaaaaaaa",
+    "session": "",
+    "attendu": "aaaaaaaaaaaaaaaaaaaa-cab5c16f1874940c.json"
+  },
+  {
+    "portee": "session",
+    "scope_key": "projet.avec.des.points.qui.depassent.la.quarantaine",
+    "session": "",
+    "attendu": "projet.avec.des.points.qui.depassent.la-session-fb70ffca0894e5cb.json"
+  },
+  {
+    "portee": "projet",
+    "scope_key": ".aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-",
+    "session": "",
+    "attendu": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-def1cc0089df2219.json"
+  },
+  {
+    "portee": "projet",
+    "scope_key": "....",
+    "session": "",
+    "attendu": "portee-d7a628485a4acf32.json"
+  },
+  {
+    "portee": "session",
+    "scope_key": "-",
+    "session": "",
+    "attendu": "portee-session-783f6f5acc5d2af6.json"
+  },
+  {
+    "portee": "projet",
+    "scope_key": "/home/jo/lab/ai/anonshield+claude-code",
+    "session": "",
+    "attendu": "home-jo-lab-ai-anonshield-claude-code-f8f18051229fae0e.json"
+  },
+  {
+    "portee": "projet",
+    "scope_key": "projet-café-très-long-avec-des-accents-partout-ici",
+    "session": "",
+    "attendu": "projet-caf--tr-s-long-avec-des-accents-p-de1265bfcec526bf.json"
+  }
+]

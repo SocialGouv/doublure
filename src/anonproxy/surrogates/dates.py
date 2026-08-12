@@ -299,6 +299,27 @@ def chercher(valeur: str) -> tuple[int, int] | None:
     return toutes[0] if toutes else None
 
 
+#: Nombre de jours représentables : `date.min` a l'ordinal 1, `date.max` celui-ci.
+_ETENDUE = dt.date.max.toordinal()
+
+
+def _decaler(jour: dt.date, jours: int) -> dt.date:
+    """Le jour décalé, en TOURNANT dans la plage des dates représentables.
+
+    Une addition nue lève `OverflowError` à moins de `jours` de `9999-12-31` —
+    la date « sans fin » que portent les contrats, les abonnements et les
+    droits, donc tout sauf un cas de laboratoire. La date réelle repartait
+    alors VERBATIM dans le substitut.
+
+    Tourner plutôt que déborder garde les deux propriétés qui comptent : le
+    résultat est une DATE (la nature du substitut, cf. l'invariant), et la
+    transformation reste une BIJECTION, donc deux dates distinctes ne peuvent
+    pas tomber sur la même (D6). Prix assumé : pour la poignée de dates qui
+    tournent, l'écart aux autres n'est plus préservé.
+    """
+    return dt.date.fromordinal((jour.toordinal() - 1 + jours) % _ETENDUE + 1)
+
+
 def shift(valeur: str, jours: int) -> str | None:
     """Décale la date CONTENUE dans la valeur, en gardant tout le reste.
 
@@ -308,10 +329,7 @@ def shift(valeur: str, jours: int) -> str | None:
     lu = parse(valeur)
     if lu is not None:
         jour, rendre = lu
-        try:
-            return rendre(jour + dt.timedelta(days=jours))
-        except OverflowError:
-            return None
+        return rendre(_decaler(jour, jours))
 
     # TOUTES les dates, pas la première. N'en décaler qu'une laissait les
     # suivantes VERBATIM dans le substitut : `du 3 février 2026 au 12 mars
@@ -321,7 +339,6 @@ def shift(valeur: str, jours: int) -> str | None:
         return None
     morceaux: list[str] = []
     curseur = 0
-    decalee_au_moins_une = False
     for debut, fin in bornes:
         if (debut, fin) == (0, len(valeur)):
             # `parse` a déjà refusé cette valeur entière : se rappeler dessus
@@ -330,9 +347,14 @@ def shift(valeur: str, jours: int) -> str | None:
             # exploser la pile, et `RecursionError` n'est rattrapée nulle part.
             return None
         decalee = shift(valeur[debut:fin], jours)
+        if decalee is None:
+            # Recopier le fragment non décalable faisait sortir une VRAIE date
+            # en clair dès qu'une AUTRE date de la valeur, elle, se décalait :
+            # le substitut était rendu, donc jugé bon, et il contenait le réel.
+            # Rendre None masque la valeur entière — la seule direction sûre.
+            return None
         morceaux.append(valeur[curseur:debut])
-        morceaux.append(decalee if decalee is not None else valeur[debut:fin])
-        decalee_au_moins_une |= decalee is not None
+        morceaux.append(decalee)
         curseur = fin
     morceaux.append(valeur[curseur:])
-    return "".join(morceaux) if decalee_au_moins_une else None
+    return "".join(morceaux)

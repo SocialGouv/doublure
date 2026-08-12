@@ -133,7 +133,11 @@ hooks for reversibility · anonymise as a "voluntary" MCP server · SCIM/RBAC in
 the MVP · validating without a complete egress capture.
 
 ## Phase state
-**2767 tests green** (2749 + 18 egress): `task test` then `task test:egress`.
+**3505 tests green**: `task test` then `task test:egress`. Six proofs, not five —
+`tests/control_e2e.sh` is the only one that crosses into Go, and its absence
+from the routine left the control interface disconnected for two rounds. Go's
+test cache does not track a file read outside its module: the naming corpus
+lives in `go/internal/policy/` for that reason, and Python reads it there.
 
 | Phase | State | Proof |
 |---|---|---|
@@ -1508,6 +1512,84 @@ one decode pass; the sweep calls the detector about twice more than needed per
 base64 string; a signed state token whose payload is UTF-8 JSON is modified,
 so its signature stops validating — the accepted price of the open sweep, and
 it fails visibly.
+
+## Round 14 (2026-08-12) — the guard, the twin, and the proof that never ran
+
+Four narrow perimeters. Seven defects, and for the first time the round found
+something in the layer ABOVE the code: a proof of mine that returned green
+without executing.
+
+**A single padding bit switched the substitution off — CRITICAL, silent.**
+Round 13 added a canonicity check so an opaque token would come back byte for
+byte; `…bA==` and `…bB==` decode to the SAME value, every real-world decoder
+being permissive on padding bits, so changing one character was enough for the
+payload to stop being seen and the real value to leave with no trace. **Fourth
+occurrence of the same pattern in the same file**, and the identity it claimed
+to protect was already held elsewhere: `_chaine` returns the ORIGINAL string
+when nothing is substituted. A guard that duplicates a property it does not
+provide is only a switch.
+
+**A real date left in the clear at the edge of the range — CRITICAL.**
+`9999-12-31` — the "no end date" of contracts, subscriptions and entitlements —
+overflowed on `date + timedelta`, and the fragment was copied VERBATIM while
+the other date of the interval shifted normally: the surrogate was returned,
+therefore judged good, carrying the real value. The shift now ROTATES within
+the representable range: still a date (the nature invariant), still a bijection
+(D6), and the overflow class disappears rather than being caught.
+
+**The generic fallback carried the real year.** It copies the first digit run
+for plausibility (`srv-42` → `glacier-vault42`) — an INDEX for a hostname, the
+CONTENT for a date: `expire le 9999-12-31` rendered `atlas-glacier9999`. Found
+while checking the fix above, because routing a date to that fallback would
+have moved the leak instead of closing it. The reviewing agent had seen the
+symptom and filed it as another module's business.
+
+**Go and Python named the same file differently, again — CRITICAL.** The
+readable prefix truncates and trims in one order on one side and the opposite
+on the other; `sub → [:40] → strip` and `sub → trim → [:40]` do not commute.
+Measured: **8 divergences over 20 scope keys**, including the wholly ordinary
+`projet.avec.des.points…` — no leading separator needed, just a dot landing at
+the fortieth character. Same fingerprint, different file, so a revoked reveal
+went on revealing. It is the round-13 defect one layer up: the fingerprint had
+been fixed on both sides, the prefix beside it had not.
+
+**And the corpus that closes it found a SECOND divergence, in the deciding
+part**: the length prefix counts CHARACTERS in Python and BYTES in Go, so
+`projet-café` frames as 11 on one side and 12 on the other. A project path with
+an accent was enough. Python now counts the bytes of the form it actually
+hashes, `surrogateescape` being the exact inverse of how `os.environ` was read
+— so what Python frames is what the OS gave and what Go holds.
+
+**The proof itself was the hole — and this one is the lesson of the round.**
+Pinning vectors on both sides had not stopped the divergence, because all five
+carried a benign key: they DEFENDED what they checked without COVERING the
+class. So the corpus became one shared file — and `go test` returned
+`ok (cached)` on a deliberately corrupted corpus, because **the cache does not
+track a file read outside the module**. A green obtained without executing, on
+the very proof meant to detect the divergence. The corpus now lives in the Go
+package, both sides read it, and a Python test requires it to contain a WITNESS
+of the trap (a key for which truncating and trimming do not commute) — a
+property rather than an enumeration, so a corpus rewritten with benign keys
+goes red.
+
+**Proxy — a control character that is not a terminator.** Header injection
+needs `\r` or `\n`, which is what the check refused; but a NUL cuts a string
+for a client written in C without cutting anything for us:
+`content-length\x00x: 999` travelled verbatim and that client read TWO framings,
+its truncated one and ours. The class is "our reading differs from the
+recipient's", which is the root of the three response thefts already closed
+here. All C0 controls and DEL are refused now, HTAB excepted (the RFC allows it
+in a value, and refusing it would break legitimate responses). Closed at the
+same time, its TWIN: I had refused the SAME framing header twice and left
+`content-length` AND `transfer-encoding` together — the classic desync
+primitive, harmless only as long as the upstream connection serves one exchange.
+
+**Method — an agent's severity is a hypothesis, not a finding.** The proxy
+agent died mid-stream announcing a CRITICAL on those control characters;
+resumed, it RETRACTED it itself ("I showed survival, not that a client reads an
+extra header") and named the one case it had not tested — which turned out to
+be the real one. Two of the four agents produced their best material after
+being asked what they had NOT proven.
 
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 

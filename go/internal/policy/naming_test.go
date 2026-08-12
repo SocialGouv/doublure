@@ -1,6 +1,10 @@
 package policy
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"testing"
+)
 
 // Les deux implémentations écrivent et lisent le MÊME répertoire, donc leurs
 // noms de fichiers doivent coïncider au caractère près. Quand elles ont
@@ -10,27 +14,40 @@ import "testing"
 // passait par l'interface, annonçait un succès, et ne changeait rien.
 // Silencieux, et sur la seule décision qu'on ne peut pas reprendre.
 //
-// Le défaut a vécu DEUX tours de revue parce qu'aucune des cinq preuves que je
-// rejouais ne traversait le Go. Ces vecteurs sont produits par la fonction
-// Python `_fichier_de_portee` ; `tests/test_parite_nommage.py` épingle les
-// mêmes de son côté. Si l'une des deux dérive, l'une des deux rougit.
+// Épingler des vecteurs de chaque côté n'a pas suffi : les cinq premiers
+// portaient tous une clé de portée anodine, donc ils DÉFENDAIENT ce qu'ils
+// vérifiaient sans COUVRIR la classe, et le préfixe lisible a continué de
+// diverger — même empreinte, autre nom de fichier. Le corpus vit désormais
+// dans UN fichier que les deux côtés lisent ; le Python exige en plus qu'il
+// contienne un témoin du piège (une clé où tronquer et rogner ne commutent
+// pas).
 func TestNommageIdentiqueACeluiDePython(t *testing.T) {
-	cas := []struct {
-		scope, scopeKey, session, attendu string
-	}{
-		{"projet", "project:control-proof", "",
-			"project-control-proof-061aed50418cd255.json"},
-		{"session", "project:control-proof", "s-42",
-			"project-control-proof-session-6cf7f5ee649ee882.json"},
-		{"projet", "team/prod", "x", "team-prod-304a320b1e1c0edf.json"},
-		{"session", "a:b/c", "", "a-b-c-session-9a18584f8d73ee66.json"},
-		{"global", "peu:importe", "", "global.json"},
+	// Le corpus vit DANS le module, et c'est une contrainte de cache, pas un
+	// choix de rangement : `go test` ne piste pas un fichier lu hors du module.
+	// Placé sous `tests/`, il rendait `ok (cached)` sur un corpus délibérément
+	// faux — un vert obtenu sans rien exécuter, sur la preuve même qui doit
+	// détecter la divergence. Le Python lit celui-ci.
+	brut, err := os.ReadFile("vecteurs_nommage.json")
+	if err != nil {
+		t.Fatalf("corpus partagé illisible : %v", err)
+	}
+	var cas []struct {
+		Portee   string `json:"portee"`
+		ScopeKey string `json:"scope_key"`
+		Session  string `json:"session"`
+		Attendu  string `json:"attendu"`
+	}
+	if err := json.Unmarshal(brut, &cas); err != nil {
+		t.Fatalf("corpus partagé illisible : %v", err)
+	}
+	if len(cas) == 0 {
+		t.Fatal("corpus vide : un test qui ne vérifie rien passe toujours")
 	}
 	for _, c := range cas {
-		p := New("/racine", c.scopeKey, c.session, []byte("peu-importe"))
-		if got := p.file(c.scope); got != "/racine/"+c.attendu {
+		p := New("/racine", c.ScopeKey, c.Session, []byte("peu-importe"))
+		if got := p.file(c.Portee); got != "/racine/"+c.Attendu {
 			t.Errorf("%s %q session=%q :\n  obtenu  %s\n  attendu /racine/%s",
-				c.scope, c.scopeKey, c.session, got, c.attendu)
+				c.Portee, c.ScopeKey, c.Session, got, c.Attendu)
 		}
 	}
 }

@@ -207,6 +207,21 @@ without it remain. Reachable only if a detector spans such a concatenation.
 `v11.6.2022`. Nothing real leaves; something that was never a date comes back
 changed, and only if a detector marked it.
 
+**A date within about three years of `9999-12-31` loses its interval.** The
+shift rotates within the representable range rather than overflowing, because
+overflowing meant copying the real date VERBATIM into the surrogate — and
+`9999-12-31` is the ordinary "no end date" of a contract, not a laboratory
+case. Rotating keeps the surrogate a date and keeps the mapping injective; what
+it costs is the gap to the other dates of the document, for those few values
+only. The alternative — shifting them the other way — would let two distinct
+real dates land on the same surrogate.
+
+**A date-shaped string that is not a valid date stays verbatim.**
+`2020-02-30`, common in an export, is not parsed, so it is carried through as
+ordinary text inside a larger value, like any word the module preserves around
+a date. Its year is real. Closing it would mean substituting anything with the
+SHAPE of a date, which would take `v3.14.2020` above with it.
+
 **Two keys that denote the same entity abort the exchange, loudly.** If a JSON
 object carries `Alice.Dupont@acme.internal` and `alice.dupont@acme.internal` as
 two distinct keys, canonicalisation gives them one surrogate — correctly, since

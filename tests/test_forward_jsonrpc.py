@@ -470,13 +470,48 @@ def test_mime_wrapped_base64_is_traversed(transform):
 
 @pytest.mark.parametrize("non_canonique", ["SGVsbG9=", "AAAAAR==", "QUJDREVGRw9="])
 def test_a_non_canonical_padding_is_left_untouched(transform, non_canonique):
-    """CRITIQUE — la propriété d'IDENTITÉ que le module revendique était FAUSSE.
+    """La propriété d'IDENTITÉ vaut aussi pour un bourrage non canonique.
 
-    `b64decode(validate=True)` ne valide que l'ALPHABET, pas la canonicité :
-    des bits de bourrage non nuls se décodaient, et le ré-encodage les
-    NORMALISAIT. Un jeton opaque ressortait donc CHANGÉ — exactement ce que le
-    balayage ouvert promettait de ne jamais faire. On exige maintenant que le
-    ré-encodage rende ce qu'on a lu, sinon la chaîne n'est pas touchée."""
+    `b64decode(validate=True)` ne valide que l'ALPHABET : des bits de bourrage
+    non nuls se décodent, et les ré-encoder les NORMALISERAIT. C'est `_chaine`
+    qui tient l'identité — quand la substitution ne change rien, il rend la
+    chaîne D'ORIGINE — et non un contrôle de canonicité, qui serait un
+    interrupteur (cf. le test suivant)."""
     rendu = json.loads(transform.outgoing("h", {}, json.dumps(
         {"jsonrpc": "2.0", "id": 1, "result": {"v": non_canonique}}).encode()))
     assert rendu["result"]["v"] == non_canonique
+
+
+@pytest.mark.parametrize("reel,prefixe", [("db-01.acme.internal", ""),
+                                          ("10.1.2.3", ""),
+                                          ("acme-billing", "log ")])
+def test_no_padding_bit_can_switch_the_substitution_off(transform, reel, prefixe):
+    """CRITIQUE — le contrôle de canonicité était un INTERRUPTEUR de plus.
+
+    Il avait été posé pour préserver un jeton opaque ; il suffisait d'allumer
+    un bit de bourrage pour que la charge cesse d'être vue, et la valeur réelle
+    sortait sans trace — aucune entrée au coffre, aucun substitut non résolu.
+    Tout décodeur du monde réel est permissif sur ces bits : le tiers reçoit
+    bien la valeur. Quatrième occurrence, dans ce fichier, du garde-fou ajouté
+    au-dessus d'une décision de protection et qui l'éteint.
+    """
+    import base64
+
+    alphabet = ("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                "abcdefghijklmnopqrstuvwxyz0123456789+/")
+    charge = f"{prefixe}{reel}"
+    canonique = base64.b64encode(charge.encode()).decode()
+    assert canonique.endswith("="), \
+        "sans bourrage il n'y a pas de bit à allumer : le cas ne prouve rien"
+    i = canonique.index("=") - 1
+    mute = (canonique[:i]
+            + alphabet[(alphabet.index(canonique[i]) + 1) % 64]
+            + canonique[i + 1:])
+    assert mute != canonique
+    # Le récepteur tiers, lui, décode : les deux formes portent la même valeur.
+    assert base64.b64decode(mute).decode() == charge
+
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": mute}}).encode()))
+    assert rendu["result"]["v"] != mute, "la charge n'a pas été vue"
+    assert reel not in base64.b64decode(rendu["result"]["v"]).decode()

@@ -142,10 +142,18 @@ func (p *Policy) file(scope string) string {
 		fmt.Fprintf(&exact, "%d:%s", len(f), f)
 	}
 	sum := sha256.Sum256([]byte(exact.String()))
-	readable := strings.Trim(nonFileName.ReplaceAllString(p.scopeKey, "-"), "-.")
+	// TRUNCATE then TRIM, in that order: Python does `sub(...)[:40].strip("-.")`
+	// and the two operations do not commute. Trimming first left the separator
+	// that truncation was about to expose, so `.a-very-long-project-name…` named
+	// two different files on the two sides — same fingerprint, different readable
+	// prefix. Both guards had been hardened on their own; the gap was between
+	// them, which is the twin pattern one layer up from the divergence of the
+	// previous round.
+	readable := nonFileName.ReplaceAllString(p.scopeKey, "-")
 	if len(readable) > 40 {
 		readable = readable[:40]
 	}
+	readable = strings.Trim(readable, "-.")
 	if readable == "" {
 		readable = "portee"
 	}

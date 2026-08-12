@@ -381,3 +381,57 @@ def test_un_prefixe_qui_n_est_pas_une_abreviation_n_est_pas_une_date():
     """`Marc` préfixe `march` sans être une abréviation de mois. Accepter tout
     préfixe non ambigu faisait d'un prénom une date décalée."""
     assert _dates.parse("Marc 3, 2020") is None
+
+
+@pytest.mark.parametrize("valeur,reel", [
+    ("contrat 1985-06-15 au 9999-12-31", "9999-12-31"),
+    ("Contrat du 01/06/1985 au 31/12/9999", "31/12/9999"),
+    ("From January 1, 2024 to December 31, 9999", "December 31, 9999"),
+])
+def test_une_date_indecalable_ne_repart_pas_VERBATIM(valeur, reel):
+    """CRITIQUE — une VRAIE date sortait en clair dans le substitut.
+
+    `9999-12-31` est la date « sans fin » des contrats, des abonnements et des
+    droits. À moins de `jours` de `date.max`, l'addition débordait, le fragment
+    était recopié TEL QUEL, et comme l'autre date de l'intervalle, elle, se
+    décalait, le substitut était rendu — donc jugé bon — en portant le réel.
+
+    Même classe que le tour 11, où `resserrer` laissait la seconde date HORS du
+    segment substitué : la couverture d'alors n'utilisait que des dates
+    confortablement décalables, donc elle prouvait le cas facile.
+    """
+    rendu = _dates.shift(valeur, 654)
+    assert rendu is not None
+    assert reel not in rendu, rendu
+
+
+def test_un_debordement_rend_toujours_une_DATE():
+    """Tourner dans la plage plutôt que déborder : le substitut reste une date
+    (la nature), et la transformation reste une bijection (D6)."""
+    rendu = _dates.shift("9999-12-31", 654)
+    assert rendu is not None and _dates.parse(rendu) is not None
+    assert rendu != "9999-12-31"
+    # Bijection : deux dates distinctes ne peuvent pas tomber sur la même.
+    tournees = {_dates.shift(f"9999-12-{j:02d}", 654) for j in range(20, 32)}
+    assert len(tournees) == 12
+
+
+@pytest.mark.parametrize("texte", [
+    "du 3 février 2026 au 12 mars 2026",
+    "contrat 1985-06-15 au 9999-12-31",
+    "2020-02-30 puis 2026-02-03",          # une FORME de date qui n'en est pas
+    "From January 1, 2024 to December 31, 9999",
+])
+def test_toute_borne_trouvee_est_relisible(texte):
+    """L'invariant qui rend le recopiage VERBATIM impossible dans `shift`.
+
+    `shift` refuse désormais la valeur entière plutôt que de recopier un
+    fragment qu'il ne sait pas décaler — mais ce refus ne doit jamais se
+    produire, parce que `chercher_toutes` ne rend que des bornes que `parse`
+    accepte. Si les deux divergent un jour, c'est ce test qui le dit, et le
+    refus qui évite la fuite en attendant.
+    """
+    for debut, fin in _dates.chercher_toutes(texte):
+        fragment = texte[debut:fin]
+        assert _dates.parse(fragment) is not None, fragment
+        assert _dates.shift(fragment, 654) is not None, fragment
