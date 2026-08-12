@@ -12,14 +12,25 @@ import re
 from typing import Any
 
 
+#: Fin de LIGNE au sens SSE. Voir le commentaire de `parse_sse_block`.
+_LIGNE = re.compile(r"\r\n|\r|\n")
+
+
 def parse_sse_block(block: str) -> dict[str, Any] | None:
     """Extrait le JSON d'un bloc SSE (``event:`` + ``data:``).
 
     Retourne ``None`` pour les blocs sans données exploitables (commentaires
     de keep-alive, ``data: [DONE]``).
     """
+    # Le découpage en LIGNES suit la spec SSE — `\r\n`, `\r`, `\n` — et rien
+    # d'autre. `str.splitlines` coupe AUSSI sur U+2028, U+2029, U+0085 et les
+    # séparateurs de fichier : le séparateur de BLOCS, lui, ne les reconnaît
+    # pas. Un `U+2028` dans un texte — que `json.dumps` n'échappe pas hors mode
+    # ASCII — faisait donc échouer le parsage, et un bloc non parsé part
+    # VERBATIM : ses substituts ne sont jamais restaurés, et l'opérateur lit un
+    # nom fictif sans rien pour le lui dire.
     data_lines = [
-        line[5:].lstrip() for line in block.splitlines() if line.startswith("data:")
+        line[5:].lstrip() for line in _LIGNE.split(block) if line.startswith("data:")
     ]
     if not data_lines:
         return None
@@ -34,13 +45,17 @@ def parse_sse_block(block: str) -> dict[str, Any] | None:
 
 def encode_sse(event: dict[str, Any]) -> bytes:
     """Sérialise un événement au format SSE Anthropic (``event:`` + ``data:``)."""
-    # La sérialisation passe par `dumps_utf8`, comme les deux autres chemins :
-    # un demi-substitut Unicode y faisait lever l'encodeur, et le flux mourait
-    # sur un événement `error` — tous les événements SUIVANTS jetés, y compris
-    # `message_stop`, donc un client qui attend sans fin. Troisième implantation
-    # d'une même règle, et la seule qui ne l'avait pas héritée.
-    etype = str(event.get("type", "message"))
-    return (b"event: " + etype.encode("utf-8") + b"\ndata: "
+    # Les DEUX moitiés — le nom et la charge — passent par le même encodeur. Un
+    # demi-substitut Unicode y faisait lever l'encodage, et ici l'échec ne coûte
+    # pas un événement mais le FLUX : le générateur émet une erreur et rend la
+    # main, donc tout ce qui suit est perdu, `message_stop` compris, et le
+    # client attend sans fin. Router la charge et laisser le nom sur
+    # `str.encode` a reproduit le défaut dans la même fonction, une ligne plus
+    # haut. `dumps_utf8` rend une chaîne JSON dont on retire les guillemets : un
+    # nom ordinaire, accents compris, ressort octet pour octet, et un `\n` ou un
+    # `\r` glissé dedans est échappé au lieu de couper le bloc en deux.
+    etype = dumps_utf8(str(event.get("type", "message")))[1:-1]
+    return (b"event: " + etype + b"\ndata: "
             + dumps_utf8(event, separators=(",", ":")) + b"\n\n")
 
 
@@ -71,9 +86,9 @@ def iter_blocks(chunk: str, buffer: str) -> tuple[list[str], str]:
         blocks.append(buffer[:found.start()])
         buffer = buffer[found.end():]
     # Une coupure de chunk au milieu d'un `\r\n` peut laisser un `\n` en tête
-    # du bloc suivant. `parse_sse_block` s'appuie sur `splitlines`, qui ignore
-    # une ligne vide : sans effet. Retenir le `\r` en attendant la suite
-    # perdrait, lui, le dernier bloc d'un flux qui se termine par `\r\r`.
+    # du bloc suivant. Sans effet : `parse_sse_block` ne retient que les lignes
+    # commençant par `data:`. Retenir le `\r` en attendant la suite perdrait,
+    # lui, le dernier bloc d'un flux qui se termine par `\r\r`.
     if len(buffer) > MAX_TAMPON:
         raise FluxSSEInvalide(
             f"aucun séparateur SSE après {len(buffer)} octets : flux amont "

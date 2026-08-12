@@ -239,7 +239,15 @@ class JsonRpcTransform:
                 rendu[cle] = self._donnees(valeur, transformer,
                                            routage=cle == "params")
             else:
-                rendu[cle] = self._libre(valeur, transformer)
+                # La CLÉ passe par le lecteur de charges comme partout ailleurs.
+                # Ce niveau-ci était le seul à la recopier verbatim : une clé
+                # supplémentaire au niveau message — un serveur en ajoute pour
+                # sa télémétrie — sortait telle quelle, et n'était pas restaurée
+                # au retour. Quatrième position que les tests ignoraient, dans
+                # le même fichier ; le docstring du module dit pourtant qu'une
+                # clé est du protocole par sa POSITION, jamais par son nom.
+                _poser(rendu, self._chaine(cle, transformer),
+                       self._libre(valeur, transformer))
         return rendu
 
     def _donnees(self, noeud, transformer, *, routage: bool):

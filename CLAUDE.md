@@ -1802,6 +1802,45 @@ rather than a stream timeout.
 the branch requires `content-type: application/json` and an empty body makes
 `upstream.json()` raise, so it fails closed on a 502, before as after the change.
 
+## Round 20 (2026-08-12) — models alternated, and the twin was one line up
+
+First round with the agent models ALTERNATED (opus and fable, jo's call). Two
+agents found the same defect by different routes — one attacking the code, the
+other attacking the proofs — which is what the alternation was for.
+
+**The twin of the round-19 fix was in the SAME function, one line above.**
+Round 19 routed the `data:` payload through the safe encoder and left the
+`event:` name on `str.encode`: a type carrying a lone surrogate raised there,
+with the identical consequence — the whole stream lost, `message_stop` never
+delivered, client waiting forever. **And my own witness lied**: it exercised only
+the dict shape of `type`, whose representation is pure ASCII, so it survives
+trivially. Routing the name through the same encoder also closes an SSE
+injection the fable agent measured: a `\n\n` in the type produced a block
+separator on the wire, so the client read TWO blocks where one was sent.
+
+**A block that fails to parse goes out VERBATIM**, so its surrogates are never
+restored and the operator reads a fictional name with nothing to tell them.
+`parse_sse_block` split lines with `str.splitlines`, which also splits on
+U+2028, U+2029, U+0085 and the file separators — which the BLOCK separator does
+not recognise. `json.dumps` does not escape them outside ASCII mode, so an
+ordinary text carrying one was enough. Line splitting now follows the SSE spec
+and nothing else.
+
+**At message level the KEY was copied verbatim** — fourth position the tests
+ignored, in the same file. A key that is neither envelope nor data had its value
+transformed and its name copied as is, so an extra key added by a server for its
+telemetry left in the clear and was not restored on the way back. The module
+docstring already said a key is protocol by its POSITION, never by its name.
+
+**Walker — proven, fix HELD pending jo (rule 2).** `dependencies` accepts TWO
+forms in JSON Schema draft-04/06/07: a list of property names (a contract, so
+verbatim is right) or a full SUB-SCHEMA. The walker classes it structural and
+copies it verbatim in both cases, so descriptions, defaults and enums inside the
+schema form leave in the clear — and the walker never even sees the text, so
+there is no vault entry and nothing to count. The split into
+`dependentRequired`/`dependentSchemas` dates from 2019-09: everything generated
+from OpenAPI 3.0, which is draft-04 based, uses the leaking form.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

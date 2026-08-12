@@ -901,3 +901,28 @@ def test_a_well_shaped_envelope_is_still_verbatim(transform):
         rendu = _sortant(transform, {"jsonrpc": "2.0", "id": identifiant,
                                      "method": "x", "params": {}})
         assert rendu["id"] == identifiant
+
+
+
+@pytest.mark.parametrize("sens", ["outgoing", "incoming"])
+def test_an_extra_key_at_message_level_is_data_too(transform, sens):
+    """HAUT dans les deux sens — QUATRIEME position que les tests ignoraient,
+    dans le meme fichier.
+
+    Au niveau message, les cles qui ne sont ni de l'enveloppe ni des donnees
+    tombaient dans `_libre` avec leur VALEUR transformee mais leur CLE recopiee
+    telle quelle. Un serveur qui ajoute une cle pour sa telemetrie faisait donc
+    sortir une valeur reelle, et ne la voyait pas restaurer au retour.
+
+    Le docstring du module dit pourtant qu'une cle est du protocole par sa
+    POSITION, jamais par son nom : ce niveau-ci protegeait par le NOM
+    (enveloppe ou donnees) puis recopiait le reste comme si c'en etait aussi.
+    """
+    porte = "acme-billing" if sens == "outgoing" else "cedar-vault"
+    attendu = "cedar-vault" if sens == "outgoing" else "acme-billing"
+    message = {"jsonrpc": "2.0", "id": 1, "method": "x", "params": {},
+               porte: {"trace": "42"}}
+    sortie = getattr(transform, sens)(
+        "h", {}, json.dumps(message).encode()).decode()
+    assert porte not in sortie, sortie
+    assert attendu in sortie, sortie

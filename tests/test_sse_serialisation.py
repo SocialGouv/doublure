@@ -40,7 +40,72 @@ def test_la_forme_compacte_et_l_utf8_sont_preserves():
     assert b'": "' not in rendu, "la forme compacte est perdue"
 
 
-def test_le_type_reste_lisible_meme_s_il_n_est_pas_une_chaine():
-    """Un amont hostile peut mettre n'importe quoi dans `type` ; l'en-tête de
-    l'événement doit rester encodable."""
-    assert encode_sse({"type": {"a": 1}}).startswith(b"event: {'a': 1}\n")
+@pytest.mark.parametrize("etype", [
+    {"a": 1},                    # forme non scalaire
+    "evil\ud800type",            # LA forme qui manquait : un demi-substitut
+    "text_delta\udfff",
+])
+def test_le_type_reste_encodable_quoi_qu_il_porte(etype):
+    """Un amont hostile met ce qu'il veut dans `type`, et l'en-tête doit rester
+    encodable.
+
+    Ce test ne couvrait QUE la forme dict, dont la représentation est de l'ASCII
+    pur : elle survit trivialement. La forme qui compte — une chaîne portant un
+    demi-substitut — levait sur la ligne d'en-tête, une ligne au-dessus du
+    correctif qui venait de fermer la charge. Même fonction, même commit : le
+    témoin mentait en n'exerçant que la moitié qui ne pouvait pas échouer."""
+    rendu = encode_sse({"type": etype})
+    assert rendu.startswith(b"event: ")
+    assert rendu.endswith(b"\n\n")
+
+
+def test_un_type_ordinaire_ressort_octet_pour_octet():
+    """L'AUTRE MOITIÉ : le passage par l'encodeur sûr ne doit rien changer à un
+    nom d'événement normal, accents compris."""
+    assert encode_sse({"type": "message_stop"}).startswith(b"event: message_stop\n")
+    assert encode_sse({"type": "événement"}).startswith(
+        "event: événement\n".encode("utf-8"))
+
+
+
+@pytest.mark.parametrize("separateur", ["\u2028", "\u2029", "\u0085",
+                                        "\u000b", "\u001c"])
+def test_un_bloc_reste_lisible_quels_que_soient_les_caracteres_du_TEXTE(
+        separateur):
+    """HAUT, restauration perdue en SILENCE.
+
+    Le parsage decoupait avec `str.splitlines`, qui coupe sur U+2028, U+2029,
+    U+0085 et les separateurs de fichier -- que le separateur de BLOCS, lui, ne
+    reconnait pas. Or `json.dumps` ne les echappe pas hors mode ASCII : un tel
+    caractere dans un texte faisait echouer le parsage, et **un bloc non parse
+    part VERBATIM**, donc ses substituts ne sont jamais restaures et l'operateur
+    lit un nom fictif sans rien pour le lui dire.
+
+    Le decoupage suit desormais la spec SSE -- CRLF, CR, LF -- et rien d'autre.
+    """
+    from anonproxy.sse import parse_sse_block
+
+    texte = f"avant{separateur}apres"
+    bloc = "event: x\ndata: " + json.dumps({"type": "x", "t": texte},
+                                           ensure_ascii=False)
+    lu = parse_sse_block(bloc)
+    assert lu is not None, repr(bloc)
+    assert lu["t"] == texte
+
+
+@pytest.mark.parametrize("fin", ["\r\n", "\r", "\n"])
+def test_les_trois_fins_de_ligne_de_la_spec_sont_reconnues(fin):
+    """L'AUTRE MOITIE : restreindre le decoupage ne doit pas perdre une fin de
+    ligne que la spec autorise."""
+    from anonproxy.sse import parse_sse_block
+
+    assert parse_sse_block(f'event: x{fin}data: {{"type":"x"}}') == {"type": "x"}
+
+
+@pytest.mark.parametrize("injecte", ["a\n\nb", "a\rb", "x\ndata: faux"])
+def test_un_type_ne_peut_pas_couper_le_bloc_en_deux(injecte):
+    """Un saut de ligne double dans le nom d'evenement produisait un SEPARATEUR
+    de bloc sur le fil : le client lisait DEUX blocs la ou on en emettait un. Le
+    nom passant par l'encodeur JSON, la coupure est echappee."""
+    rendu = encode_sse({"type": injecte})
+    assert rendu.count(b"\n\n") == 1, rendu
