@@ -304,3 +304,61 @@ def test_a_deeply_nested_body_is_refused_instead_of_killing_the_stack(transform)
     assert len(profond) < 20_000
     with pytest.raises(BinaryBody, match="trop profond"):
         transform.outgoing("h", {}, profond.encode())
+
+
+@pytest.mark.parametrize("suffixe,nom", [
+    (b"\x00", "un octet nul"),
+    (b"\x01\x02", "deux octets de contrôle"),
+    (bytes(range(1, 32)), "trente-et-un octets de contrôle"),
+])
+def test_no_shape_guard_can_switch_the_substitution_off(transform, suffixe, nom):
+    """CRITIQUE. Le garde-fou « est-ce que ça ressemble à du texte ? » que
+    j'avais ajouté — refus sur un octet nul ou plus de 5 % de contrôles — était
+    lui-même la fuite : l'amont glissait UN octet nul et la substitution
+    disparaissait. Silencieuse, comme toujours dans cette classe.
+
+    Son propre commentaire énonçait la règle qu'il violait : se tromper vers le
+    binaire laisse sortir SANS TRACE, se tromper vers le texte corrompt
+    VISIBLEMENT. Un garde-fou dont l'échec est silencieux et que l'attaquant
+    déclenche à volonté n'en est pas un.
+
+    Ce test vise le MÉCANISME et pas les trois formes : toute garde ajoutée
+    par-dessus le décodage le rouvrirait."""
+    import base64
+
+    charge = base64.b64encode(b"db-01.acme.internal" + suffixe).decode()
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "params": {"blob": charge}}).encode()
+    rendu = json.loads(transform.outgoing("h", {}, corps))
+    sorti = base64.b64decode(rendu["params"]["blob"])
+    assert b"db-01.acme.internal" not in sorti, f"{nom} : {sorti!r}"
+    assert b"hote-fictif.test" in sorti, sorti
+
+
+@pytest.mark.parametrize("sens", ["incoming", "outgoing"])
+def test_two_keys_converging_never_lose_a_pair(transform, sens):
+    """HAUT, perte SILENCIEUSE, dans les DEUX sens. Deux clés distinctes qui
+    convergent après transformation : la seconde écrasait la première et une
+    valeur disparaissait du message, sans exception ni compteur.
+
+    Au retour, c'est ce que le serveur MCP a réellement répondu qui n'arrive
+    jamais à l'opérateur — sur le canal que ce module existe pour protéger. Le
+    walker Anthropic avait ce garde ; celui-ci ne l'avait pas. Un résidu
+    accepté se compte, une perte de donnée se refuse."""
+    t = JsonRpcTransform(to_surrogate=lambda s: "meme" if s == "cle_a" else s,
+                         to_real=lambda s: "meme" if s == "cle_a" else s)
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {"cle_a": "perdue", "meme": "gardée"}}).encode()
+    with pytest.raises(BinaryBody, match="collision de clés"):
+        getattr(t, sens)("h", {}, corps)
+
+
+def test_the_same_collision_is_caught_at_any_depth(transform):
+    """`_libre` récurse : le garde doit valoir à chaque niveau, pas seulement
+    au premier."""
+    t = JsonRpcTransform(to_surrogate=lambda s: "meme" if s == "cle_a" else s,
+                         to_real=lambda s: s)
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1, "params": {"arguments": {
+        "profond": {"cle_a": "perdue", "meme": "gardée"}}}}).encode()
+    with pytest.raises(BinaryBody, match="collision de clés"):
+        t.outgoing("h", {}, corps)

@@ -105,7 +105,20 @@ def _fichier_de_portee(racine: Path, portee: str, scope_key: str,
     """
     if portee == "global":
         return racine / "global.json"
-    exact = "\x1f".join((portee, scope_key, session or ""))
+    # La SESSION n'entre que dans la portée session. L'avoir mise partout
+    # fragmentait la portée PROJET par session : une règle de projet cessait de
+    # s'appliquer dès que `ANONPROXY_SESSION` changeait — c'est-à-dire à chaque
+    # session, ce qui est sa raison d'être — et « projet sert de défaut à
+    # session » ne voulait plus rien dire.
+    champs = (portee, scope_key) if portee != "session" else \
+        (portee, scope_key, session or "")
+    # Chaque champ préfixé par sa LONGUEUR. Un séparateur seul n'est pas plus
+    # injectif qu'une substitution de caractères : il suffit que le séparateur
+    # apparaisse dans les données. `scope_key="\x1f"` et `session="\x1f"`
+    # donnaient la même chaîne, donc le même fichier, donc une révélation qui
+    # traverse — la classe même que ce nommage devait fermer, une couche plus
+    # bas. Les deux valeurs viennent de variables d'environnement, sans filtre.
+    exact = "".join(f"{len(c)}:{c}" for c in champs)
     empreinte = hashlib.sha256(exact.encode("utf-8")).hexdigest()[:16]
     lisible = re.sub(r"[^A-Za-z0-9_.-]", "-", scope_key)[:40].strip("-.") or "portee"
     if portee == "session":

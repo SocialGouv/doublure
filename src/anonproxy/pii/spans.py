@@ -21,7 +21,7 @@ _LIAISONS = set("-'’")
 #: Espaces qui marquent une STRUCTURE, donc ne relient rien : la tabulation
 #: sépare des colonnes, les sauts de ligne des lignes. Fusionner à travers
 #: elles collerait deux personnes distinctes en une seule entité.
-_SEPARATEURS_STRUCTURE = set("\t\n\r\v\f\x1c\x1d\x1e\x85  ")
+_SEPARATEURS_STRUCTURE = set("\t\n\r\v\f\x1c\x1d\x1e\x1f\x85  ")
 #: Au-delà, ce n'est plus une liaison mais du texte entre deux entités.
 _ECART_MAX = 2
 #: Le modèle rend volontiers l'espace qui précède le mot.
@@ -225,6 +225,14 @@ def merge_fragments(spans: list[dict], text: str) -> list[dict]:
     # faisait un `IndexError` dans le recalage, que le client ne rattrape pas :
     # 500 non structuré, alors que le contrat promet un refus fail-closed.
     for span in spans:
+        # Le champ ABSENT relevait de la même promesse et levait pourtant un
+        # `KeyError` plus loin, dans la fusion : l'invariant était écrit et pas
+        # tenu. Le détecteur produit toujours ces clés — c'est justement
+        # pourquoi personne ne l'aurait vu avant qu'il change.
+        manquantes = {"start", "end", "type", "score"} - set(span)
+        if manquantes:
+            raise ValueError(
+                f"span incomplète : {sorted(manquantes)} manquant(s)")
         if not 0 <= span["start"] <= span["end"] <= len(text):
             raise ValueError(
                 f"span hors du texte : [{span['start']}, {span['end']}] "

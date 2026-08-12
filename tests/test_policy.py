@@ -512,12 +512,10 @@ def test_la_meme_portee_se_retrouve_bien(tmp_path):
     (("proj:client", None), ("proj-client", None)),
     # `/` → `_`
     (("team/prod", None), ("team_prod", None)),
-    # le même sur l'identifiant de session
-    (("proj", "s/1"), ("proj", "s_1")),
     # le pire : un PROJET nommé comme l'infixe de session d'un autre
     (("acme-session-prod", None), ("acme", "prod")),
 ])
-def test_deux_portees_distinctes_n_ecrivent_jamais_le_meme_fichier(tmp_path, a, b):
+def test_deux_projets_distincts_n_ecrivent_jamais_le_meme_fichier(tmp_path, a, b):
     """CRITIQUE. **Substituer des caractères ne peut pas être injectif** : des
     portées distinctes tombaient sur le même fichier, donc une décision
     « révéler » de l'une s'appliquait à l'autre.
@@ -527,7 +525,13 @@ def test_deux_portees_distinctes_n_ecrivent_jamais_le_meme_fichier(tmp_path, a, 
     `acme-session-prod` avec la session `prod` du projet `acme` — à travers la
     portée ET le scope_key. Corriger un schéma d'échappement par un autre
     schéma d'échappement reproduit la classe ; ce qui décide est désormais
-    l'empreinte du tuple exact."""
+    l'empreinte du tuple exact.
+
+    Deux SESSIONS d'un même projet ne sont PAS traitées ici : elles partagent
+    délibérément leur fichier de portée projet, sinon une règle de projet ne
+    vaudrait que pour la session qui l'a posée. C'est
+    `test_une_regle_de_projet_vaut_dans_une_autre_session` qui tient ce
+    bout-là."""
     (scope_a, sess_a), (scope_b, sess_b) = a, b
     racine = tmp_path / "policy"
     pa = Policy(racine=racine, master_key=MASTER, scope_key=scope_a, session=sess_a)
@@ -573,3 +577,43 @@ def test_un_reglage_d_environnement_invalide_refuse_le_demarrage(tmp_path, monke
     monkeypatch.setenv("ANONPROXY_DOMAINES_FICTIFS", "n_importe")
     with pytest.raises(ReglageInvalide):
         politique.reglages_resolus()
+
+
+def test_le_separateur_de_l_empreinte_ne_peut_pas_etre_injecte(tmp_path):
+    """CRITIQUE. Le nommage par empreinte joignait les champs par `\\x1f` —
+    donc dépendait, implicitement, de ce que ce caractère n'apparaisse jamais
+    dans les données. Or `scope_key` et `session` viennent de variables
+    d'environnement, sans filtre : `scope_key="\\x1f"` et `session="\\x1f"`
+    produisaient la MÊME chaîne, donc le même fichier, donc une révélation qui
+    traverse.
+
+    C'est la classe de la veille, une couche plus bas : **un séparateur seul
+    n'est pas plus injectif qu'une substitution de caractères** tant qu'il peut
+    apparaître dans ce qu'il sépare. Chaque champ est maintenant préfixé par sa
+    longueur."""
+    racine = tmp_path / "policy"
+    a = Policy(racine=racine, master_key=MASTER, scope_key="\x1f", session=None)
+    b = Policy(racine=racine, master_key=MASTER, scope_key="", session="\x1f")
+    for portee in ("projet", "session"):
+        a.definir(portee, "type", "HOSTNAME", Decision.REVELER)
+    assert b.decide("HOSTNAME", "infra", HOTE)[0] is Decision.ANONYMISER
+
+
+def test_une_regle_de_projet_vaut_dans_une_autre_session(tmp_path):
+    """HAUT, FAUX POSITIF que j'ai introduit la veille. En faisant entrer la
+    session dans l'empreinte de TOUTES les portées, la portée PROJET se
+    fragmentait par session : une règle de projet cessait de s'appliquer dès
+    que `ANONPROXY_SESSION` changeait — c'est-à-dire à chaque session, ce qui
+    est sa raison d'être. « Projet sert de défaut à session » ne voulait plus
+    rien dire, et la portée projet devenait synonyme de la portée session."""
+    racine = tmp_path / "policy"
+    a = Policy(racine=racine, master_key=MASTER, scope_key="proj:acme",
+               session="s-A")
+    b = Policy(racine=racine, master_key=MASTER, scope_key="proj:acme",
+               session="s-B")
+    a.definir("projet", "type", "HOSTNAME", Decision.REVELER)
+    assert b.decide("HOSTNAME", "infra", HOTE)[0] is Decision.REVELER
+
+    # L'AUTRE MOITIÉ : une règle de SESSION, elle, ne traverse toujours pas.
+    a.definir("session", "type", "IP_ADDRESS", Decision.REVELER)
+    assert b.decide("IP_ADDRESS", "infra", "10.1.2.3")[0] is Decision.ANONYMISER

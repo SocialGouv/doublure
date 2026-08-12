@@ -786,3 +786,52 @@ def test_a_refusal_never_quotes_what_the_upstream_wrote(
         assert b"MARQUEUR_DE_L_AMONT" not in recu, recu[:400]
     finally:
         proxy.stop()
+
+
+def test_an_upstream_cannot_hold_an_exchange_with_interim_responses(
+        interception, autorite_origine, tmp_path):
+    """HAUT. La boucle `1xx` que je venais d'écrire n'avait aucune borne, et le
+    délai d'INACTIVITÉ ne l'attrape pas : il se réarme à chaque lecture, donc
+    une `100 Continue` complète toutes les deux minutes tient l'échange pour
+    toujours. Mesuré avant correctif : des centaines relayées, aucun refus."""
+    flot = (b"HTTP/1.1 100 Continue\r\n\r\n" * 200
+            + b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n"
+              b"connection: close\r\n\r\nok")
+    origine, proxy = _monter(interception, autorite_origine, tmp_path, [flot])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu.count(b"100 Continue") <= 8, recu.count(b"100 Continue")
+        assert b"502" in recu, recu[-300:]
+        assert b"200 OK" not in recu, "la réponse finale ne doit pas être servie"
+    finally:
+        proxy.stop()
+
+
+@pytest.mark.parametrize("valeur,attendu", [
+    # Une attente qu'on ne sait pas honorer : 417, tout de suite.
+    (b"mywait", b"417"),
+    (b"100-continue, mywait", b"417"),
+    # Celle qu'on sait honorer : on répond nous-mêmes et l'échange continue.
+    (b"100-continue", b"100 Continue"),
+    (b"100-Continue", b"100 Continue"),
+])
+def test_an_expectation_is_answered_never_silently_dropped(
+        interception, autorite_origine, tmp_path, valeur, attendu):
+    """HAUT, FAUX POSITIF. Je retirais l'en-tête `Expect` INCONDITIONNELLEMENT
+    avant même de regarder ce qu'il portait. Une attente autre que
+    `100-continue` disparaissait donc en silence : l'amont ne pouvait plus
+    rendre le 417 que la RFC lui doit, et un client qui attend son accusé
+    restait bloqué jusqu'au délai — 502 sur une requête légitime.
+
+    La transmettre n'est pas possible non plus : l'interception doit lire le
+    corps avant d'écrire à l'amont. Un intermédiaire qui ne peut ni honorer ni
+    relayer une attente répond 417, et le client l'apprend tout de suite."""
+    origine, proxy = _monter_interim(interception, autorite_origine, tmp_path)
+    try:
+        recu = _une_requete(proxy, interception, origine.port,
+                            b"POST /x HTTP/1.1\r\nhost: x\r\ncontent-length: 5"
+                            b"\r\nexpect: " + valeur + b"\r\nconnection: close"
+                            b"\r\n\r\nhello")
+        assert attendu in recu, recu[:300]
+    finally:
+        proxy.stop()

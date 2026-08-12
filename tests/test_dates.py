@@ -139,3 +139,66 @@ def test_a_span_holding_no_date_falls_back_and_that_is_a_RESIDUAL(m):
     Ce qui reste ici est le résidu nommé : un span sans aucune date dedans.
     """
     assert sub(m, "le jour de la Saint-Glinglin") != "le jour de la Saint-Glinglin"
+
+
+# --------------------------------------------------------------------------- #
+# Tour 11 — les formes qui retombaient en MOT
+# --------------------------------------------------------------------------- #
+from anonproxy.surrogates import dates as _dates  # noqa: E402
+
+
+@pytest.mark.parametrize("ecrit,attendu", [
+    ("3 fev 2020", dt.date(2020, 2, 3)),        # sans accent, abrégé
+    ("3 fév. 2020", dt.date(2020, 2, 3)),       # abrégé avec point
+    ("15 Sept 2020", dt.date(2020, 9, 15)),
+    ("2020/03/15", dt.date(2020, 3, 15)),       # année d'abord
+    ("March 3, 2020", dt.date(2020, 3, 3)),     # mois d'abord, anglophone
+    ("Mar. 3 2020", dt.date(2020, 3, 3)),
+    ("03/15/2020", dt.date(2020, 3, 15)),       # jour d'abord IMPOSSIBLE ici
+])
+def test_une_forme_de_date_reconnue_de_plus(ecrit, attendu):
+    """Ces formes retombaient sur la substitution GÉNÉRIQUE, donc sortaient en
+    MOT : le modèle recevait un nom d'hôte là où le document annonçait une
+    date, et cessait de pouvoir répondre « quand ». Rien ne fuyait — c'est la
+    nature du substitut qui était perdue (D1)."""
+    lu = _dates.parse(ecrit)
+    assert lu is not None, f"{ecrit!r} retombe encore en mot"
+    assert lu[0] == attendu
+
+
+@pytest.mark.parametrize("ecrit,decalage,attendu", [
+    # Un nom COMPLET reste complet : la longueur se compare au mois de DÉPART,
+    # pas à celui d'arrivée — sinon `March` devient `Janua`.
+    ("15 March 2020", 321, "30 January 2021"),
+    ("15 mars 2020", 321, "30 janvier 2021"),
+    ("12 MARS 2020", 321, "27 JANVIER 2021"),
+    # Une ABRÉVIATION reste une abréviation, de la même longueur.
+    ("3 fev 2020", 321, "20 déc 2020"),
+    ("3 fév. 2020", 321, "20 déc. 2020"),
+    ("Mar. 3 2020", 321, "Jan. 18 2021"),
+    ("March 3, 2020", 321, "January 18, 2021"),
+    # Les formes numériques gardent leur séparateur et leur ordre.
+    ("2020/03/15", 321, "2021/01/30"),
+    ("03/15/2020", 321, "01/30/2021"),
+    ("15/03/2020", 321, "30/01/2021"),
+    # `1er` ne vaut qu'au premier du mois.
+    ("1er janvier 2020", 31, "1er février 2020"),
+    ("1er janvier 2020", 321, "17 novembre 2020"),
+])
+def test_la_forme_d_ecriture_survit_au_decalage(ecrit, decalage, attendu):
+    """D1 : l'opérateur et le modèle doivent lire une date écrite comme celle
+    qu'ils ont remplacée."""
+    jour, rendre = _dates.parse(ecrit)
+    assert rendre(jour + dt.timedelta(days=decalage)) == attendu
+
+
+@pytest.mark.parametrize("ecrit", [
+    "3 jui 2020",      # juin ou juillet : deviner fabriquerait une date fausse
+    "15/03/20",        # année sur deux chiffres : le siècle est un pari
+    "32/01/2020",      # pas une date
+    "3 ma 2020",       # deux lettres : mars, mai
+])
+def test_ce_qui_reste_ambigu_n_est_pas_deviné(ecrit):
+    """L'unicité d'une abréviation est VÉRIFIÉE, jamais supposée. Ce qui n'est
+    pas reconnu retombe en mot — visible, et c'est le résidu documenté."""
+    assert _dates.parse(ecrit) is None

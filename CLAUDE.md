@@ -1338,6 +1338,62 @@ a round-9 lead**: fragments now join across any horizontal whitespace — a
 non-breaking space, which is standard French typography, left `Marguerite
 Vasseur` as two people.
 
+## Round 11 (2026-08-12) — the guard I had just written WAS the leak
+
+Four narrow perimeters again, and one of them deliberately aimed at the half
+this loop never attacks: **the RETURN**. Eight defects, **six of them written
+in the previous two hours**.
+
+**`_semble_du_texte` — CRITICAL, and the shape of it is the lesson.** Round 10
+made the DECODE decide whether a base64 payload is text, then added a guard on
+top: refuse if it carries a NUL byte or over 5 % control characters, so a short
+binary that decodes by luck is not corrupted. The upstream only had to slip in
+ONE NUL byte to switch the substitution off — real value out, no vault entry,
+nothing to count. The docstring two lines above stated the rule the code broke:
+*erring toward binary leaks silently, erring toward text corrupts visibly.*
+**A guard whose failure is silent and which the attacker triggers at will is
+not a guard.** Removed; the UTF-8 decode is the only judge.
+
+**A separator alone is no more injective than a substitution.** The fingerprint
+naming from round 10 joined its fields with `\x1f` — so it depended, silently,
+on that byte never appearing in the data. `scope_key` and `session` come
+straight from environment variables: `scope_key="\x1f"` and `session="\x1f"`
+produced the same file, so a *reveal* crossed. Same class as the day before,
+one layer down. Each field is now length-prefixed.
+
+**And that same fix had broken the scope hierarchy.** Putting the session into
+EVERY non-global fingerprint fragmented the PROJECT scope by session: a project
+rule stopped applying as soon as `ANONPROXY_SESSION` changed — which is every
+session, that being its whole point. "Project is the default for session" meant
+nothing any more. Caught by a test of mine that had to be turned: two sessions
+of one project SHOULD share their project file.
+
+**Two silent key-collision losses, in two channels.** The walker's guard was
+asymmetric — it required the current key to have been substituted, so a
+substituted key landing on `hostname` followed by the REAL `hostname` overwrote
+in silence: the operator read a `tool_use.input` with two arguments where the
+model emitted three. And the MCP channel had no such guard at all, in EITHER
+direction: on the way back, what the server actually answered never reached the
+operator. A dict source has no duplicate keys, so a collision can only come
+from the transformation, whichever order it arrives in.
+
+**The interim loop I had just written had no bound**, and the inactivity
+deadline cannot catch it: it rearms on every read, so one complete
+`100 Continue` every two minutes holds an exchange forever. Bounded at eight.
+**And `Expect` was stripped unconditionally** before its value was even read:
+an expectation other than `100-continue` vanished, the upstream could no longer
+send the 417 the RFC owes the client, and a conforming client waited until the
+deadline — 502 on a legitimate request. An intermediary that can neither honour
+nor forward an expectation answers 417 itself.
+
+**Also fixed**: an incomplete span raised `KeyError` where the contract
+promises a fail-closed `ValueError` — the invariant was written and not held.
+And the six date formats that fell through to a WORD (`3 fév.`, `15 Sept`,
+`2020/03/15`, `March 3, 2020`, `03/15/2020`) are parsed, with the written form
+surviving the shift: a full name stays full, an abbreviation keeps its length,
+`1er` comes back only when the shifted date lands on the first. What stays
+ambiguous — `3 jui` (June or July), a two-digit year — is NOT guessed.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

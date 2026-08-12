@@ -148,3 +148,11 @@ def test_une_marque_de_structure_ne_relie_pas_deux_personnes(separateur, nom):
                  {"start": 10 + len(separateur), "end": len(texte),
                   "type": "PERSON", "score": 0.9}]
     assert len(merge_fragments(fragments, texte)) == 2, nom
+
+
+def test_une_span_sans_score_ni_type_est_refusee_pas_plantee():
+    """L'invariant était écrit et pas tenu : une borne hors du texte levait bien
+    `ValueError`, mais un CHAMP absent faisait un `KeyError` plus loin, dans la
+    fusion. Le contrat promet un refus fail-closed pour les deux."""
+    with pytest.raises(ValueError, match="incomplète"):
+        merge_fragments([{"start": 0, "end": 3}], "abcdef")

@@ -44,6 +44,11 @@ _MAX_CORPS = 32 * 1024 * 1024
 _SANS_CORPS = {204, 304}
 #: Au-delà, une remorque n'est plus une remorque mais un déni de service.
 _MAX_REMORQUE = 64
+#: Au-delà, ce ne sont plus des réponses intérimaires mais un amont qui tient
+#: l'échange. Le délai d'inactivité ne l'attrape pas : il se réarme à CHAQUE
+#: lecture, donc une `100 Continue` complète toutes les deux minutes suffit à
+#: durer indéfiniment. Aucun usage réel n'en enchaîne plus de quelques-unes.
+_MAX_INTERIM = 8
 #: Sans un seul octet pendant ce délai, l'échange est abandonné. C'est une
 #: INACTIVITÉ, jamais une durée : un gros corps lent reste licite tant qu'il
 #: arrive, et un appel d'outil qui calcule une minute avant de répondre aussi.
@@ -347,7 +352,25 @@ class ForwardProxy:
         try:
             ligne, entetes = _analyser(requete)
             methode = ligne.split(" ", 1)[0].upper()
-            if "100-continue" in entetes.pop("expect", "").lower():
+            attentes = [a.strip() for a in entetes.pop("expect", "").split(",")
+                        if a.strip()]
+            autres = [a for a in attentes if a.lower() != "100-continue"]
+            if autres:
+                # Une attente qu'on ne sait pas honorer. La RETIRER en silence
+                # — ce que faisait le `pop` inconditionnel — privait le client
+                # du 417 que la RFC lui doit, et le laissait attendre un accusé
+                # qui ne viendrait jamais : blocage jusqu'au délai, sur une
+                # requête légitime. La transmettre n'est pas possible non plus,
+                # puisqu'on doit lire le corps avant d'écrire quoi que ce soit
+                # à l'amont. Un intermédiaire qui ne peut ni honorer ni relayer
+                # une attente répond 417 : c'est ce que la RFC prévoit, et le
+                # client l'apprend tout de suite.
+                await self._refuser(
+                    ce, destination,
+                    f"attente non gérée par l'interception : {', '.join(autres)}",
+                    statut=b"417 Expectation Failed")
+                return False
+            if any(a.lower() == "100-continue" for a in attentes):
                 # Le client ATTEND cet accusé avant d'envoyer son corps, et
                 # nous attendions son corps : les deux côtés s'attendaient, et
                 # le blocage se terminait en 502 sur un client parfaitement
@@ -373,7 +396,7 @@ class ForwardProxy:
         # `100 Continue`, l'amont était fermé derrière, et la vraie réponse
         # n'arrivait jamais. Les deux autres étaient des refus : le contrôle de
         # résidu voyait la vraie réponse comme des octets en trop.
-        while True:
+        for interim in range(_MAX_INTERIM + 1):
             try:
                 reponse = await self._attendre(
                     self._lire_entete(al, strict=True),
@@ -403,6 +426,12 @@ class ForwardProxy:
                     ce, destination,
                     "l'amont change de protocole (101) : la suite n'est plus "
                     "relisible, et la relayer intacte serait un fail-open")
+                return False
+            if interim == _MAX_INTERIM:
+                await self._echouer(
+                    ce, destination,
+                    f"plus de {_MAX_INTERIM} réponses intérimaires sans réponse "
+                    "finale : l'amont tient l'échange")
                 return False
             # Une 1xx n'a jamais de corps : `avec_corps=False` évite aussi de
             # lui inventer un `content-length`, que la RFC lui interdit.
@@ -595,11 +624,12 @@ class ForwardProxy:
         ae.close()
 
     async def _refuser(self, ecrivain: asyncio.StreamWriter, destination: str,
-                       raison: str, verdict: Verdict = Verdict.REFUSE) -> None:
+                       raison: str, verdict: Verdict = Verdict.REFUSE,
+                       statut: bytes = b"403 Forbidden") -> None:
         self._tracer(destination, verdict, raison)
         corps = raison.encode("utf-8")
         ecrivain.write(
-            b"HTTP/1.1 403 Forbidden\r\n"
+            b"HTTP/1.1 " + statut + b"\r\n"
             b"content-type: text/plain; charset=utf-8\r\n"
             b"content-length: " + str(len(corps)).encode() + b"\r\n"
             b"connection: close\r\n\r\n" + corps)

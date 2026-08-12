@@ -831,11 +831,19 @@ def _walk(
             # l'outil se serait execute sur le nom FICTIF. Hors donnees, une
             # cle est du protocole et la renommer casserait la requete.
             cle = fn(key) if cles_libres and isinstance(key, str) else key
-            if cle != key and cle in out:
+            if cle in out:
                 # Deux cles reelles distinctes tirant le meme substitut : la
                 # seconde ecrasait la premiere et une valeur DISPARAISSAIT du
                 # corps, sans entree de coffre ni compteur pour le signaler. Un
                 # residu accepte se compte ; une perte de donnee se refuse.
+                #
+                # Le garde exigeait `cle != key`, donc ne voyait qu'UN des deux
+                # ordres. Une cle substituee ecrivant `hostname`, PUIS la cle
+                # reelle `hostname` arrivant telle quelle, ecrasait en silence :
+                # l'operateur lisait une `input` a deux arguments la ou le
+                # modele en avait emis trois. Un dict source n'a pas de cle en
+                # double — une collision dans `out` ne peut donc venir que de
+                # la substitution, quel que soit le sens.
                 raise ValueError(
                     f"collision de cles apres substitution : {cle!r} "
                     f"est deja present dans ce bloc")

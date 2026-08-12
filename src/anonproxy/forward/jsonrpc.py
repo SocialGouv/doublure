@@ -51,15 +51,38 @@ class BinaryBody(RuntimeError):
     """Ce corps n'est pas du texte : il ne peut être ni relu ni réécrit."""
 
 
-def _semble_du_texte(clair: str) -> bool:
-    """Un binaire COURT peut décoder en UTF-8 par hasard ; le substituer le
-    corromprait. Un texte réel ne porte pas d'octet nul et très peu de
-    caractères de contrôle — c'est le même discriminant que le walker utilise
-    pour choisir un jeu de caractères."""
-    if "\x00" in clair:
-        return False
-    controles = sum(1 for c in clair if c < " " and c not in "\t\n\r")
-    return controles * 20 <= len(clair)
+def _poser(rendu: dict, cle, valeur) -> None:
+    """Écrit une paire, ou REFUSE si la clé est déjà prise.
+
+    Deux clés distinctes qui convergent vers la même après transformation : la
+    seconde écrasait la première, et une valeur DISPARAISSAIT du message — dans
+    les deux sens. Au retour, c'est ce que le serveur MCP a réellement répondu
+    qui n'arrive jamais à l'opérateur, sans exception ni compteur.
+
+    Le walker Anthropic a ce garde ; ce canal-ci ne l'avait pas. Un résidu
+    accepté se compte ; une perte de donnée se refuse.
+    """
+    if cle in rendu:
+        raise BinaryBody(
+            f"collision de clés après transformation : {cle!r} est déjà "
+            "présent dans ce bloc, une valeur serait perdue")
+    rendu[cle] = valeur
+
+
+#: PAS de garde « est-ce que ça ressemble à du texte ? ». J'en avais écrit un —
+#: refus sur un octet nul ou plus de 5 % de caractères de contrôle — pour
+#: épargner un binaire court qui décoderait par hasard. Il suffisait alors de
+#: glisser UN octet nul dans la charge pour supprimer la substitution : la
+#: valeur réelle sortait, sans entrée au coffre ni rien à compter.
+#:
+#: Le commentaire juste au-dessus énonçait pourtant la règle qu'il violait —
+#: se tromper vers le binaire laisse sortir en SILENCE, se tromper vers le
+#: texte corrompt VISIBLEMENT. Un garde-fou dont l'échec est silencieux et que
+#: l'attaquant déclenche à volonté n'est pas un garde-fou.
+#:
+#: Le décodage UTF-8 reste le seul juge : un vrai binaire échoue dessus dès ses
+#: premiers octets. Résidu assumé : un binaire fait uniquement d'octets valides
+#: en UTF-8 sera traversé, donc possiblement modifié — et ça se voit.
 
 
 class JsonRpcTransform:
@@ -174,11 +197,11 @@ class JsonRpcTransform:
         est du protocole, et uniquement à ce niveau."""
         if not isinstance(noeud, dict):
             return self._libre(noeud, transformer)
-        rendu = {
-            transformer(cle) if cle not in _ROUTAGE else cle:
-                valeur if cle in _ROUTAGE else self._libre(valeur, transformer)
-            for cle, valeur in noeud.items()
-        }
+        rendu: dict = {}
+        for cle, valeur in noeud.items():
+            _poser(rendu, cle if cle in _ROUTAGE else transformer(cle),
+                   valeur if cle in _ROUTAGE
+                   else self._libre(valeur, transformer))
         # `_libre` traverse les charges encodées de ses sous-dicts ; ce
         # niveau-ci n'en faisait rien, et un serveur MCP range le contenu d'une
         # ressource DIRECTEMENT sous `result` aussi souvent que sous un
@@ -202,12 +225,12 @@ class JsonRpcTransform:
         valeur écrite par celui dont on se protège est l'anti-pattern du
         projet.
 
-        Ce qui décide est le DÉCODAGE : du base64 qui rend de l'UTF-8 propre
-        est du texte, quoi qu'on en déclare. Un binaire échoue au décodage dès
-        ses premiers octets ; s'il passe par hasard, `_semble_du_texte`
-        l'arrête. Se tromper vers le texte corrompt un binaire, ce qui se VOIT ;
-        se tromper vers le binaire laisse sortir une valeur réelle sans laisser
-        de trace.
+        Ce qui décide est le DÉCODAGE, et lui seul : du base64 qui rend de
+        l'UTF-8 propre est du texte, quoi qu'on en déclare. Se tromper vers le
+        texte corrompt un binaire, ce qui se VOIT ; se tromper vers le binaire
+        laisse sortir une valeur réelle sans laisser de trace. Tout garde-fou
+        ajouté par-dessus ce décodage penche du mauvais côté de cette asymétrie
+        — le précédent tombait sur un simple octet nul.
         """
         for champ in _CHARGES:
             valeur = source.get(champ)
@@ -217,8 +240,6 @@ class JsonRpcTransform:
                 clair = base64.b64decode(valeur, validate=True).decode("utf-8")
             except (binascii.Error, UnicodeDecodeError, ValueError):
                 continue  # pas du base64 textuel : la chaîne a déjà été traitée
-            if not _semble_du_texte(clair):
-                continue
             rendu[transformer(champ)] = base64.b64encode(
                 transformer(clair).encode("utf-8")).decode("ascii")
         return rendu
@@ -226,8 +247,9 @@ class JsonRpcTransform:
     def _libre(self, noeud, transformer):
         """Données libres : la clé est une valeur comme une autre."""
         if isinstance(noeud, dict):
-            rendu = {transformer(c): self._libre(v, transformer)
-                     for c, v in noeud.items()}
+            rendu: dict = {}
+            for c, v in noeud.items():
+                _poser(rendu, transformer(c), self._libre(v, transformer))
             return self._charge_encodee(noeud, rendu, transformer)
         if isinstance(noeud, list):
             return [self._libre(v, transformer) for v in noeud]
