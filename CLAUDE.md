@@ -1843,6 +1843,51 @@ from OpenAPI 3.0, which is draft-04 based, emits the leaking form. Fixed under
 rule 2 — the test was shown to jo first, and it reddens on the schema form while
 staying green on the list form.
 
+## Round 21 (2026-08-12) — the fifth position, and a witness that only tested the survivor
+
+**A string can carry SEVERAL payloads, and only the first was read — CRITICAL.**
+What FOLLOWED a base64 payload was merely text-substituted, never re-read as a
+string, so the first payload was protected and every one after it left encoded.
+The standard decoders stop at the first padding, which is what kept it invisible
+— but the real value CROSSES the boundary all the same, and a server that wants
+it takes it in two lines. Nothing in the clear, so nothing to count. **Fifth
+position the tests ignored**, after the value, the list, the key and the message
+level, and the only one that lives INSIDE a string. Same defect in the non-JSON
+body fallback, which applied the transformer alone.
+
+Fixing it made the sweep quadratic — 8 000 concatenated payloads held the proxy
+for eight seconds — so the number of payloads read from one string is bounded and
+the excess is REFUSED, loudly. Measured before deciding: the receivers' own
+decoders were interrogated rather than reasoned about, and that is what
+distinguished the real leak (concatenated payloads) from the false one (letters
+glued in front, which shift the alignment so that nobody, including the
+receiver, reads the value).
+
+**`None` said two different things.** `parse_sse_block` returned it both for
+"nothing to do" (keep-alive, `[DONE]`) and for "there is data and I cannot read
+it" — and the caller forwarded the block VERBATIM under a comment announcing a
+ping. Its surrogates are then never restored. Relaying stays the right call, but
+the second case now raises, is counted (`sse_illisible`) and is logged: a residual
+is counted, never silent.
+
+**Walker — the twin of `dependencies`, one keyword family away.** `default`,
+`const`, `example` and `examples` carry a literal VALUE, not a sub-schema, yet
+`in_schema` was propagated into them: the structural keywords they contain —
+`type`, `format`, `required`, `$anchor`, `dependentRequired` — were rendered
+verbatim. Twenty measured leaks, all silent. The `enum` branch a few lines above
+already traversed its members in DATA mode for exactly this reason. `default`
+objects are everywhere in a schema generated from an OpenAPI: Kubernetes CRDs,
+Terraform providers.
+
+**And the proof perimeter caught my own witness lying, for the second round
+running.** `test_un_type_ne_peut_pas_couper_le_bloc_en_deux` counted `\n\n`
+occurrences; two of its three parametrized cases passed WITHOUT the fix while
+looking like they covered it, and one of those two — a `data:` line injected
+into the event name — makes the block unparseable, so it goes out verbatim. The
+assertion now checks the ROUND TRIP and the absence of a raw line ending in the
+name line, which witnesses all four forms at once: six tests redden without the
+fix, against three before.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

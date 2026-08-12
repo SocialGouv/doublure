@@ -371,6 +371,12 @@ _ENUM_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_+-]{0,63}")
 #: Keys whose value ECHOES a member of the neighbouring `enum`.
 SCHEMA_ENUM_ECHO: frozenset[str] = frozenset({"default", "const"})
 
+#: Mots-cles dont la valeur est un LITTERAL, jamais un sous-schema. Traites
+#: comme un membre d'`enum` : en mode DONNEES, ou aucune cle n'est structurelle.
+SCHEMA_VALEURS_LITTERALES: frozenset[str] = frozenset(
+    {"default", "const", "example", "examples"}
+)
+
 
 #: A media type accepted as an enum member. The top-level registry is closed,
 #: but the `vnd.`/`prs.` tree is NOT — RFC 6838 §3.2 lets anyone register the
@@ -773,6 +779,19 @@ def _walk(
                     and isinstance(node.get("enum"), list) \
                     and value in node["enum"]:
                 out[key] = value
+                continue
+
+            # Meme raison que pour un membre d'`enum`, un cran plus loin :
+            # `default`, `const`, `example` et `examples` portent une VALEUR que
+            # le modele doit emettre, jamais un fragment de schema. Les cles
+            # qu'elle contient sont celles de la structure de l'operateur, et y
+            # propager `in_schema` rendait `type`, `format`, `required`,
+            # `$anchor` et `dependentRequired` VERBATIM. Les `default` objets
+            # sont partout dans un schema genere depuis une OpenAPI.
+            if in_schema and not in_user_data and key in SCHEMA_VALEURS_LITTERALES:
+                out[key] = value if _vocabulaire_ferme(value) else _walk(
+                    value, fn, in_user_data=True, cles_libres=True,
+                    signe_partout=signe_partout)
                 continue
 
             # Les noms de proprietes d'un schema sont un contrat avec le modele :

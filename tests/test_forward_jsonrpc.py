@@ -926,3 +926,52 @@ def test_an_extra_key_at_message_level_is_data_too(transform, sens):
         "h", {}, json.dumps(message).encode()).decode()
     assert porte not in sortie, sortie
     assert attendu in sortie, sortie
+
+
+@pytest.mark.parametrize("forme", ["collees", "separees", "trois"])
+def test_plusieurs_charges_dans_UNE_chaine_sont_toutes_lues(transform, forme):
+    """CRITIQUE — la CINQUIEME position que les tests ignoraient, et la seule
+    qui vive a l'interieur d'une chaine.
+
+    Ce qui SUIT une charge n'etait que transforme comme du TEXTE, jamais relu
+    comme une chaine : la premiere charge etait protegee et toutes les suivantes
+    partaient encodees. Le decodeur standard du recepteur s'arrete au premier
+    bourrage, ce qui a rendu le defaut invisible — mais la valeur reelle
+    TRAVERSE quand meme la frontiere, et un serveur qui la veut la prend en deux
+    lignes. Rien en clair, donc rien a compter.
+    """
+    import base64
+
+    a = base64.b64encode(b"db-01.acme.internal").decode()
+    b = base64.b64encode(b"10.1.2.3").decode()
+    c = base64.b64encode(b"acme-billing").decode()
+    valeur = {"collees": a + b, "separees": a + " -- " + b, "trois": a + b + c}[forme]
+
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": valeur}}).encode()))["result"]["v"]
+    for charge in (a, b, c):
+        assert charge not in rendu, rendu
+
+
+def test_une_charge_dans_un_corps_NON_JSON_est_lue(transform):
+    """Le repli « ce corps n'est pas du JSON, donc c'est du texte » appliquait
+    le transformateur seul : un corps qui EST une charge sortait entier."""
+    import base64
+
+    charge = base64.b64encode(b"db-01.acme.internal").decode()
+    rendu = transform.outgoing("h", {}, charge.encode()).decode()
+    assert rendu != charge
+    assert "db-01.acme.internal" not in base64.b64decode(rendu.encode()).decode()
+
+
+def test_un_nombre_deraisonnable_de_charges_est_refuse(transform):
+    """Le balayage reprend au reste apres chaque charge, donc son cout est le
+    carre de la longueur : huit mille charges collees tenaient le proxy huit
+    secondes. Refuser bruyamment vaut mieux que relayer sans avoir lu."""
+    import base64
+
+    charge = base64.b64encode(b"db-01.acme.internal").decode()
+    with pytest.raises(BinaryBody):
+        transform.outgoing("h", {}, json.dumps(
+            {"jsonrpc": "2.0", "id": 1,
+             "result": {"v": charge * 300}}).encode())

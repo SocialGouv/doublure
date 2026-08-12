@@ -1331,3 +1331,28 @@ def test_defaut_dependencies_accepte_DEUX_formes(forme, attendu_verbatim):
     else:
         assert "SECRET-HOST" not in rendu, rendu
         assert "fake-host" in rendu, rendu
+
+
+@pytest.mark.parametrize("litterale", ["default", "const", "example", "examples"])
+@pytest.mark.parametrize("interne", ["type", "format", "required", "$anchor",
+                                     "dependentRequired"])
+def test_defaut_une_valeur_litterale_n_est_pas_un_sous_schema(litterale, interne):
+    """HAUT, fuite silencieuse — la JUMELLE exacte de la branche `enum`.
+
+    `default`, `const`, `example` et `examples` portent une VALEUR que le modele
+    doit emettre, jamais un fragment de schema : les cles qu'elle contient sont
+    celles de la structure de l'operateur. En y propageant `in_schema`, les cles
+    structurelles y etaient rendues VERBATIM — et le walker ne voyait meme pas
+    le texte, donc aucune entree au coffre et rien a compter.
+
+    La branche `enum` traite deja ses membres en mode DONNEES pour cette raison
+    exacte, quelques lignes plus haut. Les `default` objets sont partout dans un
+    schema genere depuis une OpenAPI : CRD Kubernetes, provider Terraform.
+    """
+    corps = {"model": "m", "messages": [], "tools": [{
+        "name": "t", "description": "d",
+        "input_schema": {"type": "object", "properties": {"conf": {
+            "type": "object", litterale: {interne: "SECRET-HOST"}}}}}]}
+    rendu = json.dumps(walk_request(corps, marker_sub()), ensure_ascii=False)
+    assert "SECRET-HOST" not in rendu, rendu
+    assert "fake-host" in rendu, rendu

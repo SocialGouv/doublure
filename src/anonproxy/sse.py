@@ -16,11 +16,18 @@ from typing import Any
 _LIGNE = re.compile(r"\r\n|\r|\n")
 
 
+class BlocSSEIllisible(RuntimeError):
+    """Ce bloc porte des donnees, et elles ne se parsent pas."""
+
+
 def parse_sse_block(block: str) -> dict[str, Any] | None:
     """Extrait le JSON d'un bloc SSE (``event:`` + ``data:``).
 
     Retourne ``None`` pour les blocs sans données exploitables (commentaires
-    de keep-alive, ``data: [DONE]``).
+    de keep-alive, ``data: [DONE]``), et lève `BlocSSEIllisible` quand il y a
+    des données que l'on ne sait pas lire — deux situations que le même `None`
+    confondait, la seconde partant alors verbatim sous un commentaire qui
+    annonçait un ping.
     """
     # Le découpage en LIGNES suit la spec SSE — `\r\n`, `\r`, `\n` — et rien
     # d'autre. `str.splitlines` coupe AUSSI sur U+2028, U+2029, U+0085 et les
@@ -39,8 +46,15 @@ def parse_sse_block(block: str) -> dict[str, Any] | None:
         return None
     try:
         return json.loads(payload)
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as exc:
+        # `None` disait DEUX choses : « rien a faire » (ping, commentaire,
+        # `[DONE]`) et « il y a des donnees, je ne sais pas les lire ». Le
+        # second part alors VERBATIM, donc ses substituts ne sont jamais
+        # restaures et l'operateur lit un nom fictif — un fail-open silencieux
+        # dans le sens du retour, sous un commentaire qui annoncait un ping.
+        raise BlocSSEIllisible(
+            f"bloc SSE porteur de {len(payload)} octets de donnees illisibles"
+        ) from exc
 
 
 def encode_sse(event: dict[str, Any]) -> bytes:

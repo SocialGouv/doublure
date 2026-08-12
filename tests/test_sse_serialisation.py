@@ -68,8 +68,10 @@ def test_un_type_ordinaire_ressort_octet_pour_octet():
 
 
 
-@pytest.mark.parametrize("separateur", ["\u2028", "\u2029", "\u0085",
-                                        "\u000b", "\u001c"])
+# `\u000b` et `\u001c` sont ECHAPPES par `json.dumps` : ils n'apparaissent
+# jamais bruts dans un bloc, donc ils ne temoigneraient de rien. Seuls figurent
+# ici les caracteres que `splitlines` coupe ET que le JSON laisse passer.
+@pytest.mark.parametrize("separateur", ["\u2028", "\u2029", "\u0085"])
 def test_un_bloc_reste_lisible_quels_que_soient_les_caracteres_du_TEXTE(
         separateur):
     """HAUT, restauration perdue en SILENCE.
@@ -102,10 +104,51 @@ def test_les_trois_fins_de_ligne_de_la_spec_sont_reconnues(fin):
     assert parse_sse_block(f'event: x{fin}data: {{"type":"x"}}') == {"type": "x"}
 
 
-@pytest.mark.parametrize("injecte", ["a\n\nb", "a\rb", "x\ndata: faux"])
-def test_un_type_ne_peut_pas_couper_le_bloc_en_deux(injecte):
-    """Un saut de ligne double dans le nom d'evenement produisait un SEPARATEUR
-    de bloc sur le fil : le client lisait DEUX blocs la ou on en emettait un. Le
-    nom passant par l'encodeur JSON, la coupure est echappee."""
+@pytest.mark.parametrize("injecte", ["a\n\nb", "a\rb", "x\ndata: faux",
+                                    "x\r\ndata: faux"])
+def test_un_type_ne_peut_pas_alterer_la_STRUCTURE_du_bloc(injecte):
+    """Le nom d'evenement ne doit pouvoir ni couper le bloc, ni y injecter une
+    ligne.
+
+    L'assertion porte sur l'ALLER-RETOUR, pas sur le compte de `\n\n` : celui-ci
+    ne temoignait que d'une des deux attaques, et deux parametres sur trois
+    passaient donc SANS le correctif tout en ayant l'air de le couvrir. Or
+    `x\ndata: faux` injecte une ligne `data:` qui rend le bloc illisible — et un
+    bloc qu'on ne parse pas part VERBATIM, substituts non restaures.
+
+    Relire ce qu'on emet prend les trois formes d'un coup : la coupure de bloc,
+    l'injection de ligne, et le `\r` nu."""
+    from anonproxy.sse import iter_blocks, parse_sse_block
+
     rendu = encode_sse({"type": injecte})
-    assert rendu.count(b"\n\n") == 1, rendu
+    # La ligne du NOM ne porte aucune fin de ligne brute : un client conforme
+    # decoupe sur `\r` seul autant que sur `\n`, et lirait alors un autre nom
+    # que celui qu'on emet. Notre propre parseur, lui, tolere ce cas — d'ou
+    # cette assertion, sans laquelle la forme `\r` nu ne temoignerait de rien.
+    ligne_nom = rendu.split(b"\ndata: ", 1)[0]
+    assert b"\r" not in ligne_nom and b"\n" not in ligne_nom[7:], rendu
+
+    blocs, reste = iter_blocks(rendu.decode("utf-8"), "")
+    assert len(blocs) == 1, blocs
+    assert reste == ""
+    assert parse_sse_block(blocs[0]) == {"type": injecte}
+
+
+def test_un_bloc_illisible_est_COMPTE_pas_confondu_avec_un_ping():
+    """`None` disait DEUX choses : « rien a faire » et « des donnees que je ne
+    sais pas lire ».
+
+    Le second part VERBATIM, donc ses substituts ne sont jamais restaures et
+    l'operateur lit un nom fictif — sous un commentaire du code qui annoncait
+    un ping. Relayer reste le bon choix (couper le flux serait pire), mais un
+    residu se COMPTE, il ne se tait pas."""
+    from anonproxy.sse import BlocSSEIllisible, parse_sse_block
+
+    # Rien a faire : ce sont bien des None.
+    assert parse_sse_block(": keep-alive") is None
+    assert parse_sse_block("data: [DONE]") is None
+    assert parse_sse_block("event: x") is None
+
+    # Des donnees illisibles : c'est autre chose, et ca se dit.
+    with pytest.raises(BlocSSEIllisible):
+        parse_sse_block('event: x\ndata: {"type": "x"')

@@ -84,6 +84,12 @@ _HORS_ALPHABET_NI_BOURRAGE = re.compile(r"[^A-Za-z0-9+/]")
 #: font 200 Mio en sortie, mesurés.
 _MAX_CLAIR = 32 * 1024 * 1024
 
+#: Charges encodées lues dans UNE chaîne. Le balayage reprend au reste
+#: après chaque charge, donc son coût est le carré de la longueur : huit
+#: mille charges collées tenaient le proxy huit secondes. Aucune forme
+#: légitime n'en aligne autant dans une seule chaîne.
+_MAX_CHARGES = 256
+
 
 def _decoder(base64_lu: str) -> str | None:
     """Le texte que ces caractères encodent, ou None si ce n'en est pas."""
@@ -213,8 +219,11 @@ class JsonRpcTransform:
             message = json.loads(texte)
         except (json.JSONDecodeError, ValueError):
             # Un corps tronqué ou un format tiers reste du TEXTE : le protéger
-            # entier est le sens sûr, et ça ne tue pas la connexion.
-            return transformer(texte).encode("utf-8")
+            # entier est le sens sûr, et ça ne tue pas la connexion. Il passe
+            # par `_chaine`, pas par le transformateur seul : une charge base64
+            # posée dans un corps non-JSON — `log <base64 du réel>` — sortait
+            # sinon entière, jamais décodée.
+            return self._chaine(texte, transformer).encode("utf-8")
         # UN seul niveau de lot, ce que dit la spec. En descendant plus loin,
         # tout dict interne recevait le traitement d'enveloppe — `id` et
         # `method` verbatim, alors que ce sont des données à cette profondeur.
@@ -349,19 +358,54 @@ class JsonRpcTransform:
         surtout empêcher la protection du TEXTE : `10.1.2.3` se réduit à quatre
         caractères qui se décodent, et court-circuiter là-dessus aurait laissé
         l'adresse sortir en clair.
+
+        Ce qui SUIT une charge est relu comme une chaîne, pas seulement
+        transformé comme du texte : une même chaîne peut porter PLUSIEURS
+        charges collées, et se contenter du texte protégeait la première en
+        laissant partir toutes les suivantes. Cinquième position que les tests
+        ignoraient — après la valeur, la liste, la clé et le niveau message —
+        et la seule qui vive à l'intérieur d'une chaîne.
         """
-        lectures = self._lectures(valeur)
-        for fin, clair in lectures:
-            rendu = transformer(clair)
-            if rendu == clair:
-                continue
-            charge = base64.b64encode(rendu.encode("utf-8")).decode("ascii")
-            suite = valeur[fin:]
-            return charge + transformer(suite) if suite else charge
-        # Aucune lecture ne porte de valeur : la chaîne est du texte, et c'est
-        # là que tient l'IDENTITÉ — un jeton opaque n'y rencontre rien à
-        # substituer et ressort tel quel, bourrage non canonique compris.
-        return transformer(valeur)
+        morceaux: list[str] = []
+        reste = valeur
+        substitue = False
+        for _ in range(_MAX_CHARGES):
+            if not reste:
+                break
+            lectures = self._lectures(reste)
+            for fin, clair in lectures:
+                rendu = transformer(clair)
+                if rendu == clair:
+                    continue
+                morceaux.append(
+                    base64.b64encode(rendu.encode("utf-8")).decode("ascii"))
+                reste, substitue = reste[fin:], True
+                break
+            else:
+                if not lectures:
+                    morceaux.append(transformer(reste))
+                    reste = ""
+                    break
+                # Cette charge-ci ne porte rien, la SUIVANTE peut en porter :
+                # on avance au lieu de s'arrêter. S'arrêter protégeait la
+                # première charge d'une chaîne et laissait partir toutes les
+                # autres — encodées, donc sans rien en clair à compter.
+                fin = lectures[0][0]
+                morceaux.append(transformer(reste[:fin]))
+                reste = reste[fin:]
+        else:
+            # Le nombre de charges d'une chaîne est borné, sinon le balayage
+            # coûte le carré de sa longueur : mesuré, huit mille charges
+            # collées tiennent le proxy huit secondes. Refuser bruyamment vaut
+            # mieux que relayer sans avoir lu.
+            raise BinaryBody(
+                f"plus de {_MAX_CHARGES} charges encodées dans une seule "
+                "chaîne : forme illégitime, relayer sans l'avoir lue serait "
+                "un fail-open")
+        # Rien n'a été substitué : la chaîne est du TEXTE. C'est là que tient
+        # l'IDENTITÉ — un jeton opaque n'y rencontre rien à substituer et
+        # ressort tel quel, bourrage non canonique compris.
+        return "".join(morceaux) if substitue else transformer(valeur)
 
     def _libre(self, noeud, transformer):
         """Données libres : la clé est une valeur comme une autre."""

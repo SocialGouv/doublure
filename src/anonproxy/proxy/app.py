@@ -44,7 +44,8 @@ from ..annonce import injecter  # noqa: E402
 from ..pipeline import Pseudonymizer  # noqa: E402
 from ..policy import Policy  # noqa: E402
 from ..sse import (  # noqa: E402
-    FluxSSEInvalide, encode_sse, iter_blocks, parse_sse_block,
+    BlocSSEIllisible, FluxSSEInvalide, encode_sse, iter_blocks,
+    parse_sse_block,
 )
 from ..surrogates.engine import SurrogateCollisionError, SurrogateEngine  # noqa: E402
 from ..vault import Vault, VaultUnavailableError  # noqa: E402
@@ -139,6 +140,9 @@ class ProxyState:
             verify=settings.ca_bundle or True,
         )
         self.unresolved_total = 0
+        #: Blocs SSE porteurs de données illisibles, relayés donc
+        #: NON restaurés. Un résidu se compte, il ne se tait pas.
+        self.sse_illisible = 0
         self._incoming: tuple[int, Substituter] | None = None
 
     def outgoing(self) -> Substituter:
@@ -338,7 +342,19 @@ async def _stream(state: ProxyState, safe_body: dict[str, Any], headers: dict[st
                 async for chunk in upstream.aiter_text():
                     blocks, buffer = iter_blocks(chunk, buffer)
                     for block in blocks:
-                        event = parse_sse_block(block)
+                        try:
+                            event = parse_sse_block(block)
+                        except BlocSSEIllisible as exc:
+                            # Relaye quand meme — couper le flux sur un bloc
+                            # qu'on ne comprend pas serait pire — mais ses
+                            # substituts ne seront PAS restaures, et un residu
+                            # se compte, il ne se tait pas.
+                            logger.warning(
+                                "%s : relayé sans restauration, l'opérateur y "
+                                "lira des substituts", exc)
+                            state.sse_illisible += 1
+                            yield (block + "\n\n").encode("utf-8")
+                            continue
                         if event is None:
                             yield (block + "\n\n").encode("utf-8")  # ping, commentaire
                             continue
@@ -437,6 +453,7 @@ async def healthz(request: Request):
         "upstream": state.settings.upstream_base,
         "vault_entries": state.vault.count(state.settings.scope_key),
         "unresolved_total": state.unresolved_total,
+        "sse_illisible": state.sse_illisible,
         "pipeline": dict(state.pseudonymizer.stats),
         "detector": detector,
     }
