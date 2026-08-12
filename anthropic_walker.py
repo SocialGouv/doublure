@@ -811,8 +811,13 @@ def _walk(
                 continue
 
             # `dependencies` (draft-04/06/07) est une UNION : chaque entree est
-            # soit une LISTE de noms de proprietes — un contrat, verbatim comme
-            # `required` — soit un SOUS-SCHEMA entier. La classer structurelle
+            # soit une LISTE de NOMS de proprietes — un contrat, verbatim comme
+            # `required` — soit un SOUS-SCHEMA entier. La liste n'est recopiee
+            # que si elle ne contient QUE des chaines : se fier au type `list`
+            # sans regarder son contenu laissait passer un dict glisse dedans,
+            # avec ses valeurs, sans que le walker le voie — une troisieme
+            # forme de l'union, non modelisee par le correctif qui pretendait
+            # justement la modeliser. La classer structurelle
             # dans les deux cas faisait sortir descriptions, defauts et enums de
             # la seconde forme sans que le walker voie meme le texte. Le
             # decoupage en `dependentRequired`/`dependentSchemas` date de
@@ -820,7 +825,9 @@ def _walk(
             # draft-04, emet la forme qui fuyait.
             if in_schema and key == "dependencies" and isinstance(value, dict):
                 out[key] = {
-                    pname: (pdef if isinstance(pdef, list)
+                    pname: (pdef
+                            if isinstance(pdef, list)
+                            and all(isinstance(x, str) for x in pdef)
                             else _walk(pdef, fn, in_schema=True))
                     for pname, pdef in value.items()
                 }

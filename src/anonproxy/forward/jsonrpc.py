@@ -383,9 +383,22 @@ class JsonRpcTransform:
                 break
             else:
                 if not lectures:
-                    morceaux.append(transformer(reste))
-                    reste = ""
-                    break
+                    # Aucune lecture ICI ne veut pas dire aucune lecture PLUS
+                    # LOIN. Une charge d'un ou deux octets (`aGk=`, `YQ==`)
+                    # n'a que trois caractères avant son bourrage, donc le
+                    # motif échoue à l'origine — et tout ce qui suivait était
+                    # abandonné au texte, charge du réel comprise. On avance
+                    # jusqu'au prochain candidat ; s'il commence ici, on passe
+                    # au-delà, sinon la boucle ne progresserait pas.
+                    suivant = _BASE64.search(reste)
+                    if suivant is None:
+                        morceaux.append(transformer(reste))
+                        reste = ""
+                        break
+                    coupe = suivant.start() or suivant.end()
+                    morceaux.append(transformer(reste[:coupe]))
+                    reste = reste[coupe:]
+                    continue
                 # Cette charge-ci ne porte rien, la SUIVANTE peut en porter :
                 # on avance au lieu de s'arrêter. S'arrêter protégeait la
                 # première charge d'une chaîne et laissait partir toutes les

@@ -152,3 +152,30 @@ def test_un_bloc_illisible_est_COMPTE_pas_confondu_avec_un_ping():
     # Des donnees illisibles : c'est autre chose, et ca se dit.
     with pytest.raises(BlocSSEIllisible):
         parse_sse_block('event: x\ndata: {"type": "x"')
+
+
+@pytest.mark.parametrize("charge", ["true", "false", "42", '"une chaine"',
+                                    "[1,2,3]", "null"])
+def test_une_charge_JSON_qui_n_est_pas_un_objet_ne_tue_pas_le_flux(charge):
+    """HAUT, flux interrompu — le contrat annonce `dict | None` et ne le tenait
+    pas.
+
+    `true`, `42`, une liste, une chaine sont du JSON parfaitement valide. Le
+    reecriveur levait alors `AttributeError` sur `event.get`, l'exception etait
+    rattrapee au niveau de la BOUCLE, et le flux s'arretait la : tous les
+    evenements suivants perdus, `message_stop` compris, donc un client qui
+    attend sans fin.
+
+    Un contrat qu'on annonce se tient : ces charges levent `BlocSSEIllisible`,
+    que l'appelant compte et relaie sans casser le flux."""
+    from anonproxy.sse import BlocSSEIllisible, parse_sse_block
+
+    with pytest.raises(BlocSSEIllisible):
+        parse_sse_block(f"event: x\ndata: {charge}")
+
+
+def test_un_objet_reste_un_objet():
+    """L'AUTRE MOITIE : la forme legitime passe."""
+    from anonproxy.sse import parse_sse_block
+
+    assert parse_sse_block('event: x\ndata: {"type":"x"}') == {"type": "x"}

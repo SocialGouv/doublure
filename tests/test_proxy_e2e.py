@@ -116,6 +116,17 @@ class FakeUpstream:
                     json={"type": "error",
                           "error": {"type": "invalid_request_error",
                                     "message": f"hôte invalide : {self.cite}"}})
+            if self.mode == "sse_illisible":
+                # Un bloc dont la charge est du JSON VALIDE mais pas un objet,
+                # au milieu d'un flux par ailleurs normal.
+                return httpx.Response(
+                    200, headers={"content-type": "text/event-stream"},
+                    content=(b'event: message_start\ndata: {"type":"message_start",'
+                             b'"message":{"id":"m","type":"message","role":"assistant",'
+                             b'"model":"claude-fable-5","content":[],'
+                             b'"usage":{"input_tokens":1,"output_tokens":1}}}\n\n'
+                             b'event: x\ndata: [1,2,3]\n\n'
+                             b'event: message_stop\ndata: {"type":"message_stop"}\n\n'))
             if self.mode == "demi_substitut":
                 # `"\ud800"` est du JSON valide et n'est PAS de l'UTF-8 valide.
                 return httpx.Response(
@@ -393,3 +404,26 @@ def test_un_demi_substitut_de_l_amont_ne_tue_pas_la_reponse(proxy):
     assert reponse.status_code == 200, reponse.text
     texte = reponse.json()["content"][0]["text"]
     assert "\ud800" in texte, texte
+
+
+def test_un_bloc_SSE_illisible_est_compte_et_ne_tue_pas_le_flux(proxy):
+    """Le compteur `sse_illisible` etait INOBSERVABLE : supprimer son
+    increment laissait 2925 tests verts.
+
+    Le temoin precedent assertait que `parse_sse_block` LEVE — pas que
+    l'appelant compte. Deux surfaces distinctes, un seul temoin : le titre
+    promettait « est COMPTE » et rien ne le verifiait. Celui-ci traverse le
+    proxy pour de vrai.
+
+    Il verifie aussi que le flux SURVIT au bloc fautif : une charge JSON qui
+    n'est pas un objet faisait lever le reecriveur, l'exception etait rattrapee
+    au niveau de la boucle, et `message_stop` n'arrivait jamais."""
+    client, upstream, _ = proxy
+    upstream.mode = "sse_illisible"
+    reponse = client.post("/v1/messages", json=sample_body(stream=True))
+    assert reponse.status_code == 200
+    corps = reponse.text
+    assert "message_stop" in corps, corps
+
+    sante = client.get("/healthz").json()
+    assert sante["sse_illisible"] == 1, sante

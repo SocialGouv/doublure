@@ -45,7 +45,7 @@ def parse_sse_block(block: str) -> dict[str, Any] | None:
     if not payload or payload == "[DONE]":
         return None
     try:
-        return json.loads(payload)
+        lu = json.loads(payload)
     except json.JSONDecodeError as exc:
         # `None` disait DEUX choses : « rien a faire » (ping, commentaire,
         # `[DONE]`) et « il y a des donnees, je ne sais pas les lire ». Le
@@ -55,6 +55,16 @@ def parse_sse_block(block: str) -> dict[str, Any] | None:
         raise BlocSSEIllisible(
             f"bloc SSE porteur de {len(payload)} octets de donnees illisibles"
         ) from exc
+    if not isinstance(lu, dict):
+        # Le type de retour annonce un dict, et il ne le tenait pas : `true`,
+        # `42`, une liste ou une chaine sont du JSON parfaitement valide, et le
+        # reecriveur leve alors `AttributeError` sur `event.get`. L'exception
+        # est rattrapee au niveau de la BOUCLE, donc le flux s'arrete la — tous
+        # les evenements suivants perdus, `message_stop` compris, et le client
+        # attend sans fin. Un contrat qu'on annonce se tient.
+        raise BlocSSEIllisible(
+            f"bloc SSE dont la charge est un {type(lu).__name__}, pas un objet")
+    return lu
 
 
 def encode_sse(event: dict[str, Any]) -> bytes:

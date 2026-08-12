@@ -975,3 +975,36 @@ def test_un_nombre_deraisonnable_de_charges_est_refuse(transform):
         transform.outgoing("h", {}, json.dumps(
             {"jsonrpc": "2.0", "id": 1,
              "result": {"v": charge * 300}}).encode())
+
+
+@pytest.mark.parametrize("court", ["aGk=", "YQ==", "MA==", "bm8="])
+@pytest.mark.parametrize("sep", ["", " ", ",", "\n"])
+def test_une_charge_COURTE_en_tete_ne_bloque_pas_le_balayage(transform, court, sep):
+    """CRITIQUE — SIXIEME position, et elle est en amont de la boucle.
+
+    Une charge d'un ou deux octets (`aGk=` = base64 de « hi ») n'a que TROIS
+    caracteres avant son bourrage, alors que le motif en exige quatre : il
+    echoue donc a l'origine, `_lectures` rend une liste vide, et tout ce qui
+    suivait etait abandonne au texte — charge du reel comprise. La lecture
+    « chaine entiere » d'un recepteur n'en tire que « hi », ce qui l'a rendu
+    invisible ; un lecteur jeton par jeton, lui, obtient la valeur.
+
+    Le test de la position precedente ne pouvait pas le voir : ses trois
+    charges commencent toutes par quatre caracteres d'alphabet.
+    """
+    import base64
+
+    reel = base64.b64encode(b"db-01.acme.internal").decode()
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1,
+         "result": {"v": court + sep + reel}}).encode()))["result"]["v"]
+    assert reel not in rendu, rendu
+
+
+def test_une_charge_courte_seule_reste_intacte(transform):
+    """L'AUTRE MOITIE : avancer ne doit rien changer a une chaine qui ne porte
+    rien. `aGk=` reste `aGk=`."""
+    for opaque in ("aGk=", "YQ==", "aGV5", "QUJDREVGRw9="):
+        rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "result": {"v": opaque}}).encode()))
+        assert rendu["result"]["v"] == opaque

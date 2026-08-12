@@ -1888,6 +1888,47 @@ assertion now checks the ROUND TRIP and the absence of a raw line ending in the
 name line, which witnesses all four forms at once: six tests redden without the
 fix, against three before.
 
+## Round 22 (2026-08-12) — a contract announced is a contract held
+
+Five defects, every one of them in code written in the previous hour, and three
+of the five are the same sentence said three ways: **a shape that was announced
+and not verified.**
+
+**A short payload at the head blocked the whole sweep — CRITICAL.** `aGk=`,
+base64 for "hi", carries only THREE characters before its padding where the
+pattern requires four, so the match fails at the origin, the reading list comes
+back empty, and everything that followed was abandoned to text — the real
+value's payload included. What kept it invisible is that a receiver reading the
+whole string only gets "hi"; a receiver reading token by token gets the value.
+**Sixth position the tests ignored**, and the first that sits UPSTREAM of the
+loop rather than inside it. The sweep now advances to the next candidate.
+
+**`parse_sse_block` announced `dict | None` and returned whatever it parsed.**
+`true`, `42`, `[1,2,3]`, `"a string"` are perfectly valid JSON; the rewriter then
+raised `AttributeError`, the exception was caught at the LOOP level, and the
+stream stopped there — every later event lost, `message_stop` included, so the
+client waits forever. A contract that is announced is held.
+
+**`None` still said two things**, one round after being split. "Nothing to do"
+and "data lodged somewhere other than `data:`" — a surrogate in an `id:` field
+went out verbatim, unrestored. Closed at the CLASS rather than counted: whatever
+is relayed without being understood is still RESTORED as text, which assumes no
+structure at all.
+
+**And the `dependencies` union had a third form.** The round-20 fix modelled
+"list of names" against "sub-schema" and trusted `isinstance(pdef, list)` without
+looking inside: a dict smuggled into the list carried its values straight
+through, unseen. The fix that claimed to model the union missed one of its
+branches.
+
+**The proof perimeter caught a third witness of mine**, and this one is the
+plainest: a test named `est_COMPTE` asserted only that the parser raises, never
+that the caller counts. `state.sse_illisible` was **unobservable by the whole
+suite** — removing the increment left 2925 tests green. The rule it yields:
+**when a test names a property in its title, the property belongs in the
+assertion, not in the docstring**, and two distinct surfaces (raising, counting)
+need two witnesses.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

@@ -1305,6 +1305,12 @@ def test_defaut27_un_file_id_hors_position_reste_une_donnee():
     ({"carte": {"properties": {"adresse": {
         "type": "string",
         "description": "adresse hebergee sur SECRET-HOST"}}}}, False),
+    # TROISIEME forme, que le correctif « union » avait lui-meme manquee : une
+    # liste qui ne contient PAS que des noms. Se fier au type `list` sans
+    # regarder son contenu laissait passer un dict glisse dedans, avec ses
+    # valeurs, sans que le walker le voie.
+    ({"carte": ["adresse", {"hote": "db-01.SECRET-HOST"}]}, False),
+    ({"carte": [{"description": "point interne sur SECRET-HOST"}]}, False),
 ])
 def test_defaut_dependencies_accepte_DEUX_formes(forme, attendu_verbatim):
     """HAUT, fuite silencieuse — `dependencies` est une UNION, pas une liste.

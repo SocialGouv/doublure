@@ -353,10 +353,14 @@ async def _stream(state: ProxyState, safe_body: dict[str, Any], headers: dict[st
                                 "%s : relayé sans restauration, l'opérateur y "
                                 "lira des substituts", exc)
                             state.sse_illisible += 1
-                            yield (block + "\n\n").encode("utf-8")
+                            yield _relayer_restaure(block, sub_in, state)
                             continue
                         if event is None:
-                            yield (block + "\n\n").encode("utf-8")  # ping, commentaire
+                            # Ping, commentaire, ou donnees logees ailleurs que
+                            # dans `data:` — un `id:` par exemple. Relayer tel
+                            # quel y laissait les substituts : l'operateur lisait
+                            # un nom fictif, et rien ne le comptait.
+                            yield _relayer_restaure(block, sub_in, state)
                             continue
                         for out_event in rewriter.feed(event):
                             yield encode_sse(out_event)
@@ -389,6 +393,19 @@ async def _stream(state: ProxyState, safe_body: dict[str, Any], headers: dict[st
         media_type="text/event-stream",
         headers={"cache-control": "no-cache", "connection": "keep-alive"},
     )
+
+
+def _relayer_restaure(block: str, sub_in, state: ProxyState) -> bytes:
+    """Un bloc qu'on ne sait pas interpreter part quand meme RESTAURE.
+
+    On ne devine pas sa structure — mais le relayer verbatim y laissait les
+    substituts, donc l'operateur lisait un nom fictif sans rien pour le lui
+    dire. Restaurer le texte ne suppose aucune structure et ferme la classe,
+    la ou compter n'aurait fait que la declarer.
+    """
+    resolu, unresolved = sub_in.to_real(block)
+    _note_unresolved(state, unresolved)
+    return (resolu + "\n\n").encode("utf-8")
 
 
 def _note_unresolved(state: ProxyState, unresolved: list[str]) -> None:
