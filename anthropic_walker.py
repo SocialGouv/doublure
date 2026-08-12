@@ -331,11 +331,12 @@ def _is_known_control(
 #: du genre `^srv-\d+\.acme\.internal$` exposerait le domaine interne. Elle est
 #: donc substituee ; le risque residuel est qu'un substitut y introduise un
 #: metacaractere desequilibre, tres improbable et prefere a une fuite.
-#: `dependencies` et `dependentRequired` portent des LISTES DE NOMS de
-#: proprietes, exactement comme `required` : les substituer casse la
-#: correspondance en silence. `$anchor` nomme une ancre locale.
+#: `dependentRequired` porte des LISTES DE NOMS de proprietes, exactement comme
+#: `required` : les substituer casse la correspondance en silence. `$anchor`
+#: nomme une ancre locale. `dependencies` n'y figure PAS : c'est une UNION
+#: (liste de noms OU sous-schema), traitee a part.
 SCHEMA_STRUCTURAL_KEYS: frozenset[str] = frozenset(
-    {"required", "type", "format", "dependencies", "dependentRequired",
+    {"required", "type", "format", "dependentRequired",
      "$anchor", "$dynamicAnchor"}
 )
 
@@ -786,6 +787,22 @@ def _walk(
                 nom = fn if key == "patternProperties" else (lambda p: p)
                 out[key] = {
                     nom(pname): _walk(pdef, fn, in_schema=True)
+                    for pname, pdef in value.items()
+                }
+                continue
+
+            # `dependencies` (draft-04/06/07) est une UNION : chaque entree est
+            # soit une LISTE de noms de proprietes — un contrat, verbatim comme
+            # `required` — soit un SOUS-SCHEMA entier. La classer structurelle
+            # dans les deux cas faisait sortir descriptions, defauts et enums de
+            # la seconde forme sans que le walker voie meme le texte. Le
+            # decoupage en `dependentRequired`/`dependentSchemas` date de
+            # 2019-09 : tout outil genere depuis une OpenAPI 3.0, basee sur
+            # draft-04, emet la forme qui fuyait.
+            if in_schema and key == "dependencies" and isinstance(value, dict):
+                out[key] = {
+                    pname: (pdef if isinstance(pdef, list)
+                            else _walk(pdef, fn, in_schema=True))
                     for pname, pdef in value.items()
                 }
                 continue

@@ -1298,3 +1298,36 @@ def test_defaut27_un_file_id_hors_position_reste_une_donnee():
     body = {"messages": [{"role": "user", "content": [
         {"type": "text", "text": "ok", "file_id": "SECRET-HOST"}]}]}
     assert "SECRET-HOST" not in json.dumps(walk_request(body, marker_sub()))
+
+
+@pytest.mark.parametrize("forme,attendu_verbatim", [
+    ({"carte": ["adresse"]}, True),      # liste de NOMS : un contrat
+    ({"carte": {"properties": {"adresse": {
+        "type": "string",
+        "description": "adresse hebergee sur SECRET-HOST"}}}}, False),
+])
+def test_defaut_dependencies_accepte_DEUX_formes(forme, attendu_verbatim):
+    """HAUT, fuite silencieuse — `dependencies` est une UNION, pas une liste.
+
+    En JSON Schema draft-04/06/07, la valeur de `dependencies` est soit une
+    liste de NOMS de proprietes (un contrat : le substituer casserait la
+    correspondance en silence), soit un SOUS-SCHEMA entier. Le walker la
+    classait structurelle dans les deux cas, donc descriptions, defauts et enums
+    de la seconde forme sortaient VERBATIM — et le walker ne voyait meme pas le
+    texte, donc aucune entree au coffre et rien a compter.
+
+    Le decoupage moderne (`dependentRequired` pour les listes,
+    `dependentSchemas` pour les schemas) date de 2019-09 : tout outil genere
+    depuis une OpenAPI 3.0, basee sur draft-04, emet la forme qui fuit.
+    """
+    corps = {"model": "m", "messages": [], "tools": [{
+        "name": "t", "description": "d",
+        "input_schema": {"type": "object",
+                         "properties": {"carte": {"type": "string"}},
+                         "dependencies": forme}}]}
+    rendu = json.dumps(walk_request(corps, marker_sub()), ensure_ascii=False)
+    if attendu_verbatim:
+        assert '["adresse"]' in rendu, rendu
+    else:
+        assert "SECRET-HOST" not in rendu, rendu
+        assert "fake-host" in rendu, rendu

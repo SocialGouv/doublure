@@ -1832,14 +1832,16 @@ transformed and its name copied as is, so an extra key added by a server for its
 telemetry left in the clear and was not restored on the way back. The module
 docstring already said a key is protocol by its POSITION, never by its name.
 
-**Walker — proven, fix HELD pending jo (rule 2).** `dependencies` accepts TWO
-forms in JSON Schema draft-04/06/07: a list of property names (a contract, so
-verbatim is right) or a full SUB-SCHEMA. The walker classes it structural and
-copies it verbatim in both cases, so descriptions, defaults and enums inside the
-schema form leave in the clear — and the walker never even sees the text, so
-there is no vault entry and nothing to count. The split into
+**Walker — `dependencies` is a UNION, and only one of its forms was modelled.**
+In JSON Schema draft-04/06/07 the value is either a list of property names (a
+contract, so verbatim is right, like `required`) or a full SUB-SCHEMA. The
+walker classed it structural in both cases, so descriptions, defaults and enums
+inside the schema form left in the clear — and the walker never even saw the
+text, so there was no vault entry and nothing to count. The split into
 `dependentRequired`/`dependentSchemas` dates from 2019-09: everything generated
-from OpenAPI 3.0, which is draft-04 based, uses the leaking form.
+from OpenAPI 3.0, which is draft-04 based, emits the leaking form. Fixed under
+rule 2 — the test was shown to jo first, and it reddens on the schema form while
+staying green on the list form.
 
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
