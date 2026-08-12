@@ -72,3 +72,21 @@ def test_le_corpus_couvre_le_repli_sur_une_cle_sans_caractere_utile():
     """Une clé faite de séparateurs seuls se réduit à vide, et le repli
     `portee` est le seul endroit où le nom ne dérive plus de la clé."""
     assert any(v["attendu"].startswith("portee-") for v in VECTEURS)
+
+
+def test_le_corpus_couvre_le_defaut_d_octets():
+    """La JUMELLE du témoin ci-dessus, et elle manquait.
+
+    Le préfixe de longueur compte des OCTETS en Go et l'a longtemps compté en
+    CARACTÈRES en Python : un accent dans la clé de portée suffisait à produire
+    deux empreintes, donc deux fichiers, donc une révélation qui traverse. Un
+    seul vecteur du corpus distingue les deux comptages ; rien n'exigeait sa
+    présence, et « nettoyer l'unicode du corpus » — exactement le geste qui
+    avait laissé passer la première divergence — aurait rouvert la seconde sans
+    qu'aucune preuve ne rougisse.
+    """
+    temoins = [v for v in VECTEURS
+               if any(len(champ) != len(champ.encode("utf-8"))
+                      for champ in (v["scope_key"], v["session"] or ""))]
+    assert temoins, ("aucun vecteur non-ASCII : le comptage en caractères "
+                     "contre le comptage en octets repasserait sans rougir")

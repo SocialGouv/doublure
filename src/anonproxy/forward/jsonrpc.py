@@ -47,6 +47,14 @@ _DONNEES = frozenset({"params", "result", "error"})
 #: JWT : une signature ne doit pas être traversée.
 _BASE64 = re.compile(
     r"(?:[A-Za-z0-9+/]{4})+(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
+#: Ce qu'un décodeur permissif JETTE avant de décoder. C'est son contrat qui
+#: fait foi, pas le nôtre : la protection ne peut pas reposer sur une lecture
+#: plus étroite que celle du destinataire.
+_HORS_ALPHABET = re.compile(r"[^A-Za-z0-9+/=]")
+#: Idem, bourrage compris. Les récepteurs ne lisent PAS la même chose : Python
+#: jette les `=` égarés et décode le flux entier, `Buffer.from` de Node s'arrête
+#: au premier. Deux lectures, donc, et protéger l'une laisse l'autre ouverte.
+_HORS_ALPHABET_NI_BOURRAGE = re.compile(r"[^A-Za-z0-9+/]")
 #: PAS de longueur minimale. J'en avais posé une (16 caractères) « parce
 #: qu'en dessous ce n'est pas une charge » : `10.0.0.1` s'encode en douze
 #: caractères, `srv-42` en huit. Toute IPv4 et tout nom d'hôte court passaient
@@ -64,6 +72,14 @@ _BASE64 = re.compile(
 #: ici qu'elle manquait, et l'entrée n'en dit rien : 199 Kio de zéros gzipés
 #: font 200 Mio en sortie, mesurés.
 _MAX_CLAIR = 32 * 1024 * 1024
+
+
+def _decoder(base64_lu: str) -> str | None:
+    """Le texte que ces caractères encodent, ou None si ce n'en est pas."""
+    try:
+        return base64.b64decode(base64_lu, validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return None
 
 
 class BinaryBody(RuntimeError):
@@ -221,86 +237,87 @@ class JsonRpcTransform:
             _poser(rendu, cle if cle in _ROUTAGE else transformer(cle),
                    valeur if cle in _ROUTAGE
                    else self._libre(valeur, transformer))
-        # `_libre` traverse les charges encodées de ses sous-dicts ; ce
-        # niveau-ci n'en faisait rien, et un serveur MCP range le contenu d'une
-        # ressource DIRECTEMENT sous `result` aussi souvent que sous un
-        # sous-objet. La valeur réelle sortait alors en base64, sans entrée au
-        # coffre ni substitut non résolu : rien à compter.
-        return self._charge_encodee(noeud, rendu, transformer)
+        return rendu
 
     @staticmethod
-    def _base64_clair(valeur: str) -> str | None:
-        """Le texte que cette chaîne encode, ou None si ce n'en est pas.
+    def _lectures(valeur: str) -> list[tuple[int, str]]:
+        """Les textes que les RÉCEPTEURS peuvent tirer de cette chaîne.
 
-        Les blancs sont retirés d'abord : `base64.encodebytes` et
-        `openssl base64` coupent en lignes de 76 et 64 caractères — deux
-        producteurs parfaitement standards dont la charge ne correspondait à
-        rien et sortait donc VERBATIM.
+        Ce qui décide n'est pas « cette chaîne EST-elle du base64 » mais « que
+        décode celui d'en face » — et ils ne décodent pas la même chose. Mesuré :
+        Python jette les `=` égarés et lit le flux entier, `Buffer.from` de Node
+        s'arrête au premier, le décodeur strict de Go refuse mais rend quand même
+        le préfixe déjà décodé à qui ignore son erreur. Protéger UNE lecture
+        laisse les autres ouvertes, donc on les rend TOUTES et l'appelant
+        substitue dès que l'une d'elles porte une valeur.
 
-        Le tour doit être l'IDENTITÉ quand rien n'est substitué, et c'est
-        `_chaine` qui la tient : quand la substitution ne change rien, il rend
-        la chaîne D'ORIGINE, non-canonicité et blancs compris. Exiger ici que
-        le ré-encodage reproduise la lecture était donc inutile à l'identité —
-        et c'était un interrupteur : `…bA==` et `…bB==` décodent tous deux vers
-        la même valeur, tout décodeur du monde réel étant permissif sur les
-        bits de bourrage. Il suffisait donc de changer UN caractère pour que la
-        charge cesse d'être vue, et la valeur réelle sortait sans trace.
+        Chaque lecture dit aussi où elle s'arrête dans la chaîne d'origine : la
+        suite est du texte, à protéger comme tel plutôt qu'à effacer.
+
+        Trois formulations successives de la même erreur ont été payées ici, et
+        c'est la même à chaque fois — un contrat plus ÉTROIT que celui du
+        destinataire. On exigeait la canonicité (un bit de bourrage éteignait la
+        substitution), puis on ne retirait que les blancs (un caractère invisible
+        l'éteignait), puis on exigeait que la chaîne ENTIÈRE ait la forme (quatre
+        caractères collés derrière le bourrage l'éteignaient).
         """
-        compact = "".join(valeur.split())
-        if not compact or not _BASE64.fullmatch(compact):
-            return None
-        try:
-            return base64.b64decode(compact, validate=True).decode("utf-8")
-        except (binascii.Error, UnicodeDecodeError, ValueError):
-            return None
+        lectures: list[tuple[int, str]] = []
+        lu = _BASE64.match(_HORS_ALPHABET.sub("", valeur))
+        if lu is not None and (clair := _decoder(lu.group())) is not None:
+            # Le compactage a supprimé des caractères : les positions ne se
+            # correspondent plus, on recompte pour retrouver la fin dans
+            # l'original.
+            restant, fin = lu.end(), len(valeur)
+            for i, c in enumerate(valeur):
+                if _HORS_ALPHABET.match(c) is None:
+                    restant -= 1
+                    if restant == 0:
+                        fin = i + 1
+                        break
+            lectures.append((fin, clair))
+        # La lecture la plus LARGE ne sert QUE dans le cas que la première
+        # manque : un `=` posé ailleurs qu'en bourrage final. Python le jette et
+        # lit la valeur au travers, là où la première s'arrête dessus. La
+        # restreindre à ce cas n'est pas de la prudence, c'est ce qui empêche de
+        # lire un JWT comme une charge : ses trois parties sont du base64url
+        # SANS bourrage, et concaténées elles se décodent — le traverser
+        # invaliderait sa signature. Ici la chaîne est une charge d'un bout à
+        # l'autre, donc pas de suite.
+        if "=" not in _HORS_ALPHABET.sub("", valeur).rstrip("="):
+            return lectures
+        noyau = _HORS_ALPHABET_NI_BOURRAGE.sub("", valeur)
+        if len(noyau) % 4 == 1:
+            noyau = noyau[:-1]
+        if noyau and (clair := _decoder(noyau + "=" * (-len(noyau) % 4))) is not None:
+            lectures.append((len(valeur), clair))
+        return lectures
 
     def _chaine(self, valeur: str, transformer) -> str:
-        """Une chaîne, décodée d'abord si elle porte du base64 textuel.
+        """Une chaîne, décodée d'abord si un récepteur peut en tirer du texte.
 
         Appelée pour TOUTE chaîne, feuille de dict comme élément de liste. La
         traversée des charges ne vivait que dans la branche dict : une charge
         rangée dans une LISTE — `{"blobs": ["<base64>"]}`, la forme la plus
         banale d'un lot de ressources MCP — sortait en clair, à toute
         profondeur.
+
+        Une lecture qui ne porte RIEN ne doit pas empêcher la suivante, ni
+        surtout empêcher la protection du TEXTE : `10.1.2.3` se réduit à quatre
+        caractères qui se décodent, et court-circuiter là-dessus aurait laissé
+        l'adresse sortir en clair.
         """
-        clair = self._base64_clair(valeur)
-        if clair is None:
-            return transformer(valeur)
-        rendu = transformer(clair)
-        if rendu == clair:
-            return valeur  # rien à substituer : on rend la forme d'origine
-        return base64.b64encode(rendu.encode("utf-8")).decode("ascii")
-
-    def _charge_encodee(self, source: dict, rendu: dict, transformer):
-        """Traverse toute charge base64 qui SE DÉCODE en texte.
-
-        Un serveur MCP range le contenu d'une ressource sous `blob`. Traité
-        comme une chaîne opaque, le fichier traversait VERBATIM dans les deux
-        sens — la lecture d'une ressource rendait le document brut à l'agent,
-        et son écriture le sortait tel quel.
-
-        **Rien de ce que l'amont ÉCRIT ne décide.** Ni le type MIME (il
-        suffisait de deux déclinaisons contradictoires de la clé pour choisir
-        celle qui arrange), ni le NOM DU CHAMP (une liste `blob`/`data`/
-        `content` tombait dès que la charge s'appelait `payload`). Deux
-        versions de la même erreur, au même endroit : faire dépendre la
-        protection d'une valeur écrite par celui dont on se protège.
-
-        Ce qui décide est le DÉCODAGE, et lui seul. Se tromper vers le texte
-        corrompt un binaire, ce qui se VOIT ; se tromper vers le binaire laisse
-        sortir une valeur réelle sans laisser de trace. Tout garde-fou ajouté
-        par-dessus ce décodage penche du mauvais côté de cette asymétrie — le
-        précédent tombait sur un simple octet nul.
-
-        Balayer TOUTES les chaînes est sans danger parce que le tour est
-        l'IDENTITÉ quand rien n'est détecté : décoder puis ré-encoder du base64
-        canonique rend la chaîne d'origine, octet pour octet. Un identifiant
-        opaque qui ressemble à du base64 ressort donc intact.
-        """
-        for champ, valeur in source.items():
-            if isinstance(valeur, str) and self._base64_clair(valeur) is not None:
-                rendu[transformer(champ)] = self._chaine(valeur, transformer)
-        return rendu
+        lectures = self._lectures(valeur)
+        for fin, clair in lectures:
+            rendu = transformer(clair)
+            if rendu == clair:
+                continue
+            charge = base64.b64encode(rendu.encode("utf-8")).decode("ascii")
+            suite = valeur[fin:]
+            return charge + transformer(suite) if suite else charge
+        # Aucune lecture ne porte de valeur : la chaîne est du texte, et c'est
+        # là que tient l'IDENTITÉ — un jeton opaque n'y rencontre rien à
+        # substituer et ressort tel quel, bourrage non canonique compris.
+        return transformer(valeur)
 
     def _libre(self, noeud, transformer):
         """Données libres : la clé est une valeur comme une autre."""
@@ -308,7 +325,7 @@ class JsonRpcTransform:
             rendu: dict = {}
             for c, v in noeud.items():
                 _poser(rendu, transformer(c), self._libre(v, transformer))
-            return self._charge_encodee(noeud, rendu, transformer)
+            return rendu
         if isinstance(noeud, list):
             return [self._libre(v, transformer) for v in noeud]
         if isinstance(noeud, str):

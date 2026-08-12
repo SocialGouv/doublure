@@ -210,7 +210,31 @@ def test_une_date_au_bord_de_la_plage_ne_repart_pas_en_clair(moteur):
     assert "9999" not in substitut and "12-31" not in substitut, substitut
 
 
-def test_le_repli_garde_l_index_pour_les_autres_types(moteur):
-    """La contrepartie : l'index reste recopié là où il est un index, sinon la
-    correction aurait échangé une fuite contre une perte de plausibilité."""
-    assert "42" in moteur.substitute_value("HOSTNAME", "srv-42.acme.internal")
+@pytest.mark.parametrize("etype,valeur,interdit", [
+    ("USERNAME", "jdoe1985", "1985"),          # une année de naissance
+    ("CPF", "123.456.789-01", "123"),
+    ("K8S_NAMESPACE", "prod-2024-billing", "2024"),
+    ("SERVICE_ACCOUNT", "billing-2024-042", "2024"),
+])
+def test_le_repli_ne_recopie_pas_les_chiffres_qui_sont_du_CONTENU(
+        moteur, etype, valeur, interdit):
+    """La correction précédente écartait la seule DATE : une liste NOIRE, donc
+    fausse par construction.
+
+    Tous les types sans branche dédiée tombent dans ce repli, et pour la
+    plupart les chiffres sont le CONTENU, pas un index : `jdoe1985` gardait une
+    année de naissance, un CPF ses trois premiers chiffres — l'équivalent de
+    l'État de naissance dans un SSN. La liste n'aurait jamais fini de
+    s'allonger ; c'est la condition qui devait s'inverser."""
+    assert interdit not in moteur.substitute_value(etype, valeur)
+
+
+def test_le_repli_garde_l_index_quand_un_prefixe_en_fait_un_index(moteur):
+    """L'AUTRE MOITIÉ : là où un préfixe d'infrastructure annonce un index, il
+    est gardé — sinon la correction aurait échangé une fuite contre une perte
+    de plausibilité (D1).
+
+    Le test précédent prétendait couvrir ça avec `srv-42.acme.internal`, qui
+    passe en réalité par le générateur d'hôtes : il ne traversait pas ce
+    repli."""
+    assert "42" in moteur.substitute_value("SERVICE_ACCOUNT", "svc-42")

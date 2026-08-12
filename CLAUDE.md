@@ -1591,6 +1591,68 @@ extra header") and named the one case it had not tested — which turned out to
 be the real one. Two of the four agents produced their best material after
 being asked what they had NOT proven.
 
+## Round 15 (2026-08-12) — a contract NARROWER than the receiver's
+
+Ten defects, and nine of them are one sentence: **the protection rested on a
+reading of base64 narrower than the one the receiver performs.** Four
+successive formulations of that same mistake had been shipped, each closing the
+previous and leaving the next.
+
+**Measured, not assumed** — the same trapped payload through three receivers:
+`Buffer.from` of Node (the ordinary MCP implementation) and Python applied to
+the wire bytes both return `db-01.acme.internal` intact; Go's strict decoder
+refuses and STILL hands back the already-decoded prefix to whoever ignores its
+error. Three ways to hide it, all silent:
+- **an invisible character** (zero-width space, BOM, soft hyphen, word joiner)
+  — only whitespace was stripped, and `'​'.isspace()` is False;
+- **a visible one** — `.`, `,`, `"` are discarded by both decoders too, so a
+  contract based on "odd characters" would have left an ordinary one open;
+- **anything after the padding** — the whole string had to be canonical, while
+  a receiver decodes the PREFIX and drops the rest.
+
+And a fourth where the two receivers DIVERGE: a stray `=` mid-stream. Python
+reads straight through it, Node stops at it and reads a partial value. One
+reading is not enough, so both are produced and the string is substituted as
+soon as either carries something.
+
+**Two regressions of my own fix, within the hour.** Widening what counts as a
+payload made `_charge_encodee` claim fields it had no business claiming — the
+MCP tool name, which is a routing key, came out substituted. That function
+turned out to be pure duplication since every string leaf goes through
+`_chaine`; it was removed rather than patched. And a reading that DECODES but
+finds nothing was short-circuiting the text: `10.1.2.3` reduces to four
+characters that decode, so the address would have left in the clear. **A
+reading that carries nothing must never prevent the text from being protected.**
+
+**The literal year was the twin of the rotation.** Round 14 made the shift
+rotate near `9999-12-31`; the numeric renderers write the year on four digits,
+the literal ones wrote it bare, so `December 31, 9999` rendered
+`October 16, 2` — a form nobody writes and that this module's own parser
+REFUSES. The fix had been carried to one half of the rendering.
+
+**And the digit exclusion was a BLACKLIST**, therefore wrong by construction.
+Excluding only `DATE` left every other type without a branch of its own:
+`jdoe1985` kept a birth year, a CPF its first three digits, a namespace its
+project year. The condition is inverted — the digit run is copied only where an
+infrastructure prefix makes it an INDEX (`svc-42`).
+
+### The proof-integrity perimeter paid for itself
+A fourth agent was given a perimeter that is not code: **which proofs go green
+without executing?** It verified that every round-14 regression test does redden
+when its fix is reverted (6/6, 4/4, 3/3 — the confirmation the routine was
+missing), and it found the hole: round 14 closed TWO divergences in one gesture
+and pinned a witness for only ONE. A single corpus vector distinguishes bytes
+from characters, and nothing required its presence — "tidying the unicode out of
+the corpus", precisely the gesture that had let the first divergence through,
+would have reopened the second in silence. It also found a complacent case of
+mine: `Q3 2024` asserted the year was gone while the fallback had copied `3`.
+
+**Stated residual, pinned by a test that asserts the leak**: a JWT is base64URL
+without padding, its three parts are not read one by one, so a real value in its
+payload leaves in the clear — and whether the token is traversed depends on how
+its lengths align, which is not a defensible invariant either. The test will go
+red the day the parts are read, which is the intended signal.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

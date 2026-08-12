@@ -216,6 +216,14 @@ it costs is the gap to the other dates of the document, for those few values
 only. The alternative — shifting them the other way — would let two distinct
 real dates land on the same surrogate.
 
+**A JWT's parts are not read one by one.** A JWT is base64URL without padding —
+not the alphabet this proxy reads — and its three parts are decoded as one
+stream or not at all. A real value placed in its payload (`iss`, `aud`) therefore
+leaves in the clear for whoever decodes that part, and whether the token is
+traversed at all depends on how its parts' lengths align: neither behaviour is a
+defensible invariant. Pinned by a test that asserts the leak, so that it is
+counted rather than silent; it goes red the day the parts are read.
+
 **A date-shaped string that is not a valid date stays verbatim.**
 `2020-02-30`, common in an export, is not parsed, so it is carried through as
 ordinary text inside a larger value, like any word the module preserves around

@@ -515,3 +515,162 @@ def test_no_padding_bit_can_switch_the_substitution_off(transform, reel, prefixe
         {"jsonrpc": "2.0", "id": 1, "result": {"v": mute}}).encode()))
     assert rendu["result"]["v"] != mute, "la charge n'a pas été vue"
     assert reel not in base64.b64decode(rendu["result"]["v"]).decode()
+
+
+@pytest.mark.parametrize("invisible,nom", [
+    ("​", "espace de largeur nulle"),
+    ("﻿", "marque d'ordre des octets"),
+    ("­", "trait d'union conditionnel"),
+    ("⁠", "gluon de mots"),
+    ("‍", "liant sans chasse"),
+    ("᠎", "séparateur de voyelle mongol"),
+])
+@pytest.mark.parametrize("sens", ["outgoing", "incoming"])
+def test_no_invisible_character_can_switch_the_substitution_off(
+        transform, invisible, nom, sens):
+    """CRITIQUE — la protection reposait sur une lecture PLUS ÉTROITE que celle
+    du destinataire.
+
+    Seuls les BLANCS étaient retirés avant de reconnaître une charge, alors
+    qu'un décodeur permissif jette TOUT ce qui n'est pas de l'alphabet. Un
+    caractère invisible glissé au milieu suffisait donc à ce que la charge perde
+    la forme ici et sorte VERBATIM — sans entrée au coffre, sans substitut non
+    résolu, rien à compter — pendant que le récepteur en tirait la valeur
+    entière. Mesuré sur `Buffer.from` de Node, qui est l'implémentation MCP
+    ordinaire, et sur le décodeur Python appliqué aux octets du fil ; le
+    décodeur strict de Go refuse mais rend le préfixe déjà décodé.
+
+    C'est la JUMELLE du retrait des blancs : la moitié visible de la classe
+    était traitée, l'autre était l'interrupteur.
+    """
+    import base64
+
+    reel, fictif = "db-01.acme.internal", "hote-fictif.test"
+    source, cible = (reel, fictif) if sens == "outgoing" else (fictif, reel)
+    canonique = base64.b64encode(source.encode()).decode()
+    piege = canonique[:14] + invisible + canonique[14:]
+
+    # Le récepteur, lui, jette l'invisible et retrouve la valeur entière.
+    assert base64.b64decode(piege.encode("utf-8")).decode() == source
+
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {"v": piege}}).encode()
+    rendu = json.loads(getattr(transform, sens)("h", {}, corps))["result"]["v"]
+    assert rendu != piege, f"charge non vue ({nom})"
+    dedans = base64.b64decode(rendu.encode("utf-8")).decode()
+    assert source not in dedans, dedans
+    assert cible in dedans, dedans
+
+
+def _jwt(charge: dict) -> str:
+    import base64
+
+    def b64u(donnees):
+        return base64.urlsafe_b64encode(donnees).decode().rstrip("=")
+
+    return ".".join([b64u(json.dumps({"alg": "HS256", "typ": "JWT"}).encode()),
+                     b64u(json.dumps(charge).encode()),
+                     b64u(bytes(range(32)))])
+
+
+def test_a_jwt_that_carries_nothing_real_comes_out_intact(transform):
+    """L'AUTRE MOITIÉ de la règle élargie : elle retire plus de caractères, donc
+    elle pourrait faire passer pour une charge ce qui n'en est pas.
+
+    Un JWT ordinaire — trois parties en base64url, dont une signature — ressort
+    tel quel : sa charge ne rencontre rien à substituer, et c'est l'IDENTITÉ qui
+    le rend, pas une exception écrite pour lui."""
+    jwt = _jwt({"iss": "https://auth.example.com", "sub": "1234567890"})
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"token": jwt}}).encode()))
+    assert rendu["result"]["token"] == jwt
+
+
+def test_a_jwt_payload_is_a_stated_residual(transform):
+    """RÉSIDU ASSUMÉ, épinglé pour qu'il ne soit pas SILENCIEUX.
+
+    Un JWT est du base64URL sans bourrage : ce n'est pas notre alphabet, et ses
+    trois parties ne sont pas lues séparément. Une valeur réelle posée dans sa
+    charge (`iss`) SORT DONC EN CLAIR pour qui décode la partie, et le sort du
+    jeton dépend de l'alignement de ses longueurs — traversé quand la
+    concaténation se décode, intact sinon. Ni l'un ni l'autre n'est un
+    invariant défendable.
+
+    Le test dit ce qui EST, pas ce qu'on voudrait : il rougira le jour où les
+    parties seront lues une à une, et c'est exactement le signal attendu. La
+    correction est au tour suivant ; ce qui compte ici est que le résidu soit
+    compté."""
+    import base64
+
+    jwt = _jwt({"iss": "https://db-01.acme.internal/auth"})
+    sortie = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"token": jwt}}).encode())
+    )["result"]["token"]
+    charge = sortie.split(".")[1]
+    lue = base64.urlsafe_b64decode(charge + "=" * (-len(charge) % 4))
+    assert b"db-01.acme.internal" in lue, \
+        "les parties d'un JWT sont lues : mettre à jour docs/limits.md"
+
+
+@pytest.mark.parametrize("prose", [
+    "Hello, World!", "kubectl get pods -A", "2026-08-12T11:00:00Z",
+    "aaaa bbbb cccc dddd", "abcd efgh ijkl mnop",
+    "SELECT * FROM users WHERE id = 42;",
+])
+def test_ordinary_text_is_not_turned_into_a_payload(transform, prose):
+    """La règle élargie ne doit pas transformer de la prose en base64. Certaines
+    de ces chaînes prennent la FORME une fois la ponctuation retirée : ce qui
+    les protège est le décodage, qui n'en tire pas de l'UTF-8, puis l'identité,
+    qui rend la chaîne d'origine quand rien n'est substitué."""
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": prose}}).encode()))
+    assert rendu["result"]["v"] == prose
+
+
+@pytest.mark.parametrize("visible", [".", ",", '"', " ", ";", ")"])
+def test_no_visible_separator_can_switch_the_substitution_off(transform, visible):
+    """La JUMELLE VISIBLE des caractères invisibles, et elle se mesure :
+    `Buffer.from` de Node jette aussi le point, la virgule et le guillemet, et
+    Python jette tout ce qui n'est pas de l'alphabet. Un contrat fondé sur les
+    seuls caractères « bizarres » aurait donc laissé la porte ouverte à un
+    caractère parfaitement ordinaire."""
+    import base64
+
+    reel = "db-01.acme.internal"
+    canonique = base64.b64encode(reel.encode()).decode()
+    piege = canonique[:14] + visible + canonique[14:]
+    assert base64.b64decode(piege.encode("utf-8")).decode() == reel
+
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": piege}}).encode()))["result"]["v"]
+    assert reel not in base64.b64decode(rendu.encode("utf-8")).decode("utf-8", "replace")
+
+
+@pytest.mark.parametrize("piege", ["= au milieu", "== au milieu", "= au début"])
+def test_stray_padding_cannot_switch_the_substitution_off(transform, piege):
+    """Python jette les `=` égarés et lit la valeur au travers, Node s'arrête au
+    premier et en lit un PRÉFIXE. Deux lectures, donc, et n'en protéger qu'une
+    laissait l'autre ouverte : la lecture par préfixe rendait `db-01.acm`, où
+    rien n'est à substituer, et court-circuitait tout."""
+    import base64
+
+    reel = "db-01.acme.internal"
+    c = base64.b64encode(reel.encode()).decode()
+    valeur = {"= au milieu": c[:12] + "=" + c[12:],
+              "== au milieu": c[:12] + "==" + c[12:],
+              "= au début": "=" + c}[piege]
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": valeur}}).encode()))["result"]["v"]
+    for lu in (base64.b64decode(rendu.encode("utf-8")).decode("utf-8", "replace"),
+               rendu):
+        assert "db-01.acm" not in lu, lu
+
+
+def test_a_plain_address_is_still_substituted_as_text(transform):
+    """La lecture par préfixe a failli coûter cette protection : `10.1.2.3` se
+    réduit à quatre caractères qui SE DÉCODENT, donc une lecture existait, ne
+    portait rien, et rendait la chaîne telle quelle. Une lecture qui ne trouve
+    rien ne doit jamais empêcher le texte d'être protégé."""
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": "10.1.2.3"}}).encode()))
+    assert rendu["result"]["v"] == "198.18.4.5"

@@ -219,11 +219,16 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
         def rendre(d: dt.date, _en=ordre_en, _nom=nom_mois, _pt=point,
                    _t=table, _v=virgule, _src=mois, _ord=ordinal) -> str:
             écrit = _rendre_mois(_nom, _pt, _t, _src, d.month)
+            # L'année sur QUATRE chiffres, comme les formes numériques. Les
+            # formes littérales étaient les seules à l'écrire nue, et le
+            # décalage tourne près de `9999-12-31` : `December 31, 9999`
+            # rendait `October 16, 2`, que personne n'écrit et que le parseur
+            # de ce module refuse — donc une restauration perdue en silence.
             if _en:
-                return f"{écrit} {d.day}{_v} {d.year}"
+                return f"{écrit} {d.day}{_v} {d.year:04d}"
             # `1er` ne vaut qu'au premier du mois : le recopier sur un autre
             # jour écrirait une forme que le français n'a pas.
-            return f"{d.day}{_ord if d.day == 1 else ''} {écrit} {d.year}"
+            return f"{d.day}{_ord if d.day == 1 else ''} {écrit} {d.year:04d}"
 
         return jour, rendre
 

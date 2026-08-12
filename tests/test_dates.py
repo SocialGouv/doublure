@@ -435,3 +435,23 @@ def test_toute_borne_trouvee_est_relisible(texte):
         fragment = texte[debut:fin]
         assert _dates.parse(fragment) is not None, fragment
         assert _dates.shift(fragment, 654) is not None, fragment
+
+
+@pytest.mark.parametrize("ecrit", ["December 31, 9999", "31 décembre 9999",
+                                   "Dec 31, 9999", "31 déc. 9999"])
+def test_une_date_de_BORD_se_relit_dans_la_forme_litterale(ecrit):
+    """HAUT, restauration perdue en SILENCE — et c'est la JUMELLE du décalage.
+
+    Les formes NUMÉRIQUES écrivent l'année sur quatre chiffres, les formes
+    LITTÉRALES l'écrivaient nue. Or le décalage tourne près de `9999-12-31` :
+    l'année atterrit sous mille et `December 31, 9999` rendait `October 16, 2`
+    — une forme que personne n'écrit, et que le parseur de ce module REFUSE.
+    Le modèle normalise ce qu'il lit, le coffre ne contient que l'aberration,
+    et l'opérateur récupère une date fictive sans le savoir.
+
+    Le correctif de la rotation était bon ; il n'avait été porté que sur une
+    des deux moitiés du rendu."""
+    jour, rendre = _dates.parse(ecrit)
+    rendu = rendre(_dates._decaler(jour, 654))
+    assert _dates.parse(rendu) is not None, rendu
+    assert _dates.parse(rendu)[0] == _dates._decaler(jour, 654)
