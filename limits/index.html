@@ -1495,6 +1495,27 @@ narrowed to the entity before they reach the vault — the key is the date, not
 the field carrying it. The class remains for anything the model paraphrases
 rather than quotes; the announcement asks for whole identifiers, which
 mitigates without measuring.</p>
+<p><strong>Only <code>gzip</code> is decompressed on an inspected MCP channel.</strong> A <code>deflate</code> or
+<code>brotli</code> body is treated as unreadable and the exchange is refused. Adding a
+codec is small, but every decompression path needs the output bound and the
+adversarial pass that gzip got; until then the failure is a loud 502 rather
+than something relayed unread.</p>
+<p><strong>Two dates glued through a shared year lose the second one's day and month.</strong>
+<code>March 15, 2020/04/16</code> shifts the first and leaves <code>04/16</code> verbatim: the two
+matches overlap on the year, and the longer one wins. The year — the only part
+that could date the incident on its own — is substituted; a day and month
+without it remain. Reachable only if a detector spans such a concatenation.</p>
+<p><strong>A version-shaped string can be read as a date.</strong> <code>v3.14.2020</code> shifts to
+<code>v11.6.2022</code>. Nothing real leaves; something that was never a date comes back
+changed, and only if a detector marked it.</p>
+<p><strong>Two keys that denote the same entity abort the exchange, loudly.</strong> If a JSON
+object carries <code>Alice.Dupont@acme.internal</code> and <code>alice.dupont@acme.internal</code> as
+two distinct keys, canonicalisation gives them one surrogate — correctly, since
+they are one address — and there is then no way to render both. The two real
+options are to refuse noisily or to drop one silently; the second is the exact
+failure this guard was added to close. Merging the values, or tagging the
+collision, would change the schema the server expects and let the exchange
+continue while the tool receives something it cannot read.</p>
 <p><strong>A base64 payload that decodes as UTF-8 is treated as text, whatever it is
 declared to be</strong> — and nothing is layered on top of that decision. A guard that
 asked "does this look like text?" was tried and removed: it refused on a NUL
