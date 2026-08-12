@@ -1190,14 +1190,16 @@ class SurrogateEngine:
         env = canon.attrs.get("env") or ""
         word = self._combo("generic", canon.key, attempt, SERVICE_WORDS)
         prefix = next((p for p in _GENERIC_PREFIXES if v.lower().startswith(p)), "")
-        # Le groupe de chiffres n'est recopié QUE là où un préfixe
-        # d'infrastructure en fait un INDEX (`svc-42` → `svc-glacier42`) : sans
-        # lui, ces chiffres sont le CONTENU. Écarter la seule DATE était une
-        # liste NOIRE, donc fausse par construction — `jdoe1985` gardait une
-        # année de naissance, un CPF ses trois premiers chiffres, un espace de
-        # noms l'année de son projet. Aucun de ces types n'a de branche à lui,
-        # donc tous tombent ici, et la liste n'aurait jamais fini de s'allonger.
-        m = re.search(r"(\d{1,6})", v) if prefix else None
+        # Le groupe de chiffres n'est recopié que là où sa POSITION en fait un
+        # INDEX : collé au préfixe d'infrastructure, et court. Écarter la seule
+        # DATE était une liste NOIRE, donc fausse par construction — `jdoe1985`
+        # gardait une année de naissance. Exiger le préfixe puis chercher le
+        # premier nombre N'IMPORTE OÙ était la même erreur retournée :
+        # `svc-1985-jdoe` et `ns-19850201-jdoe` portent un préfixe ET du
+        # contenu numérique, donc la liste blanche fuyait comme la noire. Ce qui
+        # décide n'est ni le type ni le préfixe, c'est où le nombre se trouve.
+        m = re.match(rf"{re.escape(prefix)}(\d{{1,3}})(?:[-_].*)?$",
+                     v.lower()) if prefix else None
         num = m.group(1) if m else ""
         pieces = [f"{prefix}{word}{num}"]
         if env:

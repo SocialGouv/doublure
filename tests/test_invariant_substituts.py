@@ -215,6 +215,15 @@ def test_une_date_au_bord_de_la_plage_ne_repart_pas_en_clair(moteur):
     ("CPF", "123.456.789-01", "123"),
     ("K8S_NAMESPACE", "prod-2024-billing", "2024"),
     ("SERVICE_ACCOUNT", "billing-2024-042", "2024"),
+    # Et l'autre MOITIÉ, celle que la première version du test avait manquée :
+    # une valeur qui COMMENCE par un préfixe d'infrastructure et porte quand
+    # même du contenu numérique. Exiger le préfixe puis chercher le premier
+    # nombre n'importe où reproduisait la fuite exactement.
+    ("SERVICE_ACCOUNT", "svc-1985-jdoe", "1985"),
+    ("SERVICE_ACCOUNT", "svc-jdoe1985", "1985"),
+    ("SERVICE_ACCOUNT", "ns-19850201-jdoe", "198502"),
+    ("K8S_NAMESPACE", "team-2024-billing", "2024"),
+    ("K8S_NAMESPACE", "app-tenant-42-us", "42"),
 ])
 def test_le_repli_ne_recopie_pas_les_chiffres_qui_sont_du_CONTENU(
         moteur, etype, valeur, interdit):
@@ -237,4 +246,6 @@ def test_le_repli_garde_l_index_quand_un_prefixe_en_fait_un_index(moteur):
     Le test précédent prétendait couvrir ça avec `srv-42.acme.internal`, qui
     passe en réalité par le générateur d'hôtes : il ne traversait pas ce
     repli."""
-    assert "42" in moteur.substitute_value("SERVICE_ACCOUNT", "svc-42")
+    for valeur, index in (("svc-42", "42"), ("svc-100", "100"),
+                          ("svc-42-payment", "42"), ("bot-12_worker", "12")):
+        assert index in moteur.substitute_value("SERVICE_ACCOUNT", valeur), valeur

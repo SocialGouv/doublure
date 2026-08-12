@@ -674,3 +674,53 @@ def test_a_plain_address_is_still_substituted_as_text(transform):
     rendu = json.loads(transform.outgoing("h", {}, json.dumps(
         {"jsonrpc": "2.0", "id": 1, "result": {"v": "10.1.2.3"}}).encode()))
     assert rendu["result"]["v"] == "198.18.4.5"
+
+
+@pytest.mark.parametrize("suffixe", ["XXXX", "ABCD", "SGVs", "XX"])
+def test_no_alphabet_glued_after_padding_can_switch_the_substitution_off(
+        transform, suffixe):
+    """TÉMOIN MANQUANT du tour 15 — le correctif fermait trois formes, les
+    tests n'en épinglaient que deux.
+
+    Exiger que la chaîne ENTIÈRE ait la forme (`fullmatch`) était la troisième
+    formulation d'un contrat plus étroit que celui du destinataire : quatre
+    caractères d'alphabet collés derrière le bourrage suffisaient à l'éteindre,
+    pendant que Python, Node et Go décodent tous le préfixe. Remplacer par
+    `fullmatch` laisse aujourd'hui encore 216 tests verts — d'où celui-ci."""
+    import base64
+
+    reel = "db-01.acme.internal"
+    piege = base64.b64encode(reel.encode()).decode() + suffixe
+    assert base64.b64decode(piege.encode("utf-8")).decode() == reel
+
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": piege}}).encode()))["result"]["v"]
+    assert reel not in base64.b64decode(
+        rendu.encode("utf-8")).decode("utf-8", "replace")
+
+
+@pytest.mark.parametrize("reel", ["10.1.2.3", "db-01.acme.internal",
+                                  "acme-billing"])
+def test_base64_without_padding_is_still_substituted(transform, reel):
+    """CRITIQUE, sixième occurrence — le bourrage RETIRÉ passait entre les deux
+    lectures.
+
+    `_BASE64` exige un `=` final, donc la lecture par préfixe s'arrête un
+    quantum trop tôt et rend `db-01.acme.interna` : rien à substituer. Et la
+    lecture large ne se déclenchait que sur un `=` égaré, qu'il n'y a pas ici.
+    Python refuse un bourrage incomplet, mais `Buffer.from` de Node — qui EST
+    l'implémentation MCP ordinaire — le complète et lit la valeur entière.
+
+    Le déclencheur est désormais la NON-COUVERTURE, pas l'énumération des
+    raisons qui la produisent : c'est cette énumération qui a été trop étroite
+    trois fois de suite."""
+    import base64
+
+    sans = base64.b64encode(reel.encode()).decode().rstrip("=")
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": sans}}).encode()))["result"]["v"]
+    assert rendu != sans, "la charge n'a pas été vue"
+    # Ce que Node en tire après nous : il complète le bourrage tout seul.
+    lu = rendu.rstrip("=")
+    assert reel not in base64.b64decode(
+        (lu + "=" * (-len(lu) % 4)).encode("utf-8")).decode("utf-8", "replace")

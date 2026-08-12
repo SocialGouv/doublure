@@ -1653,6 +1653,47 @@ payload leaves in the clear — and whether the token is traversed depends on ho
 its lengths align, which is not a defensible invariant either. The test will go
 red the day the parts are read, which is the intended signal.
 
+## Round 16 (2026-08-12) — the enumeration was the defect, three times over
+
+Five defects, and each one is the same shape: **a rule written as a LIST of the
+cases known at the time, where the property was available instead.**
+
+**Base64 without padding, CRITICAL and the sixth of its family.** `_BASE64`
+requires a trailing `=`, so the prefix reading stops one quantum early and
+yields `db-01.acme.interna` — nothing to substitute — while the broad reading
+only fired on a stray `=`, which an unpadded string does not have. Python
+refuses incomplete padding, but `Buffer.from` of Node, which IS the ordinary MCP
+implementation, completes it and reads the whole value. The trigger is now
+NON-COVERAGE, not the enumeration of the reasons that produce it — that
+enumeration had been too narrow three rounds running.
+
+**My whitelist of the hour before leaked exactly like the blacklist it
+replaced.** Requiring an infrastructure prefix and then copying the first digit
+run ANYWHERE is the same positional mistake turned around: `svc-1985-jdoe`,
+`ns-19850201-jdoe` and `team-2024-billing` all carry a prefix AND numeric
+content. What decides is neither the type nor the prefix but WHERE the number
+sits — glued to the prefix, and short. And my own regression test had covered
+only the trivial half: values that carry no prefix at all, so the whitelist
+branch was never exercised.
+
+**A month with no abbreviation still got the abbreviation's dot** — third
+occurrence of the round-12 pattern. `mars`, `mai`, `juin`, `août` and `may` have
+no short form: their standard form IS the full name, so `3 oct. 2020` rendered
+`2 mars. 2022`. The parser re-reads it, which is exactly what kept it invisible,
+but nobody writes it: the model normalises to `2 mars 2022` and the vault holds
+only the aberration. Same round: `1er` is the canonical French first-of-month,
+and a source that did not itself fall on a first had nothing to say about it —
+`15 mars 2020` shifted onto a first rendered `1 août 2022` where the model
+writes `1er`.
+
+**The proof perimeter found the missing witness again**, in the round it was
+created for: round 15's commit named THREE forms closed by one fix, and the
+tests pinned two. Restoring `fullmatch` left 216 tests green while four printable
+characters glued after the padding leaked the value. It also confirmed the other
+three fixes are covered — 4, 4 and 20+ tests redden when their fix is reverted.
+**Two rounds, two missing witnesses, both on the same shape**: a fix that closes
+several forms needs a witness per form, not per fix.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

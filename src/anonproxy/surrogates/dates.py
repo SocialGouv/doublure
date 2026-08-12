@@ -138,6 +138,15 @@ def _rendre_mois(nom_source: str, point: str, table: tuple[str, ...],
         # le normalise, et le coffre ne connaît que l'aberration.
         standard = (_ABREV_FR if table is MOIS_FR else _ABREV_EN)[mois - 1][0]
         nom = _sans_accent(standard) if nom != table[mois - 1] else standard
+        if standard == table[mois - 1]:
+            # `mars`, `mai`, `juin`, `août` et `may` n'ONT pas d'abréviation :
+            # leur forme standard est le nom entier. Y coller le point de la
+            # source écrivait `mars.`, `mai.`, `août.`, `May.` — que le parseur
+            # relit, mais que personne n'écrit. Or c'est exactement ce que le
+            # tour 12 avait corrigé pour les autres mois : relire n'est pas
+            # écrire, le modèle normalise vers la forme sans point, et le
+            # coffre ne connaît que l'aberration.
+            point = ""
     if nom_source.isupper():
         nom = nom.upper()
     elif nom_source[:1].isupper():
@@ -214,7 +223,12 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
         except ValueError:
             return None
 
-        ordinal = "" if ordre_en else (m[2] or "")
+        # `1er` est la forme canonique du premier du mois en français, et le
+        # modèle l'écrit ainsi en recopiant. La source ne dit ce qu'elle en
+        # pense que si ELLE tombait un premier : sinon `15 mars 2020` décalé
+        # sur un premier rendait `1 août 2022`, le modèle recopiait
+        # `1er août 2022`, et le coffre ne reconnaissait plus rien.
+        ordinal = "" if ordre_en else (m[2] or ("" if int(m[1]) == 1 else "er"))
 
         def rendre(d: dt.date, _en=ordre_en, _nom=nom_mois, _pt=point,
                    _t=table, _v=virgule, _src=mois, _ord=ordinal) -> str:

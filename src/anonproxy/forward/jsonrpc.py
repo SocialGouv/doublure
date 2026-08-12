@@ -262,7 +262,8 @@ class JsonRpcTransform:
         caractères collés derrière le bourrage l'éteignaient).
         """
         lectures: list[tuple[int, str]] = []
-        lu = _BASE64.match(_HORS_ALPHABET.sub("", valeur))
+        compact = _HORS_ALPHABET.sub("", valeur)
+        lu = _BASE64.match(compact)
         if lu is not None and (clair := _decoder(lu.group())) is not None:
             # Le compactage a supprimé des caractères : les positions ne se
             # correspondent plus, on recompte pour retrouver la fin dans
@@ -275,16 +276,18 @@ class JsonRpcTransform:
                         fin = i + 1
                         break
             lectures.append((fin, clair))
-        # La lecture la plus LARGE ne sert QUE dans le cas que la première
-        # manque : un `=` posé ailleurs qu'en bourrage final. Python le jette et
-        # lit la valeur au travers, là où la première s'arrête dessus. La
-        # restreindre à ce cas n'est pas de la prudence, c'est ce qui empêche de
-        # lire un JWT comme une charge : ses trois parties sont du base64url
-        # SANS bourrage, et concaténées elles se décodent — le traverser
-        # invaliderait sa signature. Ici la chaîne est une charge d'un bout à
-        # l'autre, donc pas de suite.
-        if "=" not in _HORS_ALPHABET.sub("", valeur).rstrip("="):
-            return lectures
+            if lu.end() == len(compact):
+                return lectures  # la première a tout couvert : rien à ajouter
+        # La lecture la plus LARGE sert dès que la première ne couvre pas tout,
+        # et le déclencheur a déjà été trop étroit une fois. Je l'avais restreint
+        # au `=` posé hors bourrage final — le seul cas connu alors — et le
+        # base64 SANS bourrage passait donc à travers les deux : `_BASE64` exige
+        # un `=` en fin, la première lecture s'arrête un quantum trop tôt et rend
+        # `db-01.acme.interna`, où il n'y a rien à substituer, tandis que
+        # `Buffer.from` de Node complète le bourrage et lit la valeur entière.
+        # Le déclencheur est donc la NON-COUVERTURE, pas la liste des raisons
+        # qui la produisent. Ici la chaîne est une charge d'un bout à l'autre,
+        # donc pas de suite.
         noyau = _HORS_ALPHABET_NI_BOURRAGE.sub("", valeur)
         if len(noyau) % 4 == 1:
             noyau = noyau[:-1]

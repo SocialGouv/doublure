@@ -455,3 +455,45 @@ def test_une_date_de_BORD_se_relit_dans_la_forme_litterale(ecrit):
     rendu = rendre(_dates._decaler(jour, 654))
     assert _dates.parse(rendu) is not None, rendu
     assert _dates.parse(rendu)[0] == _dates._decaler(jour, 654)
+
+
+@pytest.mark.parametrize("source,cible", [
+    ("3 oct. 2020", "mars"), ("1er janv. 2020", "août"),
+    ("15 avr. 2020", "mai"), ("Feb. 3, 2020", "May"),
+])
+def test_un_mois_SANS_abreviation_ne_recoit_pas_de_point(source, cible):
+    """HAUT, restauration perdue en SILENCE — TROISIÈME occurrence du motif.
+
+    `mars`, `mai`, `juin`, `août` et `may` n'ont pas d'abréviation : leur forme
+    standard EST le nom entier. Le point de la source leur était collé quand
+    même, donc `3 oct. 2020` rendait `2 mars. 2022`. Le parseur le relit — c'est
+    précisément ce qui l'avait rendu invisible — mais personne ne l'écrit : le
+    modèle normalise vers `2 mars 2022`, et le coffre ne contient que
+    l'aberration.
+
+    Le tour 12 avait corrigé `nove.` et `déce.` en cherchant l'abréviation
+    STANDARD. Le correctif était bon ; il ne couvrait pas les mois dont la forme
+    standard n'est pas abrégée."""
+    import datetime as dt
+
+    jour, rendre = _dates.parse(source)
+    rendus = [rendre(dt.date(2022, mois, 3)) for mois in range(1, 13)]
+    vise = [r for r in rendus if cible.lower() in r.lower()]
+    assert vise, (cible, rendus)
+    for r in vise:
+        assert not r.replace(cible, "").replace(cible.lower(), "").count("."), r
+        assert _dates.parse(r) is not None, r
+
+
+def test_le_premier_du_mois_recoit_son_ordinal():
+    """MOYEN, restauration perdue en silence. `1er` est la forme canonique du
+    premier du mois en français : une source qui ne tombait PAS un premier
+    n'avait rien à en dire, et le rendu écrivait `1 août 2022` là où le modèle
+    recopie `1er août 2022`."""
+    import datetime as dt
+
+    _, rendre = _dates.parse("15 mars 2020")
+    assert rendre(dt.date(2022, 8, 1)) == "1er août 2022"
+    # Mais une source qui écrit `1 mars` sans `er` garde SON choix.
+    _, sans = _dates.parse("1 mars 2020")
+    assert sans(dt.date(2022, 8, 1)) == "1 août 2022"
