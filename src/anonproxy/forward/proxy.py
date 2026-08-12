@@ -352,8 +352,12 @@ class ForwardProxy:
         try:
             ligne, entetes = _analyser(requete)
             methode = ligne.split(" ", 1)[0].upper()
-            attentes = [a.strip() for a in entetes.pop("expect", "").split(",")
-                        if a.strip()]
+            # Le JETON, sans ses paramètres : la RFC autorise
+            # `100-continue;q=1`, et comparer la valeur entière rendait un 417
+            # sur une attente qu'on sait pourtant honorer.
+            attentes = [a.split(";", 1)[0].strip()
+                        for a in entetes.pop("expect", "").split(",")
+                        if a.split(";", 1)[0].strip()]
             autres = [a for a in attentes if a.lower() != "100-continue"]
             if autres:
                 # Une attente qu'on ne sait pas honorer. La RETIRER en silence
@@ -432,6 +436,21 @@ class ForwardProxy:
                     ce, destination,
                     f"plus de {_MAX_INTERIM} réponses intérimaires sans réponse "
                     "finale : l'amont tient l'échange")
+                return False
+            if entetes_r.get("transfer-encoding") or \
+                    entetes_r.get("content-length", "0").strip() != "0":
+                # Une `1xx` n'a JAMAIS de corps : la RFC la termine à la fin de
+                # sa tête. Celle qui en déclare un fait passer ses octets pour
+                # la tête SUIVANTE — c'est le vol de réponse, par la porte que
+                # la boucle intérimaire vient d'ouvrir. Mesuré : un amont
+                # glissait un `418` complet dans le corps d'un `100 Continue`,
+                # et le client le recevait comme sa réponse. `_residu_amont` ne
+                # peut rien y voir : après lecture de la fausse réponse, le
+                # tampon est vide.
+                await self._echouer(
+                    ce, destination,
+                    "réponse intérimaire porteuse d'un corps : la RFC le lui "
+                    "interdit, et ces octets deviendraient la réponse suivante")
                 return False
             # Une 1xx n'a jamais de corps : `avec_corps=False` évite aussi de
             # lui inventer un `content-length`, que la RFC lui interdit.

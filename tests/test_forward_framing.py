@@ -835,3 +835,58 @@ def test_an_expectation_is_answered_never_silently_dropped(
         assert attendu in recu, recu[:300]
     finally:
         proxy.stop()
+
+
+@pytest.mark.parametrize("entete", [
+    b"content-length: 69",
+    b"transfer-encoding: chunked",
+    b"content-length: 0\r\ntransfer-encoding: chunked",
+])
+def test_an_interim_response_carrying_a_body_is_refused(
+        interception, autorite_origine, tmp_path, entete):
+    """CRITIQUE — le vol de réponse, par la porte que la boucle intérimaire
+    venait d'ouvrir.
+
+    Une `1xx` n'a JAMAIS de corps : la RFC la termine à la fin de sa tête. Le
+    `content-length` qu'elle déclarait n'était donc jamais drainé, et ses
+    octets servaient de TÊTE au tour suivant. Mesuré : un amont glissait un
+    `418` complet dans le corps d'un `100 Continue`, et le client le recevait
+    comme sa réponse — un tiers choisissait ce que l'agent croit avoir reçu.
+
+    `_residu_amont` ne peut rien y voir : après lecture de la fausse réponse,
+    le tampon est vide. Même classe que le vol par remorque de chunk et par
+    corps sur 204, fermés au tour 6 ; celui-ci passait par une surface qui
+    n'existait pas encore."""
+    faux = (b"HTTP/1.1 418 pwn\r\ncontent-length: 10\r\n"
+            b"connection: close\r\n\r\nCORPS_FAKE")
+    piege = b"HTTP/1.1 100 Continue\r\n" + entete + b"\r\n\r\n" + faux
+    origine, proxy = _monter(interception, autorite_origine, tmp_path, [piege])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "tâche morte en silence"
+        assert b"418 pwn" not in recu, recu[:300]
+        assert b"CORPS_FAKE" not in recu, recu[:300]
+        assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()
+
+
+@pytest.mark.parametrize("valeur", [
+    b"100-continue;q=1", b"100-continue; q=1", b'100-continue;q="1"',
+])
+def test_a_parameterised_expectation_is_still_honoured(
+        interception, autorite_origine, tmp_path, valeur):
+    """FAUX POSITIF. La RFC autorise des paramètres sur une attente
+    (`expectation = token [ "=" … ] parameters`). Comparer la valeur ENTIÈRE
+    rendait un 417 sur `100-continue;q=1` — une attente qu'on sait pourtant
+    honorer. C'est le jeton, avant le point-virgule, qui décide."""
+    origine, proxy = _monter_interim(interception, autorite_origine, tmp_path)
+    try:
+        recu = _une_requete(proxy, interception, origine.port,
+                            b"POST /x HTTP/1.1\r\nhost: x\r\ncontent-length: 5"
+                            b"\r\nexpect: " + valeur + b"\r\nconnection: close"
+                            b"\r\n\r\nhello", attendre_interim=True)
+        assert b"100 Continue" in recu, recu[:300]
+        assert b"417" not in recu, recu[:300]
+    finally:
+        proxy.stop()

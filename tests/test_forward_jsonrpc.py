@@ -362,3 +362,76 @@ def test_the_same_collision_is_caught_at_any_depth(transform):
         "profond": {"cle_a": "perdue", "meme": "gardée"}}}}).encode()
     with pytest.raises(BinaryBody, match="collision de clés"):
         t.outgoing("h", {}, corps)
+
+
+@pytest.mark.parametrize("champ", [
+    "blob", "payload", "attachment", "text", "value", "raw", "b64", "chunk",
+])
+def test_the_field_name_does_not_decide_either(transform, champ):
+    """CRITIQUE. Après le type MIME, la LISTE DE NOMS DE CHAMPS — écrite elle
+    aussi par l'amont. Il suffisait de ranger la charge sous `payload` au lieu
+    de `blob` pour que la protection tombe. Deux versions de la même erreur, au
+    même endroit, à deux heures d'intervalle.
+
+    Balayer toutes les chaînes est sans danger parce que le tour est
+    l'IDENTITÉ quand rien n'est détecté."""
+    import base64
+
+    charge = base64.b64encode(b"connect db-01.acme.internal").decode()
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {champ: charge}}).encode()
+    rendu = json.loads(transform.outgoing("h", {}, corps))
+    dedans = base64.b64decode(rendu["result"][champ]).decode()
+    assert "db-01.acme.internal" not in dedans, dedans
+    assert "hote-fictif.test" in dedans
+
+
+@pytest.mark.parametrize("opaque", [
+    "ZGVzIG9jdGV0cyBzYW5zIHJpZW4gZGVkYW5z",              # base64 de texte neutre
+    "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijkl",  # JWT (base64url)
+    "a3f5c9e1b7d2486a3f5c9e1b7d2486a3",                   # hexadécimal
+    "sk-proj-AAAABBBBCCCCDDDDEEEEFFFF",                   # jeton à préfixe
+])
+def test_an_opaque_string_comes_back_byte_for_byte(transform, opaque):
+    """L'AUTRE MOITIÉ, et c'est elle qui rend le balayage acceptable : ce qui
+    ne contient rien à substituer doit ressortir IDENTIQUE. Décoder puis
+    ré-encoder du base64 canonique est l'identité ; l'alphabet standard exclut
+    le base64url, donc les parties d'un JWT ne sont pas touchées."""
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {"v": opaque}}).encode()
+    rendu = json.loads(transform.outgoing("h", {}, corps))
+    assert rendu["result"]["v"] == opaque
+
+
+@pytest.mark.parametrize("reel", ["10.0.0.1", "srv-42", "db01", "1.1.1.1"])
+def test_no_length_threshold_can_switch_the_substitution_off(reel):
+    """CRITIQUE, et c'est le TROISIÈME garde-fou à échec silencieux du même
+    fichier en trois heures — tous les miens.
+
+    J'avais posé une longueur minimale (16 caractères) « parce qu'en dessous ce
+    n'est pas une charge ». `10.0.0.1` s'encode en douze caractères, `srv-42`
+    en huit : toute IPv4 et tout nom d'hôte court passaient intacts. Et c'était
+    une RÉGRESSION — les champs historiquement décodés l'étaient sans borne.
+
+    Le motif se répète : une garde posée « par prudence » au-dessus d'une
+    décision de protection penche du mauvais côté de l'asymétrie, et c'est
+    l'émetteur qui choisit de la déclencher."""
+    import base64
+
+    t = JsonRpcTransform(to_surrogate=lambda s: s.replace(reel, "SUBSTITUÉ"),
+                         to_real=lambda s: s)
+    charge = base64.b64encode(reel.encode()).decode()
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {"blob": charge}}).encode()
+    rendu = json.loads(t.outgoing("h", {}, corps))
+    assert base64.b64decode(rendu["result"]["blob"]).decode() == "SUBSTITUÉ"
+
+
+@pytest.mark.parametrize("court", ["dGVzdA==", "QUJDRA==", "eyJhIjoxfQ=="])
+def test_a_short_opaque_token_still_comes_back_identical(transform, court):
+    """L'AUTRE MOITIÉ : retirer le seuil ne doit pas abîmer un jeton court qui
+    décoderait en UTF-8 par accident. Le tour reste l'identité."""
+    corps = json.dumps({"jsonrpc": "2.0", "id": 1,
+                        "result": {"v": court}}).encode()
+    rendu = json.loads(transform.outgoing("h", {}, corps))
+    assert rendu["result"]["v"] == court

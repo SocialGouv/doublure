@@ -617,3 +617,32 @@ def test_une_regle_de_projet_vaut_dans_une_autre_session(tmp_path):
     # L'AUTRE MOITIÉ : une règle de SESSION, elle, ne traverse toujours pas.
     a.definir("session", "type", "IP_ADDRESS", Decision.REVELER)
     assert b.decide("IP_ADDRESS", "infra", "10.1.2.3")[0] is Decision.ANONYMISER
+
+
+@pytest.mark.parametrize("valeur", [
+    "srv-01\ud800.example",   # demi-paire haute, seule
+    "a\ud800b\udc00c",        # deux demi-paires séparées
+])
+def test_une_demi_paire_de_substitution_est_substituee_pas_un_plantage(tmp_path, valeur):
+    """HAUT. `json.loads` accepte `"\\ud800"` ; UTF-8 le refuse. L'encodage
+    levait une `UnicodeEncodeError` qui traversait `decide` puis
+    `substitute_value` : un 500 non structuré là où le contrat promet que la
+    valeur est SUBSTITUÉE.
+
+    Corriger l'empreinte seule ne faisait que déplacer le plantage dans le
+    coffre, puis dans sa relecture — trois crans successifs. **Une valeur
+    traverse la chaîne entière ou n'y entre nulle part.**"""
+    politique = make_policy(tmp_path)
+    coffre = Vault(tmp_path / "s.db", master_key=MASTER)
+    moteur = SurrogateEngine(vault=coffre, master_key=MASTER, scope_key=SCOPE,
+                             policy=politique)
+    substitut = moteur.substitute_value("HOSTNAME", valeur)
+    assert substitut != valeur
+    assert coffre.view(SCOPE).get(substitut) == valeur, "relecture altérée"
+
+
+def test_retirer_refuse_une_portee_inconnue_sans_planter(tmp_path):
+    """`definir` validait sa portée, `retirer` non : `KeyError` nu là où toutes
+    les autres écritures rendent un refus nommé."""
+    with pytest.raises(PolitiqueInvalide, match="portée inconnue"):
+        make_policy(tmp_path).retirer("portee_inconnue", "type", "HOSTNAME")

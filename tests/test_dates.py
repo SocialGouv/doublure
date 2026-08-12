@@ -173,7 +173,9 @@ def test_une_forme_de_date_reconnue_de_plus(ecrit, attendu):
     ("15 mars 2020", 321, "30 janvier 2021"),
     ("12 MARS 2020", 321, "27 JANVIER 2021"),
     # Une ABRÉVIATION reste une abréviation, de la même longueur.
-    ("3 fev 2020", 321, "20 déc 2020"),
+    # Source ASCII (`fev` pour `février`) : le rendu reste ASCII, sinon le
+    # modèle « corrige » l'accent et le coffre ne reconnaît plus rien.
+    ("3 fev 2020", 321, "20 dec 2020"),
     ("3 fév. 2020", 321, "20 déc. 2020"),
     ("Mar. 3 2020", 321, "Jan. 18 2021"),
     ("March 3, 2020", 321, "January 18, 2021"),
@@ -202,3 +204,138 @@ def test_ce_qui_reste_ambigu_n_est_pas_deviné(ecrit):
     """L'unicité d'une abréviation est VÉRIFIÉE, jamais supposée. Ce qui n'est
     pas reconnu retombe en mot — visible, et c'est le résidu documenté."""
     assert _dates.parse(ecrit) is None
+
+
+def test_chercher_ne_backtracke_pas_sur_un_long_texte_sans_date():
+    """HAUT, déni de service. Le motif qui commence par un NOM DE MOIS avait
+    une classe libre en tête : sur une longue suite de lettres sans date, le
+    moteur consommait toute la suite depuis CHAQUE position.
+
+    Mesuré avant correctif : 565 ms sur 10 Ko, **56,7 s sur 100 Ko** — de quoi
+    figer l'agent sans qu'aucune date soit en jeu. Ce projet a payé trois tours
+    entiers sur cette famille dans le hook, et la règle qui en était sortie —
+    « tout motif ancré sur son littéral » — a été rouverte en ajoutant une
+    forme deux heures plus tôt."""
+    import time
+
+    for texte in ("abcdefgh" * 12_500, "éàüñ" * 12_500):
+        debut = time.monotonic()
+        _dates.chercher(texte)
+        ecoule = time.monotonic() - debut
+        assert ecoule < 1.0, f"{len(texte)} caractères en {ecoule:.1f} s"
+
+
+@pytest.mark.parametrize("texte,attendu", [
+    ("March 3, 2020", (0, 13)),          # en tête de texte
+    ("le March 3, 2020 à 14h", (3, 16)),  # après un mot
+    ("du 3 fév. 2020 au", (3, 14)),
+    # L'assertion corrige aussi un faux positif : `xMarch` est UN mot, pas le
+    # mois de mars précédé d'un x.
+    ("xMarch 3, 2020", None),
+])
+def test_l_ancrage_ne_perd_aucune_date(texte, attendu):
+    assert _dates.chercher(texte) == attendu
+
+
+@pytest.mark.parametrize("valeur,attendu", [
+    # La forme ordinaire d'une PLAGE, dans les cinq écritures reconnues.
+    ("2020-03-15 to 2020-04-16", "2020-11-20 to 2020-12-22"),
+    ("du 3 février 2026 au 12 mars 2026", "du 11 octobre 2026 au 17 novembre 2026"),
+    ("March 3, 2020 through April 5, 2020",
+     "November 8, 2020 through December 11, 2020"),
+    ("2020-03-15 et 2020-04-16 et 2020-05-17",
+     "2020-11-20 et 2020-12-22 et 2021-01-22"),
+    # La même date deux fois doit recevoir le même décalage.
+    ("3 janvier 2020 puis 3 janvier 2020", "9 septembre 2020 puis 9 septembre 2020"),
+])
+def test_toutes_les_dates_d_une_valeur_sont_decalees(valeur, attendu):
+    """CRITIQUE. Le décalage ne traitait que la PREMIÈRE date : les suivantes
+    étaient recopiées VERBATIM dans le substitut, donc une vraie date sortait.
+
+    Et `resserrer` aggravait le cas : il réduisait le span à la première, ce
+    qui faisait tomber les suivantes HORS du périmètre substitué — en clair,
+    sans entrée au coffre ni rien à compter. Une plage de dates est la forme la
+    plus ordinaire qui soit dans un ticket ou un log."""
+    assert _dates.shift(valeur, 250) == attendu
+
+
+def test_un_span_a_plusieurs_dates_n_est_pas_resserre():
+    """Le pendant du précédent : un span qui porte plusieurs dates reste
+    ENTIER, sinon les suivantes sortent du périmètre substitué. C'est le
+    décalage qui les traite toutes."""
+    from anonproxy.pii.spans import resserrer
+
+    texte = "du 3 février 2026 au 12 mars 2026"
+    span = [{"type": "DATE", "value": texte, "start": 0, "end": len(texte),
+             "score": 0.9}]
+    rendu = resserrer(span, texte)[0]
+    assert (rendu["start"], rendu["end"]) == (0, len(texte))
+    # …alors qu'une seule date est bien resserrée sur elle-même.
+    entoure = "le 3 février 2026 à 14h32"
+    span1 = [{"type": "DATE", "value": entoure, "start": 0, "end": len(entoure),
+              "score": 0.9}]
+    r1 = resserrer(span1, entoure)[0]
+    assert entoure[r1["start"]:r1["end"]] == "3 février 2026"
+
+
+@pytest.mark.parametrize("valeur", [
+    "2020-03-15T14:32:00Z",
+    "2020-03-15 14:32",
+    "2020-03-15T14:32:00.123+02:00",
+])
+def test_l_heure_est_toujours_preservee(valeur):
+    """L'AUTRE MOITIÉ : borner la queue de la forme ISO ne doit pas perdre
+    l'heure. Décaler l'heure casserait l'ordre des événements dans une
+    journée, qui est ce que l'agent lit."""
+    decalee = _dates.shift(valeur, 250)
+    assert decalee is not None and decalee.endswith(valeur[10:])
+
+
+@pytest.mark.parametrize("ecrit", [
+    "sept 15, 2020", "oct 3, 2020", "dec 25, 2020", "nov 5, 2020",
+    "jan 7, 2020", "mar 2, 2020",
+])
+def test_une_forme_anglaise_recoit_un_mois_anglais(ecrit):
+    """HAUT, perte de restauration SILENCIEUSE. `sept` préfixe `septembre` ET
+    `september` : l'ordre des tables décidait seul, et un document anglais
+    recevait un mois FRANÇAIS (`sept 15, 2020` → `août 2, 2021`).
+
+    Le modèle normalise alors ce qu'il lit — `August 2, 2021` — et le coffre,
+    qui ne contient que la forme française, ne reconnaît plus rien. La valeur
+    n'a pas fuité ; l'opérateur lit simplement une date fictive sans le savoir,
+    et rien ne le compte. La syntaxe est le seul indice de langue disponible :
+    mois d'abord = anglophone."""
+    jour, rendre = _dates.parse(ecrit)
+    rendu = rendre(jour + dt.timedelta(days=321))
+    mois = rendu.split()[0].rstrip(".,").lower()
+    assert any(m.startswith(mois) for m in _dates.MOIS_EN), rendu
+
+
+@pytest.mark.parametrize("ecrit,decalage", [
+    ("nov 5, 2020", 321),       # `juillet` tronqué donnerait `jui`, ambigu
+    ("dec 25, 2020", 321),      # `août` tronqué donnerait `aoû`, accentué
+    ("3 fev 2020", 321),
+    ("15 Sept 2020", 321),
+])
+def test_ce_qui_est_ecrit_peut_toujours_se_relire(ecrit, decalage):
+    """L'invariant qui manquait : **ce qu'on écrit doit pouvoir se relire.**
+
+    La troncature produisait `jui` — le préfixe que `_mois_index` refuse parce
+    qu'il vaut juin ET juillet — et `aoû`, accentué là où la source était de
+    l'ASCII pur. Dans les deux cas le modèle « corrige », et la restauration se
+    perd sans que rien ne le signale. Le rendu se relit désormais lui-même
+    avant d'accepter une abréviation, et retombe sur le nom complet sinon."""
+    jour, rendre = _dates.parse(ecrit)
+    rendu = rendre(jour + dt.timedelta(days=decalage))
+    relu = _dates.parse(rendu)
+    assert relu is not None, f"{ecrit!r} rendu {rendu!r}, illisible"
+    # …et se relit sur la MÊME date.
+    assert relu[0] == jour + dt.timedelta(days=decalage)
+
+
+def test_une_source_ascii_reste_ascii():
+    """`dec` est de l'ASCII ; rendre `aoû` y met un accent que le document
+    n'avait pas, et que le modèle réécrira."""
+    jour, rendre = _dates.parse("dec 25, 2020")
+    rendu = rendre(jour + dt.timedelta(days=250))
+    assert rendu == rendu.encode("ascii", "ignore").decode(), rendu

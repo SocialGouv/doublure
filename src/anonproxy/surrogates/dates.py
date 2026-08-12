@@ -24,8 +24,17 @@ MOIS_FR = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet",
 MOIS_EN = ("january", "february", "march", "april", "may", "june", "july",
            "august", "september", "october", "november", "december")
 
-#: `2026-02-03`, éventuellement suivi d'une heure qu'on ne touche pas.
-_ISO = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?P<reste>[T ].*)?$")
+#: `2026-02-03`, éventuellement suivi d'une HEURE qu'on ne touche pas.
+#:
+#: La queue était `[T ].*` — libre, donc elle avalait tout ce qui suivait, y
+#: compris une SECONDE date : `2020-03-15 to 2020-04-16` se lisait comme une
+#: date suivie d'un « reste » recopié verbatim, et la seconde date sortait en
+#: clair. Une queue libre après un motif ancré est la même classe que celle
+#: payée sur les chemins d'URL au tour 11 : elle doit dire ce qu'elle accepte.
+_ISO = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})"
+    r"(?P<reste>[T ]\d{2}:\d{2}(?::\d{2})?(?:[.,]\d+)?"
+    r"(?:Z|[+-]\d{2}:?\d{2})?)?$")
 #: `2026/02/03` — année d'abord : l'ordre lève l'ambiguïté par lui-même.
 _ISO_SLASH = re.compile(r"^(\d{4})/(\d{1,2})/(\d{1,2})$")
 #: `03/02/2026`, `03-02-2026`, `3.2.2026` — jour d'abord, usage européen.
@@ -41,13 +50,18 @@ def _sans_accent(mot: str) -> str:
                    if unicodedata.category(c) != "Mn")
 
 
-_MOIS_FR_NUS = tuple(_sans_accent(m) for m in MOIS_FR)
+def _sans_accents(table: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(_sans_accent(m) for m in table)
+
+
+_MOIS_FR_NUS = _sans_accents(MOIS_FR)
 #: En dessous, un préfixe ne désigne plus un mois : `ju` vaut juin ET juillet,
 #: `ma` vaut mars ET mai. Trois lettres suffisent partout ailleurs.
 _ABREV_MIN = 3
 
 
-def _mois_index(nom: str) -> tuple[int, tuple[str, ...]] | None:
+def _mois_index(nom: str, preferee: tuple[str, ...] = MOIS_FR
+                ) -> tuple[int, tuple[str, ...]] | None:
     """Le numéro du mois et la table qui l'a reconnu, ou None.
 
     Comparé SANS accent : `fevrier` et `aout` sont la norme dans un log ASCII,
@@ -61,12 +75,20 @@ def _mois_index(nom: str) -> tuple[int, tuple[str, ...]] | None:
     le prendre pour l'un des deux fabriquerait une date fausse.
     """
     nu = _sans_accent(nom)
-    for table, nus in ((MOIS_FR, _MOIS_FR_NUS), (MOIS_EN, MOIS_EN)):
+    # La table PRÉFÉRÉE d'abord : `sept` préfixe `septembre` ET `september`,
+    # donc l'ordre décidait seul. Un document anglais (`sept 15, 2020`) recevait
+    # un mois FRANÇAIS — une forme hybride que le modèle normalise en anglais
+    # dans sa réponse, et que le coffre ne reconnaît plus : la restauration se
+    # perd EN SILENCE. La syntaxe lue est le seul indice de langue disponible,
+    # et c'est l'appelant qui la connaît.
+    tables = ((preferee, _sans_accents(preferee)),
+              *((t, _sans_accents(t)) for t in (MOIS_FR, MOIS_EN) if t is not preferee))
+    for table, nus in tables:
         if nu in nus:
             return nus.index(nu) + 1, table
     if len(nu) < _ABREV_MIN:
         return None
-    for table, nus in ((MOIS_FR, _MOIS_FR_NUS), (MOIS_EN, MOIS_EN)):
+    for table, nus in tables:
         candidats = [i for i, m in enumerate(nus) if m.startswith(nu)]
         if len(candidats) == 1:
             return candidats[0] + 1, table
@@ -86,9 +108,27 @@ def _rendre_mois(nom_source: str, point: str, table: tuple[str, ...],
     faisait une abréviation — `15 March 2020` revenait `30 Janua 2021`.
     """
     nom = table[mois - 1]
+    # La source a-t-elle RETIRÉ un accent que son propre mois porte ? Alors le
+    # document est écrit en ASCII et le rendu doit l'être aussi : couper `août`
+    # à trois donnait `aoû` là où le document portait `fev`, et le modèle
+    # « corrige » ce qu'il lit — le coffre ne reconnaît plus rien.
+    #
+    # La condition porte sur le mois de DÉPART, pas sur la simple absence
+    # d'accent : `janvier` n'en a pas parce que le mot n'en a pas, et en
+    # déduire de l'ASCII faisait rendre `fevrier` au lieu de `février`.
+    canonique = table[mois_source - 1]
+    if _sans_accent(canonique) != canonique and \
+            _sans_accent(nom_source) == nom_source.lower():
+        nom = _sans_accent(nom)
     coupe = len(_sans_accent(nom_source))
     if coupe < len(_sans_accent(table[mois_source - 1])):
-        nom = nom[:coupe]
+        tronque = nom[:coupe]
+        # **Ce qu'on écrit doit pouvoir se relire.** `juillet` coupé à trois
+        # donne `jui`, précisément le préfixe que `_mois_index` REFUSE parce
+        # qu'il vaut juin ET juillet : la restauration s'y perdait en silence.
+        relu = _mois_index(tronque, table)
+        if relu is not None and relu[0] == mois:
+            nom = tronque
     if nom_source.isupper():
         nom = nom.upper()
     elif nom_source[:1].isupper():
@@ -149,7 +189,12 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
         if not (m := motif.match(valeur)):
             continue
         nom_mois, point = (m[1], m[2]) if ordre_en else (m[3], m[4])
-        reconnu = _mois_index(nom_mois)
+        # La syntaxe dit la langue : `March 3, 2020` est anglophone,
+        # `3 mars 2020` francophone. C'est le seul indice disponible, et
+        # sans lui une abréviation commune aux deux tables (`sept`, `oct`,
+        # `nov`, `dec`) faisait rendre un mois français dans une forme
+        # anglaise.
+        reconnu = _mois_index(nom_mois, MOIS_EN if ordre_en else MOIS_FR)
         if reconnu is None:
             return None
         mois, table = reconnu
@@ -186,27 +231,59 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
 #: le modèle recevait un mot d'hôte là où le document annonçait une date, et
 #: cessait de pouvoir répondre « quand ». L'entourage n'est pas du bruit, c'est
 #: du texte qu'il faut rendre intact.
+#: `(?<![^\W\d_])` — le motif qui commence par un NOM DE MOIS doit commencer un
+#: mot. Sans cette assertion, sa tête est une classe libre : sur une longue
+#: suite de lettres sans date, le moteur consomme toute la suite depuis CHAQUE
+#: position, donc un coût quadratique. Mesuré avant : 565 ms sur 10 Ko, 56,7 s
+#: sur 100 Ko — de quoi figer l'agent sans qu'aucune date soit en jeu.
+#:
+#: Ce projet a payé trois tours entiers sur cette même famille dans le hook, et
+#: la règle qui en était sortie était « tout motif ancré sur son littéral ». Je
+#: l'ai rouverte en ajoutant une forme. Les autres motifs commencent par un
+#: chiffre borné, donc échouent au premier caractère d'une suite de lettres.
 _CHERCHE = (
     re.compile(r"\d{4}-\d{2}-\d{2}"),
     re.compile(r"\d{4}/\d{1,2}/\d{1,2}"),
     re.compile(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}"),
     re.compile(r"\d{1,2}(?:er)? [^\W\d_]+\.? \d{4}", re.UNICODE),
-    re.compile(r"[^\W\d_]+\.? \d{1,2},? \d{4}", re.UNICODE),
+    re.compile(r"(?<![^\W\d_])[^\W\d_]+\.? \d{1,2},? \d{4}", re.UNICODE),
 )
 
 
+def chercher_toutes(valeur: str) -> list[tuple[int, int]]:
+    """Bornes de TOUTES les dates lisibles, de gauche à droite, sans recouvrement.
+
+    Une valeur en porte souvent plusieurs — `du 3 février 2026 au 12 mars 2026`
+    est la forme ordinaire d'une plage. N'en traiter qu'une laissait la seconde
+    VERBATIM : hors du span resserré, donc jamais substituée, ou recopiée telle
+    quelle dans le substitut. Une vraie date sortait.
+
+    En cas de recouvrement, la plus LONGUE gagne : `3 février 2026` doit primer
+    sur ce qu'un motif plus court pourrait attraper dedans.
+    """
+    trouves: list[tuple[int, int]] = []
+    for motif in _CHERCHE:
+        for m in motif.finditer(valeur):
+            if parse(m.group(0)) is not None:
+                trouves.append((m.start(), m.end()))
+    retenus: list[tuple[int, int]] = []
+    for debut, fin in sorted(trouves, key=lambda b: (b[0], -(b[1] - b[0]))):
+        if all(fin <= d or debut >= f for d, f in retenus):
+            retenus.append((debut, fin))
+    return sorted(retenus)
+
+
 def chercher(valeur: str) -> tuple[int, int] | None:
-    """Bornes de la date CONTENUE dans la valeur, ou None.
+    """Bornes de la PREMIÈRE date contenue dans la valeur, ou None.
 
     Sert d'abord à resserrer un span avant qu'il n'entre au coffre : la clé
     doit être la date, pas le champ qui la porte, sinon le modèle citant la
-    date seule ne retrouve rien.
+    date seule ne retrouve rien. L'appelant doit vérifier avec
+    `chercher_toutes` qu'il n'y en a pas plusieurs — resserrer sur la première
+    ferait sortir les suivantes du span, donc en clair.
     """
-    for motif in _CHERCHE:
-        trouve = motif.search(valeur)
-        if trouve is not None and parse(trouve.group(0)) is not None:
-            return trouve.start(), trouve.end()
-    return None
+    toutes = chercher_toutes(valeur)
+    return toutes[0] if toutes else None
 
 
 def shift(valeur: str, jours: int) -> str | None:
@@ -223,17 +300,26 @@ def shift(valeur: str, jours: int) -> str | None:
         except OverflowError:
             return None
 
-    for motif in _CHERCHE:
-        trouve = motif.search(valeur)
-        if trouve is None:
-            continue
-        if trouve.group(0) == valeur:
+    # TOUTES les dates, pas la première. N'en décaler qu'une laissait les
+    # suivantes VERBATIM dans le substitut : `du 3 février 2026 au 12 mars
+    # 2026` sortait avec sa seconde date intacte, donc une vraie date partait.
+    bornes = chercher_toutes(valeur)
+    if not bornes:
+        return None
+    morceaux: list[str] = []
+    curseur = 0
+    decalee_au_moins_une = False
+    for debut, fin in bornes:
+        if (debut, fin) == (0, len(valeur)):
             # `parse` a déjà refusé cette valeur entière : se rappeler dessus
             # ne peut que recommencer. Une date qui a la FORME d'une date sans
             # en être une (`2020-02-30`, courant dans un export) faisait ainsi
             # exploser la pile, et `RecursionError` n'est rattrapée nulle part.
             return None
-        decalee = shift(trouve.group(0), jours)
-        if decalee is not None:
-            return valeur[:trouve.start()] + decalee + valeur[trouve.end():]
-    return None
+        decalee = shift(valeur[debut:fin], jours)
+        morceaux.append(valeur[curseur:debut])
+        morceaux.append(decalee if decalee is not None else valeur[debut:fin])
+        decalee_au_moins_une |= decalee is not None
+        curseur = fin
+    morceaux.append(valeur[curseur:])
+    return "".join(morceaux) if decalee_au_moins_une else None

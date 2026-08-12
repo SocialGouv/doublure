@@ -156,7 +156,13 @@ class Policy:
         Le type entre dans l'empreinte : la même chaîne vue comme HOSTNAME ou
         comme FILE_PATH n'est pas la même décision.
         """
-        msg = f"{etype}\x1f{valeur}".encode("utf-8")
+        # `surrogatepass` : un JSON parfaitement valide peut porter une
+        # demi-paire de substitution (`"\ud800"`), que `json.loads` accepte
+        # et qu'UTF-8 refuse. L'encodage levait alors à travers `decide`
+        # jusqu'à `substitute_value`, donc un 500 non structuré là où le
+        # contrat promet un refus. Une empreinte n'a pas à être du texte
+        # valide : elle a à être STABLE et injective.
+        msg = f"{etype}\x1f{valeur}".encode("utf-8", errors="surrogatepass")
         return hmac.new(self._sel, msg, hashlib.sha256).hexdigest()[:32]
 
     # -- lecture ------------------------------------------------------------ #
@@ -259,6 +265,11 @@ class Policy:
         return chemin
 
     def retirer(self, portee: str, granularite: str, cle: str) -> bool:
+        # `definir` valide sa portée, pas `retirer` : une portée inconnue y
+        # faisait un `KeyError` nu, là où toutes les autres écritures rendent
+        # un refus nommé.
+        if portee not in PORTEES:
+            raise PolitiqueInvalide(f"portée inconnue : {portee!r} (parmi {PORTEES})")
         with self._lock:
             contenu = self._charge(portee)
             if cle not in (contenu.get(granularite) or {}):

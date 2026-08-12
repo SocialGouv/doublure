@@ -37,8 +37,27 @@ _ENVELOPPE = frozenset({"jsonrpc", "id", "method"})
 _ROUTAGE = frozenset({"name"})
 #: Sous-arbres de données libres d'un message JSON-RPC.
 _DONNEES = frozenset({"params", "result", "error"})
-#: Champs où MCP range une charge encodée.
-_CHARGES = ("blob", "data", "content")
+#: Ce qui EST du base64 canonique : alphabet standard, longueur multiple de
+#: quatre, bourrage correct. Il n'y a PAS de liste de noms de champs — il y en
+#: avait une (`blob`, `data`, `content`), et ce nom est écrit par l'amont : il
+#: lui suffisait de ranger sa charge sous `payload` ou `attachment` pour que la
+#: protection tombe. Même anti-pattern que le type MIME, au même endroit.
+#:
+#: L'alphabet STANDARD exclut le base64url sans bourrage, donc les parties d'un
+#: JWT : une signature ne doit pas être traversée.
+_BASE64 = re.compile(
+    r"(?:[A-Za-z0-9+/]{4})+(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?")
+#: PAS de longueur minimale. J'en avais posé une (16 caractères) « parce
+#: qu'en dessous ce n'est pas une charge » : `10.0.0.1` s'encode en douze
+#: caractères, `srv-42` en huit. Toute IPv4 et tout nom d'hôte court passaient
+#: donc intacts — et c'était une RÉGRESSION sur les champs qui étaient déjà
+#: décodés sans borne.
+#:
+#: Troisième garde-fou à échec silencieux en trois heures, tous les miens, tous
+#: posés « par prudence » au-dessus d'une décision qui n'en demandait pas. Ce
+#: qui les rend inutiles est la même chose qui rend le balayage sûr : le tour
+#: est l'IDENTITÉ quand rien n'est détecté.
+
 #: Borne de la charge DÉTENDUE. Le proxy plafonne ce qu'il LIT à 32 Mio ; la
 #: décompression, elle, alloue ce que l'amont décide. Même borne, même raison —
 #: ce qui ne tient pas en mémoire ne peut pas être pseudonymisé — mais c'est
@@ -210,31 +229,35 @@ class JsonRpcTransform:
         return self._charge_encodee(noeud, rendu, transformer)
 
     def _charge_encodee(self, source: dict, rendu: dict, transformer):
-        """Traverse une charge base64 qui SE DÉCODE en texte.
+        """Traverse toute charge base64 qui SE DÉCODE en texte.
 
         Un serveur MCP range le contenu d'une ressource sous `blob`. Traité
         comme une chaîne opaque, le fichier traversait VERBATIM dans les deux
         sens — la lecture d'une ressource rendait le document brut à l'agent,
         et son écriture le sortait tel quel.
 
-        **Le type MIME déclaré ne décide pas.** Il était la porte d'entrée ;
-        or il est écrit par l'amont. Un serveur qui étiquetait `image/png` une
-        charge de texte la faisait sortir intacte, et il suffisait de deux
-        déclinaisons contradictoires de la clé (`mimeType` et `mimetype`) pour
-        choisir celle qui l'arrangeait. Faire dépendre la protection d'une
-        valeur écrite par celui dont on se protège est l'anti-pattern du
-        projet.
+        **Rien de ce que l'amont ÉCRIT ne décide.** Ni le type MIME (il
+        suffisait de deux déclinaisons contradictoires de la clé pour choisir
+        celle qui arrange), ni le NOM DU CHAMP (une liste `blob`/`data`/
+        `content` tombait dès que la charge s'appelait `payload`). Deux
+        versions de la même erreur, au même endroit : faire dépendre la
+        protection d'une valeur écrite par celui dont on se protège.
 
-        Ce qui décide est le DÉCODAGE, et lui seul : du base64 qui rend de
-        l'UTF-8 propre est du texte, quoi qu'on en déclare. Se tromper vers le
-        texte corrompt un binaire, ce qui se VOIT ; se tromper vers le binaire
-        laisse sortir une valeur réelle sans laisser de trace. Tout garde-fou
-        ajouté par-dessus ce décodage penche du mauvais côté de cette asymétrie
-        — le précédent tombait sur un simple octet nul.
+        Ce qui décide est le DÉCODAGE, et lui seul. Se tromper vers le texte
+        corrompt un binaire, ce qui se VOIT ; se tromper vers le binaire laisse
+        sortir une valeur réelle sans laisser de trace. Tout garde-fou ajouté
+        par-dessus ce décodage penche du mauvais côté de cette asymétrie — le
+        précédent tombait sur un simple octet nul.
+
+        Balayer TOUTES les chaînes est sans danger parce que le tour est
+        l'IDENTITÉ quand rien n'est détecté : décoder puis ré-encoder du base64
+        canonique rend la chaîne d'origine, octet pour octet. Un identifiant
+        opaque qui ressemble à du base64 ressort donc intact.
         """
-        for champ in _CHARGES:
-            valeur = source.get(champ)
+        for champ, valeur in source.items():
             if not isinstance(valeur, str):
+                continue
+            if not _BASE64.fullmatch(valeur):
                 continue
             try:
                 clair = base64.b64decode(valeur, validate=True).decode("utf-8")

@@ -96,14 +96,20 @@ def resserrer(spans: list[dict], text: str) -> list[dict]:
     Seul le type DATE est resserré : une adresse réduite à sa date n'est plus
     une adresse.
     """
-    from ..surrogates.dates import chercher
+    from ..surrogates.dates import chercher_toutes
 
     sortie = []
     for span in spans:
         if span.get("type") != "DATE":
             sortie.append(span)
             continue
-        trouve = chercher(span.get("value", ""))
+        toutes = chercher_toutes(span.get("value", ""))
+        # Resserrer sur la PREMIÈRE quand il y en a plusieurs sortait les
+        # suivantes du span, donc du périmètre substitué : `du 3 février 2026
+        # au 12 mars 2026` laissait sa seconde date EN CLAIR. Un span qui en
+        # porte plusieurs reste entier — c'est le décalage qui les traite
+        # toutes, et lui sait le faire.
+        trouve = toutes[0] if len(toutes) == 1 else None
         if trouve is None:
             sortie.append(span)
             continue

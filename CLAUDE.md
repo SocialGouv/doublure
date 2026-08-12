@@ -1394,6 +1394,64 @@ surviving the shift: a full name stays full, an abbreviation keeps its length,
 `1er` comes back only when the shifted date lands on the first. What stays
 ambiguous — `3 jui` (June or July), a two-digit year — is NOT guessed.
 
+## Round 12 (2026-08-12) — THREE guards of mine, each one the leak it prevented
+
+Four narrow perimeters on code less than three hours old. Ten defects, and the
+shape of the round is one sentence: **every guard I added "out of caution" on
+top of a protection decision became the switch that turns the protection off,
+and the sender chooses when to flip it.**
+
+- the **shape guard** (round 11): one NUL byte disabled substitution;
+- the **field-name list** (`blob`/`data`/`content`): the name is written by the
+  upstream — `payload` was enough;
+- the **length threshold** (16 chars, mine, two hours old): `10.0.0.1` encodes
+  to twelve characters, `srv-42` to eight. Every short IPv4 and hostname passed
+  intact, and it was a REGRESSION on fields that were already decoded unbounded.
+
+All three removed. What makes the open sweep safe is the property none of the
+guards added: **the round trip is the IDENTITY when nothing is detected**, so
+an opaque token comes back byte for byte.
+
+**Response smuggling, through the door I had just opened — CRITICAL.** A `1xx`
+never has a body; the one it declared was never drained, so its bytes became
+the NEXT header. An upstream slipped a complete `418` inside a `100 Continue`
+and the client received it as its answer. `_residu_amont` cannot see it: after
+the fake response the buffer is empty. Same class as the trailer and the 204
+body, closed at round 6, through a surface that did not exist then.
+
+**A denial of service I reintroduced, measured by myself.** `chercher` took
+**56.7 s on 100 KB** of letters with no date — a free class at the head of the
+month pattern, scanning from every position. Three rounds were spent on exactly
+this family in the hook, and the rule they produced ("every pattern anchored on
+its literal") had been reopened two hours earlier by adding one date form.
+4.5 ms after anchoring; 48 ms on 1 MB.
+
+**A real date left in the clear.** A value holding TWO dates only shifted the
+first — and `resserrer` narrowed the span to it, so the second fell OUTSIDE the
+substituted range entirely. A range is the most ordinary form there is. Root
+cause found while fixing: `_ISO` accepted `[T ].*` as "a time to preserve" — a
+FREE TAIL that swallowed the second date. Same class as the URL paths of
+round 11.
+
+**Restoration lost in silence, twice.** `sept` prefixes both `septembre` and
+`september`, and table order decided alone: an English document got a French
+month (`sept 15, 2020` → `août 2, 2021`). The model normalises what it reads,
+and the vault holds only the French form. Same class from truncation: `juillet`
+cut to three gives `jui` — the ambiguous prefix the parser REFUSES — and `août`
+gave `aoû` where the source was pure ASCII. The invariant that was missing:
+**what we write must be re-readable as the same month**, checked rather than
+assumed.
+
+**A lone surrogate crashed the whole chain.** `"\ud800"` is valid JSON and is
+not valid UTF-8. Fixing the fingerprint moved the crash into the vault, then
+into its re-read — three moves. **A value traverses the whole chain or enters
+nowhere.**
+
+**Rejected after arbitration**: two keys that canonicalise to the same
+surrogate abort the exchange. Both agents proposed counting instead of
+refusing; counting still loses the value, and merging changes the schema the
+server expects. Loud beats silent, and it is documented.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

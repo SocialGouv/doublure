@@ -74,6 +74,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_real_unique ON mapping (scope, real_idx)
 _PAD_BLOCK = 32
 
 
+def _octets(texte: str) -> bytes:
+    """Les octets d'une chaîne, y compris quand elle n'est pas de l'UTF-8 valide.
+
+    Un JSON parfaitement valide peut porter une demi-paire de substitution
+    (un demi-substitut) : `json.loads` l'accepte, UTF-8 la refuse. L'encodage levait
+    alors une `UnicodeEncodeError` qui traversait tout et sortait en 500 non
+    structuré — là où le contrat promet que la valeur est SUBSTITUÉE. Corriger
+    l'empreinte seule ne faisait que déplacer le plantage ici : une valeur doit
+    traverser la chaîne entière ou n'y entrer nulle part.
+    """
+    return texte.encode("utf-8", errors="surrogatepass")
+
+
 class VaultUnavailableError(RuntimeError):
     """Le coffre est inaccessible ou illisible : on refuse de continuer."""
 
@@ -147,7 +160,7 @@ class Vault:
         longueur.
         """
         msg = b"".join(
-            len(raw := p.encode("utf-8")).to_bytes(4, "big") + raw for p in parts
+            len(raw := _octets(p)).to_bytes(4, "big") + raw for p in parts
         )
         return hmac.new(self._idx_key, msg, hashlib.sha256).hexdigest()
 
@@ -165,7 +178,7 @@ class Vault:
         # différents produiraient la même AAD dès qu'une valeur contient le
         # séparateur — l'échange de scellés redeviendrait indétectable.
         return b"".join(
-            len(raw := p.encode("utf-8")).to_bytes(4, "big") + raw
+            len(raw := _octets(p)).to_bytes(4, "big") + raw
             for p in (scope, etype, surrogate)
         )
 
@@ -174,7 +187,7 @@ class Vault:
         # Rembourrage déterministe : GCM ne pad pas, la taille du chiffré
         # donnerait la longueur exacte de la valeur réelle. Couplée au type et
         # au décompte, elle suffit à énumérer des noms d'hôtes plausibles.
-        raw = real.encode("utf-8")
+        raw = _octets(real)
         padding = (-(len(raw) + 1)) % _PAD_BLOCK
         payload = len(raw).to_bytes(4, "big") + raw + b"\x00" * padding
         return nonce + self._aes.encrypt(
@@ -187,7 +200,12 @@ class Vault:
                 bytes(blob[:12]), bytes(blob[12:]), self._aad(scope, etype, surrogate)
             )
             taille = int.from_bytes(payload[:4], "big")
-            return payload[4:4 + taille].decode("utf-8")
+            # Symétrique de `_octets` : ce qui a été scellé doit pouvoir être
+            # relu. Sans `surrogatepass` ici, une valeur écrite se relisait en
+            # « coffre altéré » — le défaut ne disparaissait pas, il se
+            # déplaçait d'un cran, pour la troisième fois.
+            return payload[4:4 + taille].decode("utf-8",
+                                                errors="surrogatepass")
         except (InvalidTag, ValueError, IndexError) as exc:
             raise VaultUnavailableError(
                 f"déchiffrement impossible ({self.path}) : clé maître incorrecte, "

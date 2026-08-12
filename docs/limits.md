@@ -191,6 +191,31 @@ the field carrying it. The class remains for anything the model paraphrases
 rather than quotes; the announcement asks for whole identifiers, which
 mitigates without measuring.
 
+**Only `gzip` is decompressed on an inspected MCP channel.** A `deflate` or
+`brotli` body is treated as unreadable and the exchange is refused. Adding a
+codec is small, but every decompression path needs the output bound and the
+adversarial pass that gzip got; until then the failure is a loud 502 rather
+than something relayed unread.
+
+**Two dates glued through a shared year lose the second one's day and month.**
+`March 15, 2020/04/16` shifts the first and leaves `04/16` verbatim: the two
+matches overlap on the year, and the longer one wins. The year — the only part
+that could date the incident on its own — is substituted; a day and month
+without it remain. Reachable only if a detector spans such a concatenation.
+
+**A version-shaped string can be read as a date.** `v3.14.2020` shifts to
+`v11.6.2022`. Nothing real leaves; something that was never a date comes back
+changed, and only if a detector marked it.
+
+**Two keys that denote the same entity abort the exchange, loudly.** If a JSON
+object carries `Alice.Dupont@acme.internal` and `alice.dupont@acme.internal` as
+two distinct keys, canonicalisation gives them one surrogate — correctly, since
+they are one address — and there is then no way to render both. The two real
+options are to refuse noisily or to drop one silently; the second is the exact
+failure this guard was added to close. Merging the values, or tagging the
+collision, would change the schema the server expects and let the exchange
+continue while the tool receives something it cannot read.
+
 **A base64 payload that decodes as UTF-8 is treated as text, whatever it is
 declared to be** — and nothing is layered on top of that decision. A guard that
 asked "does this look like text?" was tried and removed: it refused on a NUL

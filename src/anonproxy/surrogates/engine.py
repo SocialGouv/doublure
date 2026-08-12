@@ -305,7 +305,10 @@ class SurrogateEngine:
     # -- dérivation --------------------------------------------------------- #
 
     def _digest(self, *parts: str) -> bytes:
-        msg = "\x1f".join(parts).encode("utf-8")
+        # Voir `Policy.empreinte` : une demi-paire de substitution est du
+        # JSON valide et n'est pas de l'UTF-8. Le dérivé doit être stable,
+        # pas lisible.
+        msg = "\x1f".join(parts).encode("utf-8", errors="surrogatepass")
         return hmac.new(self._salt, msg, hashlib.sha256).digest()
 
     def _idx(self, *parts: str) -> int:
