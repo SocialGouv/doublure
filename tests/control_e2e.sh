@@ -91,6 +91,43 @@ echo "-> the decision taken over the API reaches the engine"
 uv run python tests/policy_e2e_tour.py "${TEXT}" > "${STATE}/turn2.txt" || exit 1
 cat "${STATE}/turn2.txt"
 
+echo
+echo "== 7. a value Go cannot render truthfully is REFUSED, not replaced =="
+# Python lets a lone surrogate through on purpose: it must still be
+# substituted. Go's JSON encoder replaces each bad byte with U+FFFD, so the
+# operator would read a value the vault never held — and three distinct hosts
+# would render as ONE identical string, making "reveal A while meaning B"
+# possible. Reveal is the decision that cannot be taken back.
+uv run python -c "
+import sys; sys.path.insert(0, 'src')
+from anonproxy.policy import Policy
+from anonproxy.surrogates.engine import SurrogateEngine
+from anonproxy.vault import Vault
+cle = open('${ANONPROXY_MASTER_KEY_FILE}').read().strip()
+pol = Policy(racine='${ANONPROXY_POLICY_DIR}', master_key=cle,
+             scope_key='${ANONPROXY_SCOPE}')
+m = SurrogateEngine(vault=Vault('${ANONPROXY_VAULT}', master_key=cle),
+                    master_key=cle, scope_key='${ANONPROXY_SCOPE}', policy=pol)
+for i in range(3):
+    demi = chr(0xD800 + i)   # composé, jamais écrit en littéral : un
+                             # '\\uD80x' dans une source se coupe mal
+    m.substitute_value('HOSTNAME', 'srv-0%d%s.example.com' % (i, demi))
+" || exit 1
+curl -s --unix-socket "${ANONPROXY_API_SOCKET}" http://localhost/questions \
+  > "${STATE}/questions-wtf8.json"
+if grep -q $'\xef\xbf\xbd' "${STATE}/questions-wtf8.json"; then
+  echo "FAIL : a replacement character reached the operator — the value shown"
+  echo "       is NOT the value stored"
+  rc=1
+elif grep -q "value_error" "${STATE}/questions-wtf8.json"; then
+  echo "OK   : the question is still listed, and says why its value is missing"
+else
+  echo "FAIL : neither a value_error nor a replacement — what was rendered?"
+  head -c 400 "${STATE}/questions-wtf8.json"
+  rc=1
+fi
+
+
 check() {
   if grep -qF -- "$3" "$2"; then found=present; else found=absent; fi
   if [[ "${found}" == "$4" ]]; then echo "OK   : $1"

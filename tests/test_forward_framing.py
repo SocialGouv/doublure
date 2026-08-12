@@ -890,3 +890,33 @@ def test_a_parameterised_expectation_is_still_honoured(
         assert b"417" not in recu, recu[:300]
     finally:
         proxy.stop()
+
+
+@pytest.mark.parametrize("tete", [
+    b"content-length: 69\r\ncontent-length: 0",
+    b"Content-Length: 69\r\ncontent-length: 0",
+    b"transfer-encoding: chunked\r\ntransfer-encoding: ",
+])
+def test_a_duplicated_framing_header_is_refused(
+        interception, autorite_origine, tmp_path, tete):
+    """CRITIQUE — le vol de réponse, par la TROISIÈME porte au même endroit.
+
+    La garde du tour précédent lisait un DICTIONNAIRE d'en-têtes, qui garde la
+    dernière valeur : `content-length: 69` puis `content-length: 0` présentait
+    un cadrage nul à toutes les gardes pendant que soixante-neuf octets
+    attendaient dans le tampon — et devenaient la réponse suivante.
+
+    Le refus est posé dans l'analyse, pas dans la garde des intérimaires : le
+    cadrage ambigu est illisible partout, pas seulement là où on l'a vu passer
+    cette fois-ci."""
+    faux = (b"HTTP/1.1 418 pwn\r\ncontent-length: 10\r\n"
+            b"connection: close\r\n\r\nCORPS_FAKE")
+    piege = b"HTTP/1.1 100 Continue\r\n" + tete + b"\r\n\r\n" + faux
+    origine, proxy = _monter(interception, autorite_origine, tmp_path, [piege])
+    try:
+        recu = _deux_requetes(proxy, interception, origine.port)
+        assert recu, "tâche morte en silence"
+        assert b"418 pwn" not in recu and b"CORPS_FAKE" not in recu, recu[:300]
+        assert b"502" in recu, recu[:300]
+    finally:
+        proxy.stop()

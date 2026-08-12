@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	_ "modernc.org/sqlite" // pure Go: no cgo, so the binary stays static
 )
@@ -83,6 +84,11 @@ func lengthPrefixed(parts ...string) []byte {
 	return out
 }
 
+// ErrNotRenderable marks a value the vault holds but cannot display without
+// changing it. It is distinct from ErrUnavailable: the mapping is intact, only
+// its rendering is impossible.
+var ErrNotRenderable = errors.New("value cannot be rendered")
+
 // Real resolves a surrogate back to the value it stands for.
 func (v *Vault) Real(scope, surrogate string) (string, error) {
 	var etype string
@@ -122,7 +128,17 @@ func (v *Vault) open(scope, etype, surrogate string, blob []byte) (string, error
 	if int(size) > len(payload)-4 {
 		return "", fmt.Errorf("%w: declared length exceeds payload", ErrUnavailable)
 	}
-	return string(payload[4 : 4+size]), nil
+	real := payload[4 : 4+size]
+	// A value that is not valid UTF-8 cannot be RENDERED truthfully: Go's JSON
+	// encoder silently substitutes U+FFFD for each bad byte, so the operator
+	// would read something the vault never held. Python lets such a value
+	// through on purpose (`surrogatepass`) because it must still be
+	// substituted; showing it is another matter, and here we refuse rather
+	// than replace.
+	if !utf8.Valid(real) {
+		return "", fmt.Errorf("%w: value is not valid UTF-8", ErrNotRenderable)
+	}
+	return string(real), nil
 }
 
 // Count returns how many mappings exist in a scope.

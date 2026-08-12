@@ -144,6 +144,15 @@ func (s *server) questionsWithValues() ([]policy.Question, error) {
 	questions := s.policy.Questions()
 	for i := range questions {
 		real, err := s.vault.Real(s.scopeKey, questions[i].Surrogate)
+		if errors.Is(err, vault.ErrNotRenderable) {
+			// The mapping is intact; only its rendering is impossible. Hiding
+			// the whole question would hide that a decision is pending, so the
+			// question stays and says why its value is missing. Deciding
+			// "anonymise" remains safe without seeing it; "reveal" is exactly
+			// what must not be taken on a value one cannot read.
+			questions[i].ValueError = err.Error()
+			continue
+		}
 		if err != nil {
 			// Never guess. An unreadable value is reported as such, so the
 			// operator does not arbitrate on something we invented.
@@ -205,6 +214,18 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Scope == "" {
 		req.Scope = "projet"
+	}
+	// Go's JSON decoder turns a lone surrogate into U+FFFD before we ever see
+	// it, so a target carrying one is indistinguishable from a target the
+	// client meant to send. Writing it would put a key into the policy that
+	// matches nothing the engine will ever compute — a rule that looks taken
+	// and never applies. The extension sends fingerprints and never trips
+	// this; any other client would, in silence.
+	if strings.ContainsRune(req.Target, '\uFFFD') {
+		fail(w, http.StatusUnprocessableEntity,
+			"target carries a replacement character: it cannot be matched "+
+				"against what the engine computes, so the rule would never apply")
+		return
 	}
 	decision := policy.Decision(req.Decision)
 	if err := s.policy.Set(req.Scope, req.Granularity, req.Target, decision); err != nil {

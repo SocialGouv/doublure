@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -85,6 +86,13 @@ type Question struct {
 	// Value is filled by the control service from the vault; the queue itself
 	// never holds it.
 	Value string `json:"value,omitempty"`
+	// ValueError says WHY a value could not be shown. An operator who cannot
+	// read a value must be told so: `encoding/json` replaces invalid UTF-8
+	// with U+FFFD, which would hand them a real value that is not the real
+	// value — and three distinct hosts rendering as one identical string, so
+	// that revealing A while meaning B becomes possible. Reveal is the one
+	// decision that cannot be taken back.
+	ValueError string `json:"value_error,omitempty"`
 }
 
 type Policy struct {
@@ -103,20 +111,49 @@ func New(root, scopeKey, session string, masterKey []byte) *Policy {
 	return &Policy{root: root, scopeKey: scopeKey, session: session, indexKey: mac.Sum(nil)}
 }
 
+// nonFileName matches everything that must not end up in a file name. Only the
+// READABLE prefix is sanitised this way; what DECIDES is the fingerprint below.
+var nonFileName = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
+
+// file names a scope's rule file, and must agree with the Python side BYTE FOR
+// BYTE — the two write and read the same directory. When they diverged, the Go
+// service wrote the operator's decision into a file the engine never opened:
+// the arbitration went through the interface, reported success, and changed
+// nothing. Silent, and on the one decision that cannot be taken back.
+//
+// Substituting characters cannot be injective, and neither can a separator
+// that may appear in the data; each field carries its LENGTH. The session only
+// enters the session scope, or a project rule would stop applying as soon as
+// the session changed.
 func (p *Policy) file(scope string) string {
-	switch scope {
-	case "global":
+	if scope == "global" {
 		return filepath.Join(p.root, "global.json")
-	case "session":
-		name := p.session
-		if name == "" {
-			name = "sans-id"
-		}
-		return filepath.Join(p.root, "session-"+strings.ReplaceAll(name, "/", "_")+".json")
-	default:
-		name := strings.NewReplacer(":", "-", "/", "_").Replace(p.scopeKey)
-		return filepath.Join(p.root, name+".json")
 	}
+	fields := []string{scope, p.scopeKey}
+	if scope == "session" {
+		// The EMPTY string, not a "sans-id" placeholder: the Python side puts
+		// `session or ""` into the fields, and a name that differs by one byte
+		// is a different file — so the decision would land where nothing reads
+		// it. Length prefixing makes the empty case unambiguous by itself.
+		fields = append(fields, p.session)
+	}
+	var exact strings.Builder
+	for _, f := range fields {
+		fmt.Fprintf(&exact, "%d:%s", len(f), f)
+	}
+	sum := sha256.Sum256([]byte(exact.String()))
+	readable := strings.Trim(nonFileName.ReplaceAllString(p.scopeKey, "-"), "-.")
+	if len(readable) > 40 {
+		readable = readable[:40]
+	}
+	if readable == "" {
+		readable = "portee"
+	}
+	if scope == "session" {
+		readable += "-session"
+	}
+	return filepath.Join(p.root,
+		fmt.Sprintf("%s-%s.json", readable, hex.EncodeToString(sum[:])[:16]))
 }
 
 // Fingerprint identifies a value WITHOUT containing it. The type is part of it:

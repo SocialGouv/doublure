@@ -228,6 +228,49 @@ class JsonRpcTransform:
         # coffre ni substitut non résolu : rien à compter.
         return self._charge_encodee(noeud, rendu, transformer)
 
+    @staticmethod
+    def _base64_clair(valeur: str) -> str | None:
+        """Le texte que cette chaîne encode, ou None si ce n'en est pas.
+
+        Les blancs sont retirés d'abord : `base64.encodebytes` et
+        `openssl base64` coupent en lignes de 76 et 64 caractères — deux
+        producteurs parfaitement standards dont la charge ne correspondait à
+        rien et sortait donc VERBATIM.
+
+        Le tour doit être l'IDENTITÉ quand rien n'est substitué, et il ne
+        l'était pas : `b64decode(validate=True)` ne valide que l'ALPHABET, pas
+        la canonicité, donc `SGVsbG9=` (bits de bourrage non nuls) se décodait
+        et se ré-encodait en `SGVsbG8=`. Un jeton opaque ressortait CHANGÉ. On
+        exige donc que le ré-encodage rende exactement ce qu'on a lu.
+        """
+        compact = "".join(valeur.split())
+        if not compact or not _BASE64.fullmatch(compact):
+            return None
+        try:
+            brut = base64.b64decode(compact, validate=True)
+            if base64.b64encode(brut).decode("ascii") != compact:
+                return None  # forme non canonique : la réécrire la changerait
+            return brut.decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return None
+
+    def _chaine(self, valeur: str, transformer) -> str:
+        """Une chaîne, décodée d'abord si elle porte du base64 textuel.
+
+        Appelée pour TOUTE chaîne, feuille de dict comme élément de liste. La
+        traversée des charges ne vivait que dans la branche dict : une charge
+        rangée dans une LISTE — `{"blobs": ["<base64>"]}`, la forme la plus
+        banale d'un lot de ressources MCP — sortait en clair, à toute
+        profondeur.
+        """
+        clair = self._base64_clair(valeur)
+        if clair is None:
+            return transformer(valeur)
+        rendu = transformer(clair)
+        if rendu == clair:
+            return valeur  # rien à substituer : on rend la forme d'origine
+        return base64.b64encode(rendu.encode("utf-8")).decode("ascii")
+
     def _charge_encodee(self, source: dict, rendu: dict, transformer):
         """Traverse toute charge base64 qui SE DÉCODE en texte.
 
@@ -255,16 +298,8 @@ class JsonRpcTransform:
         opaque qui ressemble à du base64 ressort donc intact.
         """
         for champ, valeur in source.items():
-            if not isinstance(valeur, str):
-                continue
-            if not _BASE64.fullmatch(valeur):
-                continue
-            try:
-                clair = base64.b64decode(valeur, validate=True).decode("utf-8")
-            except (binascii.Error, UnicodeDecodeError, ValueError):
-                continue  # pas du base64 textuel : la chaîne a déjà été traitée
-            rendu[transformer(champ)] = base64.b64encode(
-                transformer(clair).encode("utf-8")).decode("ascii")
+            if isinstance(valeur, str) and self._base64_clair(valeur) is not None:
+                rendu[transformer(champ)] = self._chaine(valeur, transformer)
         return rendu
 
     def _libre(self, noeud, transformer):
@@ -277,7 +312,7 @@ class JsonRpcTransform:
         if isinstance(noeud, list):
             return [self._libre(v, transformer) for v in noeud]
         if isinstance(noeud, str):
-            return transformer(noeud)
+            return self._chaine(noeud, transformer)
         # Les nombres, booléens et null ne portent pas d'identifiant : les
         # traverser en texte les transformerait en chaînes et casserait le
         # schéma attendu par le serveur.

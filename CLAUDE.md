@@ -1452,6 +1452,53 @@ surrogate abort the exchange. Both agents proposed counting instead of
 refusing; counting still loses the value, and merging changes the schema the
 server expects. Loud beats silent, and it is documented.
 
+## Round 13 (2026-08-12) — the proof list itself was the hole
+
+**The control interface had been silently disconnected for two rounds.** Python
+moved its policy file naming to a length-prefixed fingerprint (rounds 11-12);
+the Go service, which writes the operator's decisions into the SAME directory,
+kept the old character substitution. So the operator arbitrated, the interface
+reported success, and the engine never saw it — **on the one decision that
+cannot be taken back**.
+
+It survived two rounds because **the five proofs I kept replaying never crossed
+into Go**. `tests/control_e2e.sh` catches it in one line, and I had not run it
+since the change. The routine is now SIX proofs, and both implementations pin
+the same naming vectors (`go/internal/policy/naming_test.go`,
+`tests/test_parite_nommage.py`) — if either drifts, one goes red.
+
+**Go rendered a real value the vault never held — CRITICAL.** `encoding/json`
+replaces every invalid UTF-8 byte with U+FFFD, and Python deliberately lets
+non-UTF-8 values through (round 12). So the operator read a string that exists
+nowhere — and three DISTINCT hosts collapsed into one identical display, making
+"reveal A while meaning B" possible. The question now stays listed with a
+`value_error` saying why its value is missing: hiding the question would hide
+that a decision is pending, and rendering it falsely is worse than both.
+`POST /decide` refuses a target carrying a replacement character for the same
+reason.
+
+**Response smuggling, third door at the same place — CRITICAL.** The interim
+guard read a DICTIONARY of headers, which keeps the last value:
+`content-length: 69` then `content-length: 0` showed every guard a nil framing
+while sixty-nine bytes waited in the buffer. The refusal now lives in the
+PARSING — an ambiguous framing is unreadable everywhere, not only where it was
+seen passing this time.
+
+**Three more base64 leaks, and my own invariant was false.** A payload inside a
+LIST was never traversed (`{"blobs": ["…"]}` is the ordinary shape of an MCP
+resource batch). MIME-wrapped base64 — what `base64.encodebytes` and `openssl
+base64` produce — matched nothing and left verbatim. And the IDENTITY property
+the module claims was **false**: `b64decode(validate=True)` validates the
+alphabet, not canonicity, so non-zero padding bits decoded and re-encoded
+NORMALISED — an opaque token came back changed. The round trip is now required
+to reproduce what was read, or the string is not touched.
+
+**Still open, stated**: a base64 payload encoded TWICE hides its content from
+one decode pass; the sweep calls the detector about twice more than needed per
+base64 string; a signed state token whose payload is UTF-8 JSON is modified,
+so its signature stops validating — the accepted price of the open sweep, and
+it fails visibly.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth

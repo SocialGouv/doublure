@@ -691,6 +691,18 @@ def _analyser(entete: bytes) -> tuple[str, dict[str, str]]:
     entetes: dict[str, str] = {}
     for ligne in lignes[1:]:
         nom, _, valeur = ligne.partition(":")
+        # Le CADRAGE ne se dédouble pas. Un dictionnaire garde la DERNIÈRE
+        # valeur, donc `content-length: 10` suivi de `content-length: 0`
+        # présentait un cadrage nul à toutes les gardes pendant que dix octets
+        # attendaient dans le tampon — et devenaient la réponse suivante. La
+        # RFC 7230 exige déjà le refus ; le faire ICI plutôt que dans la garde
+        # des intérimaires évite la troisième rustine au même endroit.
+        cle = nom.strip().lower()
+        if cle in ("content-length", "transfer-encoding") and cle in entetes \
+                and entetes[cle] != valeur.strip():
+            raise _CorpsIllisible(
+                f"{cle} présent deux fois avec des valeurs différentes : "
+                "le cadrage est ambigu")
         if nom.strip():
             # Comparés en minuscules : HTTP les déclare insensibles à la casse,
             # et `Content-Length` doit décider comme `content-length`.

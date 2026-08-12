@@ -435,3 +435,48 @@ def test_a_short_opaque_token_still_comes_back_identical(transform, court):
                         "result": {"v": court}}).encode()
     rendu = json.loads(transform.outgoing("h", {}, corps))
     assert rendu["result"]["v"] == court
+
+
+def test_a_payload_inside_a_list_is_traversed(transform):
+    """CRITIQUE, fuite SILENCIEUSE. La traversée des charges encodées ne vivait
+    que dans la branche DICT : une charge rangée dans une LISTE —
+    `{"blobs": ["<base64>"]}`, la forme la plus banale d'un lot de ressources
+    MCP — sortait en clair, à toute profondeur."""
+    import base64
+
+    charge = base64.b64encode(b"log db-01.acme.internal").decode()
+    for corps, chemin in (({"blobs": [charge]}, lambda d: d["blobs"][0]),
+                          ({"a": {"b": [[charge]]}}, lambda d: d["a"]["b"][0][0])):
+        rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "result": corps}).encode()))
+        dedans = base64.b64decode(chemin(rendu["result"])).decode()
+        assert "db-01.acme.internal" not in dedans, dedans
+
+
+def test_mime_wrapped_base64_is_traversed(transform):
+    """CRITIQUE. `base64.encodebytes` coupe en lignes de 76, `openssl base64`
+    en lignes de 64 — deux producteurs parfaitement standards. La chaîne ne
+    correspondait à rien à cause des retours à la ligne, donc sortait
+    VERBATIM."""
+    import base64
+
+    charge = base64.encodebytes(b"log db-01.acme.internal " * 6).decode()
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"blob": charge}}).encode()))
+    dedans = base64.b64decode(
+        "".join(rendu["result"]["blob"].split())).decode()
+    assert "db-01.acme.internal" not in dedans, dedans
+
+
+@pytest.mark.parametrize("non_canonique", ["SGVsbG9=", "AAAAAR==", "QUJDREVGRw9="])
+def test_a_non_canonical_padding_is_left_untouched(transform, non_canonique):
+    """CRITIQUE — la propriété d'IDENTITÉ que le module revendique était FAUSSE.
+
+    `b64decode(validate=True)` ne valide que l'ALPHABET, pas la canonicité :
+    des bits de bourrage non nuls se décodaient, et le ré-encodage les
+    NORMALISAIT. Un jeton opaque ressortait donc CHANGÉ — exactement ce que le
+    balayage ouvert promettait de ne jamais faire. On exige maintenant que le
+    ré-encodage rende ce qu'on a lu, sinon la chaîne n'est pas touchée."""
+    rendu = json.loads(transform.outgoing("h", {}, json.dumps(
+        {"jsonrpc": "2.0", "id": 1, "result": {"v": non_canonique}}).encode()))
+    assert rendu["result"]["v"] == non_canonique
