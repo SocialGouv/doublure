@@ -238,6 +238,15 @@ async def _pseudonymize(state: ProxyState, request: Request):
     except json.JSONDecodeError as exc:
         return None, None, _fail(400, "invalid_request_error", f"corps JSON invalide : {exc}")
 
+    # Un MESSAGE commence : ce qui restait d'une réponse précédente est jeté.
+    # C'est ici, sur le chemin fail-closed unique, parce qu'un endpoint oublié
+    # ferait survivre une révélation à ce pour quoi elle a été accordée.
+    #
+    # Deux requêtes CONCURRENTES se jettent mutuellement leur réponse. C'est le
+    # sens sûr — la valeur reste anonymisée — et c'est assumé : « pour ce
+    # message » n'a pas de sens quand il y en a deux à la fois.
+    if state.policy is not None:
+        state.policy.debut_message()
     sub_out = state.outgoing()
     try:
         # Traversée synchrone (détection HTTP + SQLite) hors boucle d'événements.

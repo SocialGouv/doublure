@@ -646,3 +646,90 @@ def test_retirer_refuse_une_portee_inconnue_sans_planter(tmp_path):
     les autres écritures rendent un refus nommé."""
     with pytest.raises(PolitiqueInvalide, match="portée inconnue"):
         make_policy(tmp_path).retirer("portee_inconnue", "type", "HOSTNAME")
+
+
+# --------------------------------------------------------------------------- #
+# Répondre pour UN SEUL message
+# --------------------------------------------------------------------------- #
+def _politique_message(tmp_path):
+    return Policy(racine=tmp_path / "pol", master_key="d4" * 32,
+                  scope_key="project:message")
+
+
+def test_une_reponse_de_message_l_emporte_sur_toute_regle(tmp_path):
+    """C'est la portée la plus PROCHE : elle bat même la session.
+
+    La hiérarchie du projet dit « le plus étroit et le plus proche l'emporte ».
+    Une réponse donnée pour le message en cours est ce qu'il y a de plus proche
+    qui soit."""
+    p = _politique_message(tmp_path)
+    p.definir("session", "type", "DATE", Decision.ANONYMISER)
+    p.debut_message()
+    p.repondre_pour_le_message("type", "DATE", Decision.REVELER)
+    assert p.decide("DATE", "infra", "3 février 2026") == (
+        Decision.REVELER, "message:type")
+
+
+def test_une_reponse_de_message_NE_SURVIT_PAS_au_message(tmp_path):
+    """Le cœur du dessin, et sa seule raison d'être.
+
+    Une révélation qui survit à ce pour quoi elle a été accordée est une
+    révélation HÉRITÉE, ce que la philosophie du projet interdit. Ici elle ne
+    peut pas survivre : il n'y a pas de règle à révoquer, seulement une réponse
+    qui meurt."""
+    p = _politique_message(tmp_path)
+    p.debut_message()
+    p.repondre_pour_le_message("type", "DATE", Decision.REVELER)
+    assert p.decide("DATE", "infra", "3 février 2026")[0] is Decision.REVELER
+    p.debut_message()
+    assert p.decide("DATE", "infra", "3 février 2026") == (
+        Decision.ANONYMISER, None)
+
+
+def test_une_reponse_arrivee_TROP_TARD_ne_s_applique_pas(tmp_path):
+    """Le seul trou du dessin, et il est fermé par l'ouverture, pas par la
+    fermeture.
+
+    Une réponse écrite APRÈS la fin du message qu'elle visait s'appliquerait au
+    SUIVANT — donc à des valeurs que l'opérateur n'a jamais vues. Vider à
+    l'ouverture la jette. Une réponse perdue laisse la valeur anonymisée ;
+    l'inverse la laisserait sortir."""
+    p = _politique_message(tmp_path)
+    p.debut_message()
+    p.repondre_pour_le_message("classe", "infra", Decision.REVELER)
+    p.debut_message()          # le message suivant commence
+    assert p.decide("HOSTNAME", "infra", "db-01.acme.internal") == (
+        Decision.ANONYMISER, None)
+
+
+def test_un_SECRET_ne_se_revele_pas_meme_pour_un_message(tmp_path):
+    """D4 passe AVANT la réponse de message, et cet ordre est la garantie.
+
+    Un secret est une référence, jamais une valeur restaurée : aucune portée,
+    aucune granularité, aucune réponse ne l'ouvre."""
+    p = _politique_message(tmp_path)
+    p.debut_message()
+    p.repondre_pour_le_message("classe", "secret", Decision.REVELER)
+    assert p.decide("AUTH_TOKEN", "secret", "ghp_x") == (
+        Decision.ANONYMISER, "invariant:D4")
+
+
+def test_une_reponse_de_message_couvre_le_GROUPE(tmp_path):
+    """« Groupe de valeurs » est la demande : l'opérateur qui voit passer
+    trente dates en tranche trente d'un coup, pour ce message."""
+    p = _politique_message(tmp_path)
+    p.debut_message()
+    p.repondre_pour_le_message("type", "DATE", Decision.REVELER)
+    for valeur in ("3 février 2026", "12 mars 2019", "August 2026"):
+        assert p.decide("DATE", "infra", valeur)[0] is Decision.REVELER
+    # Un autre type du même message n'est pas ouvert pour autant.
+    assert p.decide("HOSTNAME", "infra", "db-01.acme.internal")[0] \
+        is Decision.ANONYMISER
+
+
+def test_une_granularite_inconnue_est_REFUSEE(tmp_path):
+    """Fail-closed jusque dans l'écriture : une granularité que personne ne lit
+    laisserait croire à une réponse donnée."""
+    p = _politique_message(tmp_path)
+    with pytest.raises(PolitiqueInvalide):
+        p.repondre_pour_le_message("message", "DATE", Decision.REVELER)

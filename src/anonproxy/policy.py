@@ -153,6 +153,15 @@ class Policy:
             for p in PORTEES
         }
         self._file_attente = self.racine / "en-attente.jsonl"
+        #: Réponses valables pour le MESSAGE en cours, et pour lui seul.
+        #:
+        #: Ce n'est PAS une quatrième portée : une portée est une règle qui
+        #: survit, et une révélation qui survit à ce pour quoi elle a été
+        #: accordée est une révélation HÉRITÉE — ce que la philosophie du projet
+        #: interdit. C'est la réponse à la question courante, et elle meurt avec
+        #: elle. Elle n'entre donc pas non plus dans le nommage des fichiers de
+        #: portée, où Python et Go ont divergé deux fois (tours 13 et 14).
+        self._reponses = self.racine / "reponses-message.jsonl"
         self._vu: set[str] = set()
         #: portée → ((mtime, taille), contenu). Voir `_charge`.
         self._cache: dict[str, tuple[tuple[int, int] | None, dict]] = {}
@@ -225,6 +234,18 @@ class Policy:
             "type": etype,
             "classe": klass,
         }
+        # La réponse au MESSAGE en cours est ce qu'il y a de plus proche : elle
+        # l'emporte sur toute règle, y compris de session. Elle est cherchée
+        # APRÈS D4, jamais avant : un secret ne se révèle pas, même pour un seul
+        # message, et cet ordre est ce qui le garantit.
+        for granularite in reversed(GRANULARITES):
+            brut = self._reponses_du_message().get(f"{granularite}:{cles[granularite]}")
+            if brut is not None:
+                try:
+                    return Decision(brut), f"message:{granularite}"
+                except ValueError:
+                    logger.error("décision inconnue %r dans une réponse de "
+                                 "message — ignorée", brut)
         couches = {p: self._charge(p) for p in PORTEES}
         for granularite in reversed(GRANULARITES):
             for portee in reversed(PORTEES):
@@ -323,6 +344,70 @@ class Policy:
             except OSError as exc:
                 logger.error("file d'arbitrage inaccessible (%s) : %s",
                              self._file_attente, exc)
+
+    # -- réponses valables pour un seul MESSAGE ----------------------------- #
+
+    def debut_message(self) -> None:
+        """Ouvre un message : ce qui restait d'un précédent est JETÉ.
+
+        Vider à l'ouverture, et pas seulement à la fermeture, est ce qui ferme
+        le seul trou de ce dessin : une réponse écrite APRÈS la fin du message
+        qu'elle visait s'appliquerait sinon au suivant, c'est-à-dire à des
+        valeurs que l'opérateur n'a jamais vues. Jeter est la direction sûre —
+        une réponse perdue laisse la valeur anonymisée, jamais l'inverse.
+        """
+        with self._lock:
+            self._reponses.unlink(missing_ok=True)
+
+    def repondre_pour_le_message(self, granularite: str, cle: str,
+                                 decision: "Decision") -> None:
+        """Réponse à la question courante, valable pour ce message seulement.
+
+        La granularité est la même que pour une règle — une valeur, un type,
+        une classe — parce que c'est le même arbitrage, à une portée près :
+        l'opérateur qui voit passer trente dates en tranche trente d'un coup.
+        """
+        if granularite not in GRANULARITES:
+            raise PolitiqueInvalide(
+                f"granularité inconnue : {granularite!r} (parmi {GRANULARITES})")
+        with self._lock:
+            self._reponses.parent.mkdir(parents=True, exist_ok=True)
+            neuf = not self._reponses.exists()
+            with self._reponses.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps({"granularite": granularite, "cle": cle,
+                                     "decision": Decision(decision).value},
+                                    ensure_ascii=False) + "\n")
+            if neuf:
+                os.chmod(self._reponses, 0o600)
+        if Decision(decision) is Decision.REVELER:
+            # Tracé comme toute révélation : c'est la seule décision qui laisse
+            # sortir une valeur, et sa révocation ne rappelle rien.
+            logger.warning(
+                "RÉVÉLATION autorisée pour CE MESSAGE — %s/%s (elle meurt avec lui)",
+                granularite, cle)
+
+    def _reponses_du_message(self) -> dict[str, str]:
+        """Les réponses en vigueur, relues à chaque fois.
+
+        Relues et non mises en cache : celui qui répond est un AUTRE processus,
+        et une réponse vue une seconde trop tard est une valeur substituée pour
+        rien — alors qu'une réponse manquée dans l'autre sens serait une valeur
+        révélée sans qu'on l'ait demandé.
+        """
+        try:
+            lignes = self._reponses.read_text(encoding="utf-8").splitlines()
+        except (FileNotFoundError, OSError):
+            return {}
+        rendu: dict[str, str] = {}
+        for ligne in lignes:
+            if not ligne.strip():
+                continue
+            try:
+                e = json.loads(ligne)
+                rendu[f"{e['granularite']}:{e['cle']}"] = e["decision"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+        return rendu
 
     def attendre_decision(self, etype: str, klass: str,
                           valeur: str) -> "Decision":

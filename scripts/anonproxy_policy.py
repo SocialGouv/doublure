@@ -59,6 +59,15 @@ REPONSES = {
           "anonymiser toute la classe {classe}, ne plus demander"),
 }
 
+#: Révéler POUR CE MESSAGE, à la granularité de ce qui est affiché — le groupe
+#: entier s'il est groupé, la valeur seule s'il a été détaillé.
+#:
+#: Ce n'est pas une quatrième portée : rien n'est écrit dans un fichier de
+#: portée, donc rien ne survit. C'est la réponse à la question courante, et
+#: c'est ce qui manquait — « juste ici, juste maintenant » était la seule chose
+#: que l'opérateur ne pouvait pas dire sans laisser une règle derrière lui.
+TOUCHE_MESSAGE = "m"
+
 
 def _outils(args) -> tuple[Policy, Vault, str]:
     reglages = Settings.from_env()
@@ -243,6 +252,9 @@ def cmd_arbitrer(args) -> int:
             portee_visible = (f"   ({combien} question(s) en attente)"
                               if combien > 1 else "")
             print(f"    {touche} — {libelle}{portee_visible}")
+        print(f"    {TOUCHE_MESSAGE} — révéler pour CE MESSAGE seulement"
+              f" ({'ce groupe' if groupe_entier else 'cette valeur'},"
+              " rien n'est enregistré)")
         if groupe_entier:
             print(f"    d — détailler les {len(groupe)} valeurs, une par une")
         print("    ⏎ — laisser anonymisé, redemander plus tard")
@@ -255,6 +267,16 @@ def cmd_arbitrer(args) -> int:
             # une touche, elle n'est simplement plus le défaut.
             file_a_traiter[:0] = [[x] for x in groupe]
             unites = unites + [[x] for x in groupe]
+            continue
+        if choix == TOUCHE_MESSAGE:
+            granularite = "type" if groupe_entier else "valeur"
+            cle = q["type"] if groupe_entier else q["empreinte"]
+            politique.repondre_pour_le_message(granularite, cle,
+                                               Decision.REVELER)
+            print(f"  → révélé pour CE MESSAGE ({granularite} {cle}) ;"
+                  " rien n'est enregistré, la réponse meurt avec le message")
+            print("  ⚠ ce qui sort maintenant est SORTI : y revenir ne le"
+                  " rappellera pas.")
             continue
         if choix not in REPONSES:
             print(f"  réponse inconnue : {choix!r} — laissé anonymisé")
