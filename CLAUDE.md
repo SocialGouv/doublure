@@ -2062,6 +2062,36 @@ own name is a PERSON and fragments into three identities across case; `the`,
 `console` and jo's shortcut `::c` (read as IPv6) are substituted, 13 false
 positives out of the 18 values sampled from the arbitration queue.
 
+**Les quatre décisions rendues par jo le même jour, livrées.** L'arbitrage a
+porté sur ce que le système doit OFFRIR, pas sur un correctif :
+
+- **répondre pour CE MESSAGE** — la portée la plus proche, offerte dans le CLI
+  (`m`), dans l'API Go (`scope: "message"`) et dans l'extension. Ce n'est
+  DÉLIBÉRÉMENT pas une quatrième portée : une portée est une règle qui survit,
+  et une révélation qui survit à ce pour quoi elle a été accordée est une
+  révélation héritée. Le canal est vidé à l'OUVERTURE d'un message, donc une
+  réponse arrivée trop tard est jetée au lieu de s'appliquer à la suivante.
+  `tests/control_e2e.sh` fait écrire Go et honorer Python : la parité est
+  prouvée, pas supposée — elle avait été fausse deux fois.
+- **désigner une valeur par ce qu'elle EST** (`valeur <portée> TYPE VALEUR`).
+  La décision « révéler valeur par valeur » était juste et INAPPLICABLE :
+  `definir … valeur` attend une empreinte, qui n'existe que dans la file.
+  Piège payé en l'écrivant : le moteur consulte la politique APRÈS
+  canonicalisation, donc calculer l'empreinte sur la valeur BRUTE écrivait une
+  règle qui ne s'applique jamais — elle a l'air prise et ne décide rien.
+- **l'annonce dit maintenant que les dates sont décalées** : les écarts sont
+  conservés (donc la chronologie se raisonne), la position par rapport à
+  AUJOURD'HUI ne l'est pas, et le modèle doit DEMANDER plutôt que conclure.
+  Rien ne tenait le contenu de l'annonce : deux tests le tiennent, dont un qui
+  interdit qu'elle demande jamais au modèle de ne pas divulguer — elle INFORME,
+  elle ne protège pas.
+- **`dates=cote_du_present`**, défaut `libre` inchangé. Chaque côté est son
+  propre espace de rotation, ce qui rend D6 vrai jusqu'aux bords. Première
+  version mesurée absurde : rotation dans TOUT l'espace du côté, février 2026
+  ressortait en l'an 2 — une date passée, et ni plausible ni porteuse d'écart.
+  Prix assumés par jo et écrits dans `limits.md` : « passé ou futur » devient
+  un attribut préservé, et la moitié FUTURE se périme d'elle-même.
+
 **Method — an ERROR is not a witness.** Reverting the extension fix made nine
 tests ERROR, because the fixture lost the method it calls; that proves an API is
 missing, not that a behaviour is wrong. Replaying the realistic regression —
