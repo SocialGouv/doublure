@@ -1,6 +1,6 @@
 """Le PROJET est celui qu'on a lancé, pas le segment numéro deux.
 
-Trouvé par jo en surveillant une session réelle : `/home/jo/lab/ai/anonproxy-demo`
+Trouvé par ada en surveillant une session réelle : `/home/ada/lab/ai/anonproxy-demo`
 sortait en `/home/<fictif>/<fictif>/ai/anonproxy-demo`. Le nom du DÉPÔT partait
 donc en clair — et un dépôt porte très souvent le nom du client — pendant qu'un
 répertoire d'organisation sans intérêt (`lab`) était masqué pour rien.
@@ -27,7 +27,7 @@ from anonproxy.surrogates.engine import SurrogateEngine
 from anonproxy.vault import Vault
 
 MASTER = "f6" * 32
-PROJET = "/home/jo/lab/ai/anonproxy-demo"
+PROJET = "/home/ada/lab/ai/anonproxy-demo"
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def segments(chemin: str) -> list[str]:
 def test_le_nom_du_depot_ne_sort_pas_en_clair(moteur):
     rendu = moteur().substitute_value("FILE_PATH", f"{PROJET}/infra/inventaire.md")
     assert "anonproxy-demo" not in rendu, rendu
-    assert "jo" not in segments(rendu), rendu
+    assert "ada" not in segments(rendu), rendu
 
 
 def test_un_chemin_COMPOSE_par_le_modele_se_restaure(moteur):
@@ -93,22 +93,22 @@ def test_chaque_segment_substitue_est_au_coffre(moteur):
 
 
 def test_un_meme_token_garde_une_seule_identite(moteur):
-    """Le modèle voyait `jo` sous deux noms selon qu'il le lisait comme une
+    """Le modèle voyait `ada` sous deux noms selon qu'il le lisait comme une
     PERSONNE ou comme un segment de chemin — la classe critique du round 2
     (« un hôte vu comme HOSTNAME/FQDN/CERT_CN recevait jusqu'à 4 identités »),
     jamais fermée pour les chemins. Passer les segments par le COFFRE la ferme
     par construction : c'est la clé canonique qui décide, pas le type du span."""
     m = moteur()
-    par_segment = m.substitute_value("PATH_SEGMENT", "jo")
-    assert m.substitute_value("PERSON", "jo") == par_segment
-    assert par_segment in m.substitute_value("FILE_PATH", "/home/jo/x").split("/")
+    par_segment = m.substitute_value("PATH_SEGMENT", "ada")
+    assert m.substitute_value("PERSON", "ada") == par_segment
+    assert par_segment in m.substitute_value("FILE_PATH", "/home/ada/x").split("/")
 
 
 @pytest.mark.parametrize("chemin", [
-    "/home/./jo/lab/ai/anonproxy-demo/infra",
-    "/home/../jo/lab/ai/anonproxy-demo/infra",
-    "/./home/jo/lab/ai/anonproxy-demo/infra",
-    "/home/jo/../jo/lab/ai/anonproxy-demo/infra",
+    "/home/./ada/lab/ai/anonproxy-demo/infra",
+    "/home/../ada/lab/ai/anonproxy-demo/infra",
+    "/./home/ada/lab/ai/anonproxy-demo/infra",
+    "/home/ada/../ada/lab/ai/anonproxy-demo/infra",
 ])
 def test_un_segment_point_ne_decale_pas_la_regle(moteur, chemin):
     """DEUX défauts qui se composaient, et le résultat était le pire possible.
@@ -125,7 +125,7 @@ def test_un_segment_point_ne_decale_pas_la_regle(moteur, chemin):
     moment de fermer, pas d'appliquer une règle de position."""
     rendu = moteur().substitute_value("FILE_PATH", chemin)
     assert rendu != chemin, rendu
-    assert "jo" not in segments(rendu), rendu
+    assert "ada" not in segments(rendu), rendu
     assert "anonproxy-demo" not in segments(rendu), rendu
 
 
@@ -147,7 +147,7 @@ def test_sans_le_projet_seul_l_utilisateur_sort(moteur):
     rendu = moteur(chemins=CHEMINS_UTILISATEUR).substitute_value(
         "FILE_PATH", f"{PROJET}/infra")
     assert rendu.endswith("/lab/ai/anonproxy-demo/infra"), rendu
-    assert "jo" not in segments(rendu)
+    assert "ada" not in segments(rendu)
 
 
 def test_complet_masque_tout(moteur):
@@ -158,8 +158,8 @@ def test_complet_masque_tout(moteur):
 def test_un_chemin_hors_projet_garde_sa_structure(moteur):
     """Hors du projet, il n'y a plus de nom de dépôt à reconnaître : seul
     l'utilisateur sort."""
-    rendu = moteur().substitute_value("FILE_PATH", "/home/jo/autre/chose.txt")
-    assert rendu.endswith("/autre/chose.txt") and "jo" not in segments(rendu)
+    rendu = moteur().substitute_value("FILE_PATH", "/home/ada/autre/chose.txt")
+    assert rendu.endswith("/autre/chose.txt") and "ada" not in segments(rendu)
 
 
 def test_projet_inconnu_garde_le_pari_positionnel(moteur):
@@ -169,6 +169,6 @@ def test_projet_inconnu_garde_le_pari_positionnel(moteur):
     masquer un répertoire de trop est visible et réparable, laisser sortir un
     nom de dépôt ne l'est pas."""
     rendu = segments(moteur(projet=None).substitute_value(
-        "FILE_PATH", "/home/jo/acme-nda/notes.md"))
-    assert "jo" not in rendu and "acme-nda" not in rendu
+        "FILE_PATH", "/home/ada/acme-nda/notes.md"))
+    assert "ada" not in rendu and "acme-nda" not in rendu
     assert rendu[-1] == "notes.md"

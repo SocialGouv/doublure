@@ -23,7 +23,7 @@ from anonproxy.surrogates.engine import SurrogateEngine
 from anonproxy.vault import Vault
 
 MASTER = "f6" * 32
-PROJET = "/home/jo/lab/ai/anonproxy-demo"
+PROJET = "/home/ada/lab/ai/anonproxy-demo"
 
 
 @pytest.fixture

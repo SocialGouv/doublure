@@ -8,8 +8,8 @@
 # One directory per project, named after the project's own path, so that two
 # projects never share a vault and the mapping stays readable at a glance:
 #
-#   /home/jo/lab/ai/anonproxy-demo
-#     → ~/.anonshield/-home-jo-lab-ai-anonproxy-demo/
+#   /home/ada/lab/ai/anonproxy-demo
+#     → ~/.anonshield/-home-ada-lab-ai-anonproxy-demo/
 #
 # The rule is DUPLICATED in Go (go/internal/guard/state.go) because the hook is
 # launched by Claude Code, not by these scripts, and must find the same

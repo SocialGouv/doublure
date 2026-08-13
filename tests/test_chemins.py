@@ -45,19 +45,19 @@ def segments(chemin: str) -> list[str]:
 
 def test_la_racine_standard_reste(moteur):
     """`/home` existe sur toutes les machines : le masquer ne protège rien."""
-    sortie = moteur().substitute_value("FILE_PATH", "/home/jo/example/test.md")
+    sortie = moteur().substitute_value("FILE_PATH", "/home/ada/example/test.md")
     assert sortie.startswith("/home/"), sortie
 
 
 def test_le_nom_de_fichier_reste(moteur):
     """Masquer le nom de fichier empêche l'agent de retrouver le fichier."""
-    sortie = moteur().substitute_value("FILE_PATH", "/home/jo/example/test.md")
+    sortie = moteur().substitute_value("FILE_PATH", "/home/ada/example/test.md")
     assert sortie.endswith("/test.md"), sortie
 
 
 def test_le_chemin_relatif_dans_le_projet_reste(moteur):
     sortie = moteur().substitute_value(
-        "FILE_PATH", "/home/jo/example/src/module/fichier.py")
+        "FILE_PATH", "/home/ada/example/src/module/fichier.py")
     assert sortie.endswith("/src/module/fichier.py"), sortie
 
 
@@ -71,14 +71,14 @@ def test_les_racines_systeme_restent(moteur, racine):
 
 def test_le_nom_d_utilisateur_est_substitue(moteur):
     """C'est la valeur qui identifie une personne. Elle sort toujours."""
-    sortie = moteur().substitute_value("FILE_PATH", "/home/jo/example/test.md")
-    assert "/jo/" not in sortie, sortie
+    sortie = moteur().substitute_value("FILE_PATH", "/home/ada/example/test.md")
+    assert "/ada/" not in sortie, sortie
     assert segments(sortie)[1] != "jo"
 
 
 def test_le_projet_est_substitue_par_defaut(moteur):
-    """`/home/jo/acme-nda/` : le segment projet peut nommer un client."""
-    sortie = moteur().substitute_value("FILE_PATH", "/home/jo/acme-nda/notes.md")
+    """`/home/ada/acme-nda/` : le segment projet peut nommer un client."""
+    sortie = moteur().substitute_value("FILE_PATH", "/home/ada/acme-nda/notes.md")
     assert "acme-nda" not in sortie, sortie
     assert sortie.endswith("/notes.md"), sortie
 
@@ -86,7 +86,7 @@ def test_le_projet_est_substitue_par_defaut(moteur):
 def test_le_projet_reste_si_l_operateur_l_ouvre(moteur):
     """Réglage `utilisateur` : l'opérateur assume que le projet est anodin."""
     sortie = moteur(CHEMINS_UTILISATEUR).substitute_value(
-        "FILE_PATH", "/home/jo/example/test.md")
+        "FILE_PATH", "/home/ada/example/test.md")
     assert "/example/" in sortie, sortie
     assert segments(sortie)[1] != "jo"
 
@@ -94,7 +94,7 @@ def test_le_projet_reste_si_l_operateur_l_ouvre(moteur):
 def test_complet_substitue_tout(moteur):
     """L'ancien comportement reste atteignable : c'est le plus fermé."""
     sortie = moteur(CHEMINS_COMPLET).substitute_value(
-        "FILE_PATH", "/home/jo/example/test.md")
+        "FILE_PATH", "/home/ada/example/test.md")
     assert "home" not in sortie, sortie
     assert "test.md" not in sortie, sortie
 
@@ -131,14 +131,14 @@ def test_la_racine_seule_est_rendue_telle_quelle(moteur):
 
 def test_le_meme_chemin_rend_le_meme_substitut(moteur):
     eng = moteur()
-    a = eng.substitute_value("FILE_PATH", "/home/jo/example/test.md")
-    b = eng.substitute_value("FILE_PATH", "/home/jo/example/test.md")
+    a = eng.substitute_value("FILE_PATH", "/home/ada/example/test.md")
+    b = eng.substitute_value("FILE_PATH", "/home/ada/example/test.md")
     assert a == b
 
 
 def test_deux_utilisateurs_distincts_ne_partagent_pas_un_substitut(moteur):
     """D6 : l'injectivité vaut aussi sur la partie qu'on substitue encore."""
     eng = moteur()
-    a = eng.substitute_value("FILE_PATH", "/home/jo/example/test.md")
+    a = eng.substitute_value("FILE_PATH", "/home/ada/example/test.md")
     b = eng.substitute_value("FILE_PATH", "/home/marie/example/test.md")
     assert segments(a)[1] != segments(b)[1]

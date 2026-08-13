@@ -12,8 +12,8 @@ import (
 //
 // One directory per project, named after the project's own path:
 //
-//	/home/jo/lab/ai/anonproxy-demo
-//	  → ~/.doublure/-home-jo-lab-ai-anonproxy-demo/
+//	/home/ada/lab/ai/anonproxy-demo
+//	  → ~/.doublure/-home-ada-lab-ai-anonproxy-demo/
 //
 // The rule is DUPLICATED in shell (scripts/lib/state.sh). The hook is launched
 // by Claude Code, not by those scripts, so it has to find the same directory on

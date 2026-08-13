@@ -360,7 +360,7 @@ SCHEMA_NESTED_KEYS: frozenset[str] = frozenset({"additionalProperties", "items"}
 
 #: Shape of an `enum` member left VERBATIM: a vocabulary token, starting with a
 #: LETTER and carrying no dot, slash, at-sign, colon or space. `10.4.2.17`,
-#: `db-01.acme.internal`, `/home/jo/x` and `alice@acme.corp` are therefore
+#: `db-01.acme.internal`, `/home/ada/x` and `alice@acme.corp` are therefore
 #: excluded and keep being substituted. Residual, bounded and stated: a
 #: single-label bare identifier (`db-prod01`) has the shape of a vocabulary
 #: token and stays verbatim — the same accepted leak as `tools[].name`,

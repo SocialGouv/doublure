@@ -108,7 +108,7 @@ def test_a_default_echoing_an_enum_member_follows_it():
 IDENTIFIERS = [
     "db-01.acme.internal",
     "acme.internal",
-    "/home/jo/.config/acme",
+    "/home/ada/.config/acme",
     "alice@acme.corp",
     "https://vault.acme.internal/v1",
     "10.4.2.17",

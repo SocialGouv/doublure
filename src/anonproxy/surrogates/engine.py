@@ -276,7 +276,7 @@ class SurrogateEngine:
             sortent = {1} if len(parts) > 1 else set()
             if reglage != CHEMINS_UTILISATEUR:
                 # Le nom du dépôt est à SA place dans le chemin du projet, pas
-                # à l'indice 2 : `/home/jo/lab/ai/anonproxy-demo` laissait
+                # à l'indice 2 : `/home/ada/lab/ai/anonproxy-demo` laissait
                 # `anonproxy-demo` en clair — or un dépôt porte souvent le nom
                 # du client — et masquait `lab` pour rien.
                 if self._projet is not None \
