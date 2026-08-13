@@ -2012,6 +2012,62 @@ regression measured 1.965 s: it would have passed by thirty-five milliseconds
 while looking like it covered the defect. The threshold belongs at ten times the
 measurement, and it was verified to redden on the regression it names.
 
+## 2026-08-13 — a REAL session, and it found what 24 rounds had not
+
+The adversarial loop stopped at round 24 with its findings almost entirely in
+code it had written hours earlier. jo ran a real session under the proxy
+instead. **Six defects in one session**, none of them a leak — every one is
+over-substitution or a nature that is not preserved, which is the fail-closed
+side working. That is the third time this project learns the same thing: round
+18's three defects, round 24's availability break, and now this.
+
+**A partial date fell to the generic substitution — so it came back as a WORD.**
+`'Feb 28' → 'orchard-larch'`, `'August 2026' → 'gateway-sedge'`. Every form that
+does not carry all three fields — month-year, year-month, month-day,
+quarter-year — was unreadable to the shifter, and an incident report is made of
+them. Each now shifts at ITS OWN granularity, because shifting a month-year by
+DAYS is not injective: February and March of one year are 28 days apart, which
+fits inside a 31-day month, so two real dates could share one surrogate (D6).
+
+**And my first fix destroyed the chronology, which is what the module exists
+for.** Drawing an independent step per granularity put `3 février 2026` and
+`février 2026` — the same month in the source — fifty-five years apart. The step
+is CONVERTED, not drawn again. Injectivity is exhaustive on the 366 month-day
+pairs, leap day included, with no fixed point: a fixed point returns the real
+value as its own surrogate, the most silent failure there is.
+
+**The round-18 invariant could not see any of it.** It says the canonical `kind`
+of a surrogate must equal the real value's, and the kinds it enumerates are
+`{ip, cidr, host, email, repo, image, generic}` — a date and a word are both
+`generic` there. Its commit claimed it covered "the next ones"; on dates it can
+say nothing. It is now stated where it is checkable, with the DATE corpus the
+original never had.
+
+**A path segment lost its extension**, so `nginx.conf` became `willow-xenon` and
+the model could no longer tell a config file from a log. **Not a regression**:
+the detector is right and reports these names under `public_by_shape`; the span
+is the whole PATH, and a path with an unknown root is masked entirely (rounds 9
+and 12), because a segment consults exact entries only — `acme.internal` has
+exactly the shape of `index.html`. The stem stays substituted, the extension is
+rendered. What leaves is the FORMAT, never the name; jo arbitrated that opening
+rather than the code deciding. The extension is NOT read off the last dot —
+`db-01.acme.internal` has one — but asked of the curated list the allowlist
+already holds, on a neutral stem, so the list is not copied into a second source
+of truth.
+
+**Still open, all arbitrations for jo**: the date shift can cross TODAY, and the
+model then reported an anomaly that does not exist — after restoration its own
+sentence ("3 February 2026 is later than today") is plainly false; the model's
+own name is a PERSON and fragments into three identities across case; `the`,
+`console` and jo's shortcut `::c` (read as IPv6) are substituted, 13 false
+positives out of the 18 values sampled from the arbitration queue.
+
+**Method — an ERROR is not a witness.** Reverting the extension fix made nine
+tests ERROR, because the fixture lost the method it calls; that proves an API is
+missing, not that a behaviour is wrong. Replaying the realistic regression —
+keep the API, remove the CALL SITE — made five fail on behaviour. Checking that
+a witness reddens is not enough: it must redden for the reason it names.
+
 ## Defects fixed in `anthropic_walker.py` (rule 6 — tests supplied FIRST)
 
 `tests/test_walker_defects.py` proves all four, with minimal fixes (the fourth
