@@ -743,3 +743,28 @@ def test_une_granularite_inconnue_est_REFUSEE(tmp_path):
     p = _politique_message(tmp_path)
     with pytest.raises(PolitiqueInvalide):
         p.repondre_pour_le_message("message", "DATE", Decision.REVELER)
+
+
+def test_l_empreinte_du_CLI_est_celle_que_le_MOTEUR_cherche(tmp_path):
+    """Une règle de valeur qui ne s'applique jamais a l'air prise et ne décide
+    rien — le pire mode d'échec de ce système, sur la seule décision qu'on ne
+    peut pas reprendre.
+
+    Le moteur consulte la politique APRÈS canonicalisation (c'est ce qui fait
+    qu'une décision sur `DB-01.acme.internal` vaut pour `db-01.acme.internal`).
+    La commande qui désigne une valeur par ce qu'elle EST doit donc calculer
+    l'empreinte sur la même forme, sinon elle écrit à côté.
+    """
+    from anonproxy.surrogates.canonical import canonicalize
+    from anonproxy.surrogates.engine import _display_value
+
+    p = Policy(racine=tmp_path / "pol", master_key="d4" * 32,
+               scope_key="project:cli")
+    for etype, brut in (("HOSTNAME", "DB-01.acme.internal"),
+                        ("HOSTNAME", "db-01.acme.internal"),
+                        ("PERSON", "Claude"), ("IP_ADDRESS", "::c")):
+        stored = _display_value(canonicalize(etype, brut), brut)
+        # Ce que la commande écrit…
+        p.definir("projet", "valeur", p.empreinte(etype, stored), Decision.REVELER)
+        # …doit être ce que le moteur trouve quand il décide sur cette valeur.
+        assert p.decide(etype, "infra", stored)[0] is Decision.REVELER, brut

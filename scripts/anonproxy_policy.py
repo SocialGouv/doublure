@@ -8,7 +8,7 @@ modifier les règles.
     anonproxy_policy.py etat                  ce qui est réglé, par portée
     anonproxy_policy.py questions             ce qui attend un arbitrage
     anonproxy_policy.py arbitrer              les poser une à une
-    anonproxy_policy.py definir <portée> <granularité> <clé> <décision>
+    anonproxy_policy.py valeur  <portée> <TYPE> <VALEUR> <décision>\n    anonproxy_policy.py definir <portée> <granularité> <clé> <décision>
     anonproxy_policy.py retirer <portée> <granularité> <clé>
 
 Portées      : global · projet · session   (chacune sert de défaut à la suivante)
@@ -297,6 +297,44 @@ def cmd_arbitrer(args) -> int:
     return 0
 
 
+def cmd_valeur(args) -> int:
+    """Décider sur UNE valeur qu'on désigne par ce qu'elle est.
+
+    `definir … valeur` attend une EMPREINTE, qui n'existe que dans la file
+    d'arbitrage : hors de ce flux, l'opérateur ne pouvait pas désigner une
+    valeur qu'il a en tête — `Claude`, `::c`, un mot que le détecteur prend pour
+    un hôte. La décision était juste et inapplicable.
+
+    L'empreinte est imprimée : c'est elle qu'il faudra pour révoquer.
+    """
+    # Le moteur consulte la politique APRÈS canonicalisation — c'est ce qui fait
+    # qu'une décision prise sur `DB-01.acme.internal` vaut aussi pour
+    # `db-01.acme.internal`. Calculer l'empreinte sur la valeur BRUTE écrivait
+    # donc une règle qui ne s'applique jamais : elle a l'air prise, et elle ne
+    # décide rien. On réutilise la fonction du moteur plutôt que de refaire la
+    # canonicalisation ici, qui divergerait au premier changement.
+    from anonproxy.surrogates.canonical import canonicalize
+    from anonproxy.surrogates.engine import _display_value
+
+    politique, _, _ = _outils(args)
+    canon = canonicalize(args.type_pos, args.valeur)
+    empreinte = politique.empreinte(args.type_pos, _display_value(canon, args.valeur))
+    decision = Decision(args.decision)
+    try:
+        chemin = politique.definir(args.portee_pos, "valeur", empreinte, decision)
+    except (PolitiqueInvalide, ValueError) as exc:
+        print(f"REFUSÉ : {exc}", file=sys.stderr)
+        return 2
+    print(f"{args.valeur!r} ({args.type_pos}) → {decision.value}, "
+          f"portée {args.portee_pos}")
+    print(f"  empreinte : {empreinte}   (pour révoquer : retirer "
+          f"{args.portee_pos} valeur {empreinte})")
+    if decision is Decision.REVELER:
+        print("  ⚠ cette valeur SORT désormais en clair ; révoquer la règle ne "
+              "rappellera pas ce qui est déjà parti.")
+    return 0
+
+
 def cmd_definir(args) -> int:
     politique, _, _ = _outils(args)
     try:
@@ -348,6 +386,13 @@ def main() -> int:
     p.add_argument("--une-par-une", action="store_true", dest="une_par_une",
                    help="trancher valeur par valeur (défaut : par type)")
     p.set_defaults(func=cmd_arbitrer)
+
+    p = sous.add_parser("valeur")
+    p.add_argument("portee_pos", choices=PORTEES, metavar="portée")
+    p.add_argument("type_pos", metavar="TYPE", help="le type détecté, ex. PERSON")
+    p.add_argument("valeur", metavar="VALEUR", help="la valeur RÉELLE, en clair")
+    p.add_argument("decision", choices=[d.value for d in Decision])
+    p.set_defaults(func=cmd_valeur)
 
     for nom, fonction in (("definir", cmd_definir), ("retirer", cmd_retirer)):
         p = sous.add_parser(nom)
