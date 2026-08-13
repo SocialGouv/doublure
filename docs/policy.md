@@ -17,6 +17,7 @@ the default for the next answer:
 
 | Scope | Applies to |
 |---|---|
+| `message` | the message being processed, and nothing after it |
 | `session` | this session only |
 | `projet` | this project |
 | `global` | everywhere |
@@ -24,13 +25,41 @@ the default for the next answer:
 The **narrowest and nearest wins**. A rule is never inherited upward, and a
 `reveler` decision is never inherited from a default at all.
 
+`message` is offered as a scope because that is how you think of it — the
+nearest one there is — but it is deliberately **not a layer**. A scope is a rule
+that survives, and a reveal that outlives what it was granted for is an
+inherited reveal. Nothing is written into a scope file, so nothing survives: it
+is the answer to the question being asked, and it dies with it.
+
+The channel is cleared when a message **opens**, not when it closes. An answer
+written after the message it aimed at is therefore discarded rather than applied
+to the next one — a lost answer leaves the value anonymised, the reverse would
+let it out. Two concurrent requests discard each other's answer, which is the
+same safe direction.
+
 ## Answering
 
 ```bash
 task policy -- questions     # what was anonymised without an explicit rule
-task policy -- arbitrate     # answer them
+task policy -- arbitrer      # answer them
 task control                 # the arbitration API, for the IDE extension
 ```
+
+In `arbitrer`, `m` answers **for this message only** at the granularity on
+screen — the whole group if it is grouped, the single value if you expanded it.
+The extension offers the same choice as a scope, and so does
+`POST /decide` with `{"scope": "message"}`.
+
+To decide on a value you have in mind rather than one the queue is showing:
+
+```bash
+task policy -- valeur projet PERSON "Claude" reveler
+```
+
+It prints the fingerprint, which is what `retirer` needs to revoke it. The
+fingerprint is computed on the **canonical** form of the value, the same one the
+engine looks up — computing it on the raw string would write a rule that looks
+taken and never applies.
 
 The queue is grouped **by type**, and that is what makes it usable: one real
 session produced 462 pending values, which grouping turned into **14 gestures**.
@@ -54,7 +83,30 @@ A `--une-par-une` flag walks the queue value by value when you want that.
 - **neither** — tell the model how to work without the value. Often the right
   answer, and the one a queue that blocks would never let you give.
 
-A `SECRET` is never revealable (D4).
+A `SECRET` is never revealable (D4). That is refused when the rule is written
+*and* again when it is read, on every path including a message answer: the read
+guard is the invariant, the write guard is the ergonomics, and the invariant does
+not depend on it.
+
+## Settings
+
+Settings resolve through the **same** scope hierarchy as the rules, with the
+environment always winning — it is the troubleshooting lever. A setting that
+decides protection cannot be varied by a mode, or choosing a mode would amount
+to opening.
+
+| Setting | Values | Default |
+|---|---|---|
+| `domaines_fictifs` | `reserves` · `tld_reels` | `reserves` |
+| `chemins` | `utilisateur_projet` · `utilisateur` · `complet` | `utilisateur_projet` |
+| `dates` | `libre` · `cote_du_present` | `libre` |
+
+`dates=cote_du_present` keeps a past date past and a future date future, which
+is useful when absolute chronology matters. It has two prices, both stated in
+[Known limits](limits.md): "past or future" becomes a preserved attribute, and
+the future half expires on its own as today advances. The default preserves
+intervals only, and the announcement is what keeps the model from concluding
+anything from a date's position.
 
 ## The interface
 
