@@ -110,6 +110,26 @@ survives and an incident still reads as a sequence. The end-to-end proof that
 asserted this gap *inverted* has been turned the right way round — it failed
 the day the gap closed, which is what it was written to do.
 
+A **partial date is shifted at its own granularity**, and the step is converted
+rather than drawn again: a month-year moves by whole months, a quarter by
+quarters, a month-day within the year. Two reasons, and neither is cosmetic.
+Shifting a month-year by DAYS is not injective — February and March of one year
+are 28 days apart, which fits inside a 31-day month, so both could land in the
+same month and two real dates would share one surrogate. And drawing a separate
+step per granularity broke the chronology the module exists to keep: measured
+before the fix, `3 février 2026` and `février 2026` — the same month in the
+source — landed fifty-five years apart. What is never invented is the missing
+field: `August 2026` becomes another month-year, never a full date.
+
+**What still falls to the generic substitution, and therefore comes back as a
+word**: a season (`hiver 1998`), a bare year, and a numeric day-month whose
+order is ambiguous (`03/04`). The last one follows the rule this module already
+applies to `3 jui` — what cannot be decided is not guessed. Consequence, stated:
+for those forms the model reads a hostname where the document says a date.
+A shared abbreviation (`sept`, `oct`, `nov`, `dec`) belongs to both languages,
+and a partial form carries no syntax to tell them apart, so the preferred table
+decides; a full month name resolves itself.
+
 !!! note "Recall was measured, and it decided the model"
 
     The first model shipped here returned **two of the three people** in a

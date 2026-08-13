@@ -190,7 +190,7 @@ def test_une_forme_de_date_reconnue_de_plus(ecrit, attendu):
 def test_la_forme_d_ecriture_survit_au_decalage(ecrit, decalage, attendu):
     """D1 : l'opérateur et le modèle doivent lire une date écrite comme celle
     qu'ils ont remplacée."""
-    jour, rendre = _dates.parse(ecrit)
+    jour, rendre, _ = _dates.parse(ecrit)
     assert rendre(jour + dt.timedelta(days=decalage)) == attendu
 
 
@@ -305,7 +305,7 @@ def test_une_forme_anglaise_recoit_un_mois_anglais(ecrit):
     n'a pas fuité ; l'opérateur lit simplement une date fictive sans le savoir,
     et rien ne le compte. La syntaxe est le seul indice de langue disponible :
     mois d'abord = anglophone."""
-    jour, rendre = _dates.parse(ecrit)
+    jour, rendre, _ = _dates.parse(ecrit)
     rendu = rendre(jour + dt.timedelta(days=321))
     mois = rendu.split()[0].rstrip(".,").lower()
     assert any(m.startswith(mois) for m in _dates.MOIS_EN), rendu
@@ -325,7 +325,7 @@ def test_ce_qui_est_ecrit_peut_toujours_se_relire(ecrit, decalage):
     l'ASCII pur. Dans les deux cas le modèle « corrige », et la restauration se
     perd sans que rien ne le signale. Le rendu se relit désormais lui-même
     avant d'accepter une abréviation, et retombe sur le nom complet sinon."""
-    jour, rendre = _dates.parse(ecrit)
+    jour, rendre, _ = _dates.parse(ecrit)
     rendu = rendre(jour + dt.timedelta(days=decalage))
     relu = _dates.parse(rendu)
     assert relu is not None, f"{ecrit!r} rendu {rendu!r}, illisible"
@@ -336,7 +336,7 @@ def test_ce_qui_est_ecrit_peut_toujours_se_relire(ecrit, decalage):
 def test_une_source_ascii_reste_ascii():
     """`dec` est de l'ASCII ; rendre `aoû` y met un accent que le document
     n'avait pas, et que le modèle réécrira."""
-    jour, rendre = _dates.parse("dec 25, 2020")
+    jour, rendre, _ = _dates.parse("dec 25, 2020")
     rendu = rendre(jour + dt.timedelta(days=250))
     assert rendu == rendu.encode("ascii", "ignore").decode(), rendu
 
@@ -371,7 +371,7 @@ def test_une_abreviation_rendue_est_une_abreviation_QUI_S_ECRIT(ecrit, attendu_m
     `janv.` faisait rendre `nove.`, `févr.` faisait rendre `déce.` : le modèle
     normalise vers l'écriture standard, le coffre ne contient que l'aberration,
     et l'opérateur lit une date fictive sans le savoir."""
-    jour, rendre = _dates.parse(ecrit)
+    jour, rendre, _ = _dates.parse(ecrit)
     rendu = rendre(jour + dt.timedelta(days=321))
     assert attendu_mois in rendu, rendu
     assert _dates.parse(rendu) is not None
@@ -451,7 +451,7 @@ def test_une_date_de_BORD_se_relit_dans_la_forme_litterale(ecrit):
 
     Le correctif de la rotation était bon ; il n'avait été porté que sur une
     des deux moitiés du rendu."""
-    jour, rendre = _dates.parse(ecrit)
+    jour, rendre, _ = _dates.parse(ecrit)
     rendu = rendre(_dates._decaler(jour, 654))
     assert _dates.parse(rendu) is not None, rendu
     assert _dates.parse(rendu)[0] == _dates._decaler(jour, 654)
@@ -477,7 +477,7 @@ def test_un_mois_SANS_abreviation_ne_recoit_pas_de_point(source, cible):
     standard n'est pas abrégée."""
     import datetime as dt
 
-    jour, rendre = _dates.parse(source)
+    jour, rendre, _ = _dates.parse(source)
     rendus = [rendre(dt.date(2022, mois, 3)) for mois in range(1, 13)]
     vise = [r for r in rendus if cible.lower() in r.lower()]
     assert vise, (cible, rendus)
@@ -493,10 +493,10 @@ def test_le_premier_du_mois_recoit_son_ordinal():
     recopie `1er août 2022`."""
     import datetime as dt
 
-    _, rendre = _dates.parse("15 mars 2020")
+    _, rendre, _d = _dates.parse("15 mars 2020")
     assert rendre(dt.date(2022, 8, 1)) == "1er août 2022"
     # Mais une source qui écrit `1 mars` sans `er` garde SON choix.
-    _, sans = _dates.parse("1 mars 2020")
+    _, sans, _d = _dates.parse("1 mars 2020")
     assert sans(dt.date(2022, 8, 1)) == "1 août 2022"
 
 
@@ -522,5 +522,90 @@ def test_l_ordinal_suit_la_LANGUE_pas_l_ordre_des_champs(source, attendu):
     reconnu."""
     import datetime as dt
 
-    _, rendre = _dates.parse(source)
+    _, rendre, _d = _dates.parse(source)
     assert rendre(dt.date(2021, 11, 1)) == attendu
+
+
+# --------------------------------------------------------------------------- #
+# Les formes PARTIELLES
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("source,attendu", [
+    ("August 2026", "May 2028"),
+    ("février 2026", "novembre 2027"),
+    # Même mois que `février 2026` ci-dessus, écrit dans SA langue et SON style.
+    ("Feb. 2026", "Nov. 2027"),
+    ("2026-08", "2028-05"),
+    ("Feb 28", "Dec 12"),
+    ("28 février", "12 décembre"),
+    ("29 février", "13 décembre"),      # l'année de référence est bissextile
+    ("Q3 2024", "Q2 2026"),
+    ("T1 2020", "T4 2021"),
+])
+def test_une_forme_partielle_se_decale_dans_sa_propre_forme(source, attendu):
+    """Une date partielle est une date : elle doit le rester.
+
+    Mesuré en session réelle avant correctif : `'Feb 28' → 'orchard-larch'`,
+    `'August 2026' → 'gateway-sedge'`. Le repli générique rendait un MOT, donc
+    le modèle recevait un nom d'hôte là où le document annonce une date et ne
+    pouvait plus répondre « quand ».
+
+    Le champ absent n'est jamais INVENTÉ : rendre `12 mars 2031` pour
+    `August 2026` serait une date, et une invention — le document ne dit pas le
+    jour.
+    """
+    assert _dates.shift(source, 654) == attendu
+
+
+def test_la_CHRONOLOGIE_survit_au_melange_des_granularites():
+    """Le pas est CONVERTI d'une granularité à l'autre, jamais tiré à part.
+
+    Un document mêle les formes — « l'incident du 3 février 2026 » et « le
+    rapport de février 2026 » désignent le même mois. Un pas indépendant par
+    granularité les envoyait à cinquante-cinq ans l'un de l'autre : chacun était
+    bien une date, et la chronologie que ce module existe pour préserver était
+    détruite. La nature d'une date inclut sa place dans une série.
+    """
+    complete = _dates.shift("3 février 2026", 654)
+    mois = _dates.shift("février 2026", 654)
+    iso = _dates.shift("2026-02", 654)
+    trimestre = _dates.shift("Q1 2026", 654)
+
+    assert complete == "19 novembre 2027"
+    assert mois == "novembre 2027", f"{complete} et {mois} ne sont plus le même mois"
+    assert iso == "2027-11", f"{iso} contredit {mois}"
+    assert trimestre == "Q4 2027", f"{trimestre} ne contient pas {mois}"
+
+
+@pytest.mark.parametrize("granularite,valeurs", [
+    ("mois-année", [f"{m} {a}" for a in range(2000, 2030) for m in _dates.MOIS_FR]),
+    ("année-mois", [f"{a:04d}-{m:02d}" for a in range(2000, 2030)
+                    for m in range(1, 13)]),
+    ("trimestre", [f"Q{t} {a}" for a in range(2000, 2100) for t in range(1, 5)]),
+])
+def test_une_granularite_partielle_reste_injective(granularite, valeurs):
+    """D6 sur chaque granularité — et c'est ce qui interdit de décaler une
+    année-mois EN JOURS.
+
+    Février et mars d'une même année sont distants de vingt-huit jours, qui
+    tiennent dans un mois de trente et un : décalés du même nombre de JOURS, les
+    deux peuvent tomber dans le même mois, donc deux dates réelles sous un seul
+    substitut. Chaque forme se décale à SA granularité.
+    """
+    substituts = [_dates.shift(v, 654) for v in valeurs]
+    assert all(s is not None for s in substituts), granularite
+    assert len(set(substituts)) == len(valeurs), \
+        f"{granularite} : collision entre substituts"
+    assert not any(a == b for a, b in zip(valeurs, substituts)), \
+        f"{granularite} : un point fixe rend le RÉEL comme substitut"
+
+
+def test_le_mois_jour_est_injectif_sur_les_366_couples():
+    """Exhaustif, parce que le domaine est petit et que le 29 février en est le
+    cas limite : sans une année de référence bissextile il n'aurait pas de
+    substitut de sa propre forme."""
+    couples = [f"{m} {j}" for m in _dates.MOIS_FR for j in range(1, 32)]
+    lisibles = [v for v in couples if _dates.parse(v) is not None]
+    assert len(lisibles) == 366, len(lisibles)
+    substituts = [_dates.shift(v, 654) for v in lisibles]
+    assert len(set(substituts)) == 366
+    assert not any(a == b for a, b in zip(lisibles, substituts))

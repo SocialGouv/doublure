@@ -180,10 +180,68 @@ def test_les_natures_couvertes_sont_enumerees(moteur):
     assert vues == {"ip", "cidr", "host", "email", "repo", "image", "generic"}, vues
 
 
+#: Les dates PARTIELLES — un rapport d'incident en est fait. Aucune n'était
+#: décalée : elles tombaient au repli générique et sortaient en MOT.
+DATES_PARTIELLES = [
+    ("August 2026", "mois-année anglophone"),
+    ("février 2026", "mois-année francophone"),
+    ("Feb. 2026", "mois-année abrégé"),
+    ("2026-08", "année-mois ISO"),
+    ("Feb 28", "mois-jour, sans année"),
+    ("28 février", "jour-mois, sans année"),
+    ("Q3 2024", "trimestre-année"),
+]
+
+
+@pytest.mark.parametrize("valeur,forme", DATES_PARTIELLES,
+                         ids=[f for _, f in DATES_PARTIELLES])
+def test_une_date_PARTIELLE_reste_une_date(moteur, valeur, forme):
+    """L'invariant de nature, sur le type qu'il n'exerçait PAS.
+
+    Le corpus de `test_le_substitut_a_la_meme_nature_que_le_reel` ne porte
+    aucune DATE, et il ne le pourrait pas : les natures qu'il énumère sont
+    `{ip, cidr, host, email, repo, image, generic}` — une date et un mot y sont
+    tous deux `generic`. L'invariant du tour 18 annonçait qu'il couvrait « les
+    suivantes » ; sur les dates il ne peut rien dire. Il est donc énoncé ici, où
+    il est vérifiable : ce qui se lit comme une date doit se relire comme une
+    date, et de la MÊME forme.
+
+    Mesuré en session réelle : `'Feb 28' → 'orchard-larch'`,
+    `'August 2026' → 'gateway-sedge'`. Le modèle reçoit un nom d'hôte là où le
+    document annonce une date, et cesse de pouvoir répondre « quand ».
+    """
+    from anonproxy.surrogates import dates
+
+    lu = dates.parse(valeur)
+    assert lu is not None, f"{valeur!r} n'est pas lue comme une date"
+    substitut = moteur.substitute_value("DATE", valeur)
+    assert substitut != valeur, "l'identité n'est pas une substitution"
+    relu = dates.parse(substitut)
+    assert relu is not None, (
+        f"nature perdue : {valeur!r} ({forme}) → {substitut!r}, qui ne se relit "
+        "pas comme une date")
+
+
+@pytest.mark.parametrize("valeur,forme", DATES_PARTIELLES,
+                         ids=[f for _, f in DATES_PARTIELLES])
+def test_une_date_PARTIELLE_ne_gagne_ni_ne_perd_de_champ(moteur, valeur, forme):
+    """L'AUTRE moitié : la même forme, pas seulement « une date ».
+
+    Rendre `12 mars 2031` pour `August 2026` serait une date — et une INVENTION :
+    le document ne dit pas le jour, et le substitut le ferait croire. La forme se
+    mesure par ce que la valeur porte de chiffres et de mots.
+    """
+    import re
+
+    substitut = moteur.substitute_value("DATE", valeur)
+    chiffres = lambda v: [len(g) for g in re.findall(r"\d+", v)]  # noqa: E731
+    assert chiffres(substitut) == chiffres(valeur), (
+        f"{valeur!r} → {substitut!r} : la forme a changé de champs")
+
+
 @pytest.mark.parametrize("valeur,interdit", [
     ("2020-02-30", "2020"),   # la FORME d'une date, sans en être une
-    ("Q3 2024", "2024"),
-    ("hiver 1998", "1998"),
+    ("hiver 1998", "1998"),   # une SAISON : aucune date ne s'en déduit
 ])
 def test_une_date_qui_tombe_au_generique_n_emporte_pas_son_annee(moteur, valeur,
                                                                  interdit):

@@ -44,6 +44,24 @@ _LITTERAL = re.compile(r"^(\d{1,2})(er)? ([^\W\d_]+)(\.?) (\d{4})$", re.UNICODE)
 #: `March 3, 2020` — le mois d'abord, usage anglophone.
 _LITTERAL_EN = re.compile(r"^([^\W\d_]+)(\.?) (\d{1,2}),? (\d{4})$", re.UNICODE)
 
+#: Les formes PARTIELLES — un rapport d'incident, un inventaire et un contrat en
+#: sont faits : « August 2026 », « Feb 28 », « Q3 2024 ». Aucune ne portait de
+#: branche, donc toutes tombaient au repli générique et sortaient en MOT : le
+#: modèle recevait un nom d'hôte là où le document annonce une date.
+#:
+#: Elles ne se décalent PAS en jours. Voir `_decaler_mois` : ce serait perdre
+#: l'injectivité, donc D6.
+#: `août 2026`, `February 2026`, `fév. 2026`.
+_MOIS_ANNEE = re.compile(r"^([^\W\d_]+)(\.?) (\d{4})$", re.UNICODE)
+#: `2026-08` — année et mois, ISO. L'ordre lève l'ambiguïté par lui-même.
+_ISO_MOIS = re.compile(r"^(\d{4})-(\d{2})$")
+#: `Feb 28`, `déc. 3` — mois puis jour, sans année.
+_MOIS_JOUR = re.compile(r"^([^\W\d_]+)(\.?) (\d{1,2})$", re.UNICODE)
+#: `28 février`, `1er mars` — jour puis mois, sans année.
+_JOUR_MOIS = re.compile(r"^(\d{1,2})(er)? ([^\W\d_]+)(\.?)$", re.UNICODE)
+#: `Q3 2024`, `T3 2024` — le trimestre est une date, à sa granularité.
+_TRIMESTRE = re.compile(r"^([QT])([1-4]) (\d{4})$", re.IGNORECASE)
+
 
 def _sans_accent(mot: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", mot.lower())
@@ -154,12 +172,18 @@ def _rendre_mois(nom_source: str, point: str, table: tuple[str, ...],
     return nom + point
 
 
-def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
-    """Rend la date lue et de quoi la RÉÉCRIRE dans la même forme.
+def parse(valeur: str) -> tuple[
+        dt.date, Callable[[dt.date], str],
+        Callable[[dt.date, int], dt.date]] | None:
+    """Rend la date lue, de quoi la RÉÉCRIRE, et à quelle granularité la décaler.
 
     Le rendu est une fermeture plutôt qu'un nom de format : c'est ce qui garde
     la forme d'origine — séparateur, casse du mois, zéros de tête — sans avoir
     à l'énumérer une seconde fois au moment d'écrire.
+
+    Le décaleur voyage AVEC la forme, et non à côté : une année-mois se décale
+    en mois, un trimestre en trimestres, un mois-jour dans l'année. Le déduire
+    ailleurs ferait deux sources de vérité pour une seule propriété.
     """
     valeur = valeur.strip()
 
@@ -171,7 +195,7 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
             return None
         # L'heure est CONSERVÉE : décaler l'heure casserait l'ordre des
         # événements à l'intérieur d'une journée, qui est ce que l'agent lit.
-        return jour, lambda d: f"{d.isoformat()}{reste}"
+        return jour, lambda d: f"{d.isoformat()}{reste}", _decaler
 
     if (m := _ISO_SLASH.match(valeur)):
         largeurs = (len(m[2]), len(m[3]))
@@ -180,7 +204,7 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
         except ValueError:
             return None
         return jour, lambda d: (f"{d.year:04d}/{d.month:0{largeurs[0]}d}"
-                                f"/{d.day:0{largeurs[1]}d}")
+                                f"/{d.day:0{largeurs[1]}d}"), _decaler
 
     if (m := _NUMERIQUE.match(valeur)):
         sep, largeur = m[2], (2 if len(m[1]) == 2 else 1)
@@ -200,7 +224,7 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
                 (lambda d: (d.day, d.month))
             return jour, lambda d, _o=ordre: sep.join(
                 (f"{_o(d)[0]:0{largeur}d}", f"{_o(d)[1]:0{largeur}d}",
-                 f"{d.year:04d}"))
+                 f"{d.year:04d}")), _decaler
         return None
 
     for motif, ordre_en in ((_LITTERAL, False), (_LITTERAL_EN, True)):
@@ -252,7 +276,81 @@ def parse(valeur: str) -> tuple[dt.date, Callable[[dt.date], str]] | None:
             # jour écrirait une forme que le français n'a pas.
             return f"{d.day}{_ord if d.day == 1 else ''} {écrit} {d.year:04d}"
 
-        return jour, rendre
+        return jour, rendre, _decaler
+
+    return _partielle(valeur)
+
+
+def _partielle(valeur: str):
+    """Les formes qui ne portent PAS tous les champs d'une date.
+
+    Elles sont cherchées après les formes complètes, qui doivent gagner : `Feb
+    28, 2026` est un mois-jour-année, pas un mois-jour suivi d'une année.
+
+    Ce qu'on N'invente PAS : le champ absent. Rendre `12 mars 2031` pour
+    `August 2026` serait une date — et une invention, puisque le document ne dit
+    pas le jour. Le décalage se fait donc à la granularité de ce qui est écrit.
+    """
+    if (m := _ISO_MOIS.match(valeur)):
+        try:
+            jour = dt.date(int(m[1]), int(m[2]), 1)
+        except ValueError:
+            return None
+        return jour, lambda d: f"{d.year:04d}-{d.month:02d}", _decaler_mois
+
+    if (m := _TRIMESTRE.match(valeur)):
+        lettre, rang = m[1], int(m[2])
+        try:
+            jour = dt.date(int(m[3]), (rang - 1) * 3 + 1, 1)
+        except ValueError:
+            return None
+        return (jour,
+                lambda d: f"{lettre}{(d.month - 1) // 3 + 1} {d.year:04d}",
+                _decaler_trimestre)
+
+    # Mois-année et mois-jour partagent leur syntaxe à un champ près, et rien
+    # dans la forme ne dit la langue — contrairement à `March 3, 2020`, dont
+    # l'ordre la trahit. Le NOM la dit quand il est écrit en entier ; une
+    # abréviation commune aux deux tables (`sept`, `oct`, `nov`, `dec`) reste
+    # indécidable, et la table préférée tranche. Résidu énoncé.
+    for motif, mois_puis_nombre in ((_MOIS_ANNEE, True), (_MOIS_JOUR, True),
+                                    (_JOUR_MOIS, False)):
+        if not (m := motif.match(valeur)):
+            continue
+        nom_mois, point = (m[1], m[2]) if mois_puis_nombre else (m[3], m[4])
+        reconnu = _mois_index(nom_mois)
+        if reconnu is None:
+            return None
+        mois, table = reconnu
+        nombre = int(m[3] if mois_puis_nombre else m[1])
+
+        if motif is _MOIS_ANNEE:
+            try:
+                jour = dt.date(nombre, mois, 1)
+            except ValueError:
+                return None
+            return (jour,
+                    lambda d, _n=nom_mois, _p=point, _t=table, _s=mois: (
+                        f"{_rendre_mois(_n, _p, _t, _s, d.month)} {d.year:04d}"),
+                    _decaler_mois)
+
+        # Sans année, l'année de référence est bissextile pour que le 29 février
+        # existe des deux côtés du décalage.
+        try:
+            jour = dt.date(_ANNEE_REF, mois, nombre)
+        except ValueError:
+            return None
+        ordinal = "" if table is MOIS_EN else (
+            (m[2] or "") if not mois_puis_nombre else "")
+
+        def rendre(d: dt.date, _n=nom_mois, _p=point, _t=table, _s=mois,
+                   _avant=mois_puis_nombre, _o=ordinal) -> str:
+            écrit = _rendre_mois(_n, _p, _t, _s, d.month)
+            if _avant:
+                return f"{écrit} {d.day}"
+            return f"{d.day}{_o if d.day == 1 else ''} {écrit}"
+
+        return jour, rendre, _decaler_dans_l_annee
 
     return None
 
@@ -283,6 +381,20 @@ _CHERCHE = (
     re.compile(r"\d{1,2}[/.\-]\d{1,2}[/.\-]\d{4}"),
     re.compile(r"\d{1,2}(?:er)? [^\W\d_]+\.? \d{4}", re.UNICODE),
     re.compile(r"(?<![^\W\d_])[^\W\d_]+\.? \d{1,2},? \d{4}", re.UNICODE),
+    # Les formes PARTIELLES. Même assertion de début de mot que ci-dessus sur
+    # celles dont la tête est une classe libre : sans elle le moteur repart de
+    # CHAQUE position d'une longue suite de lettres, ce que les tours 8 à 10 ont
+    # payé dans le hook et le tour 12 ici même.
+    #
+    # Les négations qui suivent chaque motif l'empêchent de proposer un PRÉFIXE
+    # d'une forme complète — `2026-08` dans `2026-08-13`, `3 février` dans
+    # `3 février 2026`. Le départage par longueur les écarterait aussi, mais les
+    # écarter avant coûte moins et dit l'intention.
+    re.compile(r"\d{4}-\d{2}(?!-?\d)"),
+    re.compile(r"(?<![^\W\d_])[^\W\d_]+\.? \d{4}(?!\d)", re.UNICODE),
+    re.compile(r"(?<![^\W\d_])[^\W\d_]+\.? \d{1,2}(?![\d,]? ?\d)", re.UNICODE),
+    re.compile(r"\d{1,2}(?:er)? [^\W\d_]+\.?(?! \d)", re.UNICODE),
+    re.compile(r"(?<!\w)[QqTt][1-4] \d{4}(?!\d)"),
 )
 
 
@@ -347,6 +459,69 @@ def _decaler(jour: dt.date, jours: int) -> dt.date:
     return dt.date.fromordinal((jour.toordinal() - 1 + jours) % _ETENDUE + 1)
 
 
+#: Étendues des granularités PARTIELLES, pour tourner comme `_decaler` tourne.
+_MOIS_ETENDUE = 9999 * 12
+_TRIMESTRE_ETENDUE = 9999 * 4
+#: L'année de référence d'une date sans année est BISSEXTILE : sans cela le 29
+#: février n'aurait pas de substitut de sa propre forme.
+_ANNEE_REF = 2024
+_JOURS_ANNEE = 366
+
+
+#: Durées moyennes grégoriennes, pour convertir le décalage d'une granularité à
+#: l'autre plutôt que d'en tirer un par forme.
+_JOURS_PAR_MOIS = 30.436875
+_JOURS_PAR_TRIMESTRE = 91.310625
+
+
+def _pas(jours: int, par: float, etendue: int) -> int:
+    """Le décalage CONVERTI à cette granularité, jamais nul.
+
+    Converti, et non tiré à part : un même document mêle les granularités —
+    « l'incident du 3 février 2026 » et « le rapport de février 2026 ». Deux pas
+    indépendants placeraient ces deux dates à des dizaines d'années l'une de
+    l'autre là où la source les donne dans le même mois, et la chronologie est
+    précisément ce que ce module existe pour préserver.
+
+    Jamais nul non plus : un décalage nul rendrait le réel comme substitut, et
+    ce substitut serait rendu, donc jugé bon — le mode d'échec le plus
+    silencieux qu'on puisse écrire.
+    """
+    return max(1, round(jours / par) % etendue)
+
+
+def _decaler_mois(jour: dt.date, jours: int) -> dt.date:
+    """Décale de MOIS entiers, parce qu'une année-mois n'a pas de jour.
+
+    Décaler en JOURS ne serait pas injectif : février et mars d'une même année
+    sont distants de vingt-huit jours, qui tiennent dans un mois de trente et un.
+    Décalés du même nombre de jours, les deux peuvent donc tomber dans le MÊME
+    mois — deux dates réelles sous un seul substitut, ce que D6 interdit.
+    """
+    o = ((jour.year - 1) * 12 + jour.month - 1
+         + _pas(jours, _JOURS_PAR_MOIS, _MOIS_ETENDUE)) % _MOIS_ETENDUE
+    return dt.date(o // 12 + 1, o % 12 + 1, 1)
+
+
+def _decaler_trimestre(jour: dt.date, jours: int) -> dt.date:
+    """Décale de TRIMESTRES entiers — même raison qu'au-dessus, un cran plus haut."""
+    o = ((jour.year - 1) * 4 + (jour.month - 1) // 3
+         + _pas(jours, _JOURS_PAR_TRIMESTRE, _TRIMESTRE_ETENDUE)
+         ) % _TRIMESTRE_ETENDUE
+    return dt.date(o // 4 + 1, (o % 4) * 3 + 1, 1)
+
+
+def _decaler_dans_l_annee(jour: dt.date, jours: int) -> dt.date:
+    """Décale un mois-jour DANS l'année, qui est tout ce que la valeur porte.
+
+    Tourner dans l'année garde la forme (pas d'année à inventer) et reste une
+    bijection sur les trois cent soixante-six couples possibles.
+    """
+    rang = dt.date(_ANNEE_REF, jour.month, jour.day).timetuple().tm_yday - 1
+    o = (rang + _pas(jours, 1, _JOURS_ANNEE)) % _JOURS_ANNEE
+    return dt.date(_ANNEE_REF, 1, 1) + dt.timedelta(days=o)
+
+
 def shift(valeur: str, jours: int) -> str | None:
     """Décale la date CONTENUE dans la valeur, en gardant tout le reste.
 
@@ -355,8 +530,8 @@ def shift(valeur: str, jours: int) -> str | None:
     """
     lu = parse(valeur)
     if lu is not None:
-        jour, rendre = lu
-        return rendre(_decaler(jour, jours))
+        jour, rendre, decaler = lu
+        return rendre(decaler(jour, jours))
 
     # TOUTES les dates, pas la première. N'en décaler qu'une laissait les
     # suivantes VERBATIM dans le substitut : `du 3 février 2026 au 12 mars
