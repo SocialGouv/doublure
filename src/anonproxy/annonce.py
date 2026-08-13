@@ -49,7 +49,8 @@ MARQUEUR = "[ANONYMISATION]"
 TEXTE = f"""\
 Certaines valeurs de cette conversation ont été remplacées par des substituts \
 avant de t'être transmises : noms d'hôtes, adresses IP, dépôts, images, \
-adresses e-mail, identifiants de service. Les substituts sont plausibles et \
+adresses e-mail, identifiants de service, noms de personnes et DATES. Les \
+substituts sont plausibles et \
 cohérents entre eux — tu ne peux pas les distinguer de vraies valeurs, et tu \
 n'as pas à essayer. L'opérateur, lui, voit les valeurs réelles : ta réponse \
 lui parvient retraduite, donc cite les valeurs telles que tu les vois.
@@ -60,10 +61,19 @@ suspension ne correspond plus à rien, et l'opérateur lit alors un nom fictif \
 en croyant lire le sien. Écris l'hôte complet plutôt que « srv-01… », et \
 répète-le en entier plutôt que d'écrire « le même que ci-dessus ».
 
-Cette substitution peut introduire des INCOHÉRENCES apparentes. Un exemple \
-réel : un document déclare un sous-réseau, et les adresses des machines \
-semblent ne pas lui appartenir. La contradiction vient de la substitution, \
-pas des données.
+Les DATES sont DÉCALÉES, pas tirées au hasard : les écarts entre elles sont \
+conservés, donc une chronologie, une durée et un ordre restent justes et tu \
+peux raisonner dessus. Ce qui n'est PAS conservé, c'est leur position par \
+rapport à AUJOURD'HUI : une date passée peut t'apparaître dans le futur, et \
+l'inverse. N'en conclus donc rien — ni « cet incident n'a pas encore eu lieu », \
+ni « ce contrat est expiré », ni qu'une date est aberrante parce qu'elle tombe \
+après la date du jour. Si tu as besoin de savoir où une date se situe \
+réellement dans le temps, ne le devine pas : DEMANDE-LE, comme ci-dessous.
+
+Cette substitution peut introduire d'autres INCOHÉRENCES apparentes. Un \
+exemple réel : un document déclare un sous-réseau, et les adresses des \
+machines semblent ne pas lui appartenir. La contradiction vient de la \
+substitution, pas des données.
 
 Quand tu rencontres une incohérence de cette nature :
 

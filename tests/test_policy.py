@@ -768,3 +768,39 @@ def test_l_empreinte_du_CLI_est_celle_que_le_MOTEUR_cherche(tmp_path):
         p.definir("projet", "valeur", p.empreinte(etype, stored), Decision.REVELER)
         # …doit être ce que le moteur trouve quand il décide sur cette valeur.
         assert p.decide(etype, "infra", stored)[0] is Decision.REVELER, brut
+
+
+# --------------------------------------------------------------------------- #
+# Ce que l'annonce doit DIRE
+# --------------------------------------------------------------------------- #
+def test_l_annonce_previent_du_piege_TEMPOREL():
+    """Le défaut choisi par jo (2026-08-13) pour les dates : on le DIT au
+    modèle, et on lui dit qu'il peut demander.
+
+    Mesuré en session réelle avant : le décalage avait fait passer un incident
+    de février 2026 en février 2027, le modèle a signalé une anomalie qui
+    n'existe pas, et sa phrase — « cette date est postérieure à aujourd'hui » —
+    est FAUSSE une fois restaurée. Il ne pouvait pas faire autrement : rien ne
+    lui disait que les dates étaient touchées.
+
+    Ce test tient le contenu, pas la forme : sans lui, une réécriture de
+    l'annonce ferait disparaître le seul garde-fou de cette classe sans que
+    rien ne rougisse.
+    """
+    assert "DATES" in TEXTE, "le modèle doit savoir que les dates sont touchées"
+    # Ce qui est conservé — donc ce sur quoi il PEUT raisonner.
+    assert "écarts" in TEXTE and "conservés" in TEXTE
+    # Ce qui ne l'est pas — donc ce dont il ne doit RIEN conclure.
+    assert "AUJOURD'HUI" in TEXTE
+    # Et la sortie : demander, jamais deviner.
+    assert "DEMANDE-LE" in TEXTE
+
+
+def test_l_annonce_ne_promet_pas_la_protection_au_modele():
+    """L'annonce INFORME, elle ne protège pas — c'est le seul usage que la §7
+    autorise. Elle ne doit donc jamais demander au modèle de ne pas divulguer
+    quelque chose : faire dépendre la protection de sa coopération est
+    l'anti-pattern nommé dans le plan."""
+    for interdit in ("ne divulgue", "ne révèle pas", "garde secret",
+                     "ne transmets pas"):
+        assert interdit not in TEXTE.lower(), interdit
