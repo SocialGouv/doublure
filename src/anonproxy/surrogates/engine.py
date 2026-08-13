@@ -43,7 +43,7 @@ from .canonical import (
 )
 from . import dates
 from .classes import DataClass, class_of
-from .lexicon import (
+from .lexicon import (CITY_WORDS,
     EXTERNAL_TLDS,
     RESERVED_TLDS,
     IDENTITY_WORDS,
@@ -121,6 +121,19 @@ def _display_value(canon: Canonical, value: str) -> str:
     if canon.kind in ("host", "email", "repo", "image"):
         return v.rstrip(".").lower()
     return v
+
+
+#: Particules qui restent minuscules dans un toponyme composé — la convention
+#: française. `.capitalize()` seul rendait `Fontenoy-la-tour`, que personne
+#: n'écrit : la nature est tenue, la forme ne l'est plus.
+_PARTICULES_TOPONYME = frozenset({"la", "le", "les", "sur", "en", "du", "de",
+                                  "des", "aux", "au", "lès", "sous"})
+
+
+def _capitale_composee(mot: str) -> str:
+    parties = mot.split("-")
+    return "-".join(p if p in _PARTICULES_TOPONYME and i else p.capitalize()
+                    for i, p in enumerate(parties))
 
 
 class SurrogateEngine:
@@ -360,6 +373,18 @@ class SurrogateEngine:
     #: donne `rue riley Ollie` là où `rue des Ollie` se lit comme une adresse.
     _PARTICULES = frozenset({"de", "des", "du", "la", "le", "les", "d",
                              "of", "the", "at"})
+    #: Marqueurs de RANG dans une adresse française. Ils ne désignent personne
+    #: — `8 bis` est une forme, pas un identifiant — et les substituer rendait
+    #: `2 quinn boulevard`, que l'adressage français n'écrit nulle part.
+    _RANGS = frozenset({"bis", "ter", "quater"})
+    #: Codes postaux français : cinq chiffres, département de 01 à 95 en
+    #: métropole. `00000` et `99xxx` n'en sont pas, et un code impossible se
+    #: voit — l'invariant demande que le substitut soit de même NATURE.
+    _CP_MIN, _CP_MAX = 1000, 95999
+
+    @staticmethod
+    def _capitale_composee(mot: str) -> str:
+        return _capitale_composee(mot)
 
     def _fake_address(self, value: str, attempt: int) -> str:
         """Réécrit l'adresse en gardant sa FORME et rien de ce qui situe.
@@ -370,24 +395,42 @@ class SurrogateEngine:
         """
         morceaux = re.split(r"([^\w'’-]+)", value)
         rendu = []
+        apres_cp = False
         for i, morceau in enumerate(morceaux):
             nu = morceau.strip()
             if not nu or not re.search(r"\w", nu):
                 rendu.append(morceau)          # séparateurs : conservés
-            elif nu.lower() in self._VOIES or nu.lower() in self._PARTICULES:
+            elif nu.lower() in self._VOIES or nu.lower() in self._PARTICULES \
+                    or nu.lower() in self._RANGS:
                 rendu.append(morceau)          # vocabulaire commun : conservé
             elif nu.isdigit():
-                # Même longueur : un code postal à cinq chiffres reste un code
-                # postal, un numéro de rue reste un numéro de rue.
                 tire = self._idx("adresse-n", value, str(i), str(attempt))
-                rendu.append(str(tire % (10 ** len(nu))).zfill(len(nu)))
+                if len(nu) == 5:
+                    # Un code postal reste un code postal : cinq chiffres, et
+                    # un département qui existe. Tiré indépendamment de la
+                    # ville, donc la paire ne peut être celle de personne.
+                    # Zéro de tête COMPRIS : un département sous 10 s'écrit
+                    # `03270`, et `3270` n'est pas un code postal — quatre
+                    # chiffres se voient autant qu'un numéro de rue nul.
+                    rendu.append(f"{self._CP_MIN + tire % (self._CP_MAX - self._CP_MIN + 1):05d}")
+                    apres_cp = True
+                    continue
+                # Un numéro de rue commence à UN : `0 avenue …` n'existe pas,
+                # et le modulo seul le rendait une fois sur dix.
+                haut = 10 ** len(nu) - 1
+                rendu.append(str(tire % haut + 1).zfill(len(nu)))
             elif re.fullmatch(r"\d+\w+", nu):  # `221B`
                 tire = self._idx("adresse-bis", value, str(i), str(attempt))
                 rendu.append(f"{tire % 900 + 1}{nu[-1]}")
             else:
-                mot = pick(IDENTITY_WORDS,
+                # Ce qui SUIT le code postal est une VILLE. Le tirer dans le
+                # lexique des personnes rendait `75011 Jamie` : un code postal
+                # suivi de quelqu'un, que le modèle lit comme une incohérence —
+                # mesuré, il l'a signalée en session réelle.
+                source = CITY_WORDS if apres_cp else IDENTITY_WORDS
+                mot = pick(source,
                            self._idx("adresse-m", value, str(i), str(attempt)))
-                rendu.append(mot.capitalize() if nu[:1].isupper() else mot)
+                rendu.append(_capitale_composee(mot) if nu[:1].isupper() else mot)
         return "".join(rendu)
 
     def _fake_date(self, value: str, attempt: int = 0) -> str | None:

@@ -70,3 +70,22 @@ REGISTRY_WORDS: tuple[str, ...] = ("registry", "harbor", "images", "artifacts", 
 
 def pick(words: tuple[str, ...], index: int) -> str:
     return words[index % len(words)]
+
+# Villes fictives, pour qu'un code postal soit suivi d'une VILLE et non d'un
+# prénom. `IDENTITY_WORDS` porte `paris` et `dallas` — des prénoms unisexes qui
+# sont aussi des villes — et c'est ce qui rendait `75011 Jamie` : le modèle
+# lisait un code postal suivi de quelqu'un.
+#
+# Résidu assumé : la France compte trente-quatre mille communes, donc un nom
+# français inventé peut en désigner une. Ce qui ne désigne personne est
+# l'ADRESSE ENTIÈRE — le code postal est tiré indépendamment de la ville, donc
+# la paire est incohérente et ne peut pas être celle de quelqu'un. Même famille
+# que le domaine fictif sous TLD réel, et même arbitrage : ce qui compte est
+# que le tuple ne soit à personne.
+CITY_WORDS: tuple[str, ...] = (
+    "valmoutiers", "brantigny", "courvelle", "montfleury", "saint-ombre",
+    "bellerive-le-haut", "vaudreys", "chanteroche", "clairbois", "fontenoy-la-tour",
+    "lavardens", "mirebelle", "noiseraie", "pontarlieu", "quincebourg",
+    "rochefeuille", "sauveterre-en-brie", "thurignac", "ussel-le-vieux",
+    "verneuil-sur-doux", "aubertain", "beaupuits", "cendrieux", "duranville",
+)

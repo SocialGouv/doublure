@@ -378,3 +378,77 @@ def test_le_DEFAUT_du_moteur_ne_rend_aucune_extension(moteur):
     aucune extension, et c'est le lanceur qui branche l'ouverture."""
     faux = moteur.substitute_value("FILE_PATH", "/a/b/nginx.conf")
     assert ".conf" not in faux, faux
+
+
+# --------------------------------------------------------------------------- #
+# La NATURE d'une adresse postale
+# --------------------------------------------------------------------------- #
+ADRESSES = ["12 rue des Lilas, 75011 Paris",
+            "3 avenue Victor Hugo, 69006 Lyon",
+            "8 bis boulevard Saint-Michel, 33000 Bordeaux",
+            "1 place de la Gare, 01000 Bourg"]
+
+
+@pytest.mark.parametrize("reel", ADRESSES)
+def test_un_numero_de_rue_ne_vaut_jamais_ZERO(moteur, reel):
+    """`0 avenue …` n'existe pas, et le modulo seul le rendait une fois sur
+    dix. Un substitut doit être indiscernable EN NATURE : un humain repère un
+    numéro nul au premier coup d'œil."""
+    import re
+    for essai in range(60):
+        faux = moteur.substitute_value("ADDRESS", f"{reel} #{essai}")
+        premier = re.match(r"^0+(\D|$)", faux)
+        assert premier is None, faux
+
+
+@pytest.mark.parametrize("reel", ADRESSES)
+def test_un_code_postal_reste_un_code_postal(moteur, reel):
+    """Cinq chiffres et un département qui existe. `00000` et `99xxx` n'en sont
+    pas — même famille que la date rendue en mot."""
+    import re
+    faux = moteur.substitute_value("ADDRESS", reel)
+    cp = re.search(r"\b(\d{5})\b", faux)
+    assert cp is not None, faux
+    assert 1000 <= int(cp.group(1)) <= 95999, faux
+
+
+def test_ce_qui_suit_le_code_postal_est_une_VILLE(moteur):
+    """Le défaut que le MODÈLE a repéré en session réelle.
+
+    `IDENTITY_WORDS` porte `paris`, `dallas`, `logan` — des prénoms unisexes
+    qui sont aussi des villes — et tout mot non reconnu y était tiré : le
+    document rendait `75011 Jamie`, un code postal suivi de quelqu'un. Le
+    modèle l'a signalé comme une incohérence, ce qui est exactement le
+    comportement demandé, et c'est le substitut qui avait tort.
+    """
+    from anonproxy.surrogates.lexicon import CITY_WORDS, IDENTITY_WORDS
+    import re
+
+    villes = {v.split("-")[0].lower() for v in CITY_WORDS}
+    prenoms = set(IDENTITY_WORDS)
+    for reel in ADRESSES:
+        faux = moteur.substitute_value("ADDRESS", reel)
+        apres = re.search(r"\b\d{5}\s+([\w'’-]+)", faux)
+        assert apres is not None, faux
+        tete = apres.group(1).split("-")[0].lower()
+        assert tete in villes, f"{faux} : {tete!r} n'est pas une ville"
+        assert tete not in prenoms, f"{faux} : {tete!r} est un prénom"
+
+
+def test_un_rang_est_une_FORME_pas_un_identifiant(moteur):
+    """`8 bis` désigne un rang, pas quelqu'un. Le substituer rendait
+    `2 quinn boulevard`, que l'adressage français n'écrit nulle part."""
+    faux = moteur.substitute_value("ADDRESS", "8 bis boulevard Saint-Michel, 33000 Bordeaux")
+    assert " bis " in faux, faux
+    assert "8 bis" not in faux, "le numéro n'a pas été substitué"
+
+
+def test_une_ville_composee_s_ecrit_comme_en_francais(moteur):
+    """`Fontenoy-la-tour` se relit, et personne ne l'écrit : `.capitalize()`
+    tenait la nature et perdait la forme. Même correction que pour les mois
+    abrégés au tour 12 — relire n'est pas écrire."""
+    from anonproxy.surrogates.engine import _capitale_composee
+    assert _capitale_composee("fontenoy-la-tour") == "Fontenoy-la-Tour"
+    assert _capitale_composee("saint-ombre") == "Saint-Ombre"
+    assert _capitale_composee("verneuil-sur-doux") == "Verneuil-sur-Doux"
+    assert _capitale_composee("brantigny") == "Brantigny"
