@@ -90,6 +90,10 @@ const ANSWERS = [
 ];
 
 const SCOPES = [
+  // The narrowest there is, and the least committing: nothing is recorded, so
+  // there is no rule to revoke later. It is offered first for that reason.
+  { label: "message", description:
+      "this message only — nothing is recorded, and it dies with the message" },
   { label: "projet", description: "applies to this project (default)" },
   { label: "session", description: "applies to this session only" },
   { label: "global", description: "applies everywhere — the default for projects" },

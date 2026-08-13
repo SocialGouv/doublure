@@ -1,8 +1,10 @@
 package policy
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -49,5 +51,43 @@ func TestNommageIdentiqueACeluiDePython(t *testing.T) {
 			t.Errorf("%s %q session=%q :\n  obtenu  %s\n  attendu /racine/%s",
 				c.Portee, c.ScopeKey, c.Session, got, c.Attendu)
 		}
+	}
+}
+
+// A message answer must land in the file Python reads, in the shape Python
+// parses. `tests/control_e2e.sh` proves the crossing for real; this pins the
+// shape so a change here goes red before it gets that far.
+func TestAnswerForMessageShape(t *testing.T) {
+	dir := t.TempDir()
+	p := New(dir, "project:parity", "", []byte("d4d4"))
+	if err := p.AnswerForMessage("type", "DATE", Reveal); err != nil {
+		t.Fatalf("write refused: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "reponses-message.jsonl"))
+	if err != nil {
+		t.Fatalf("file Python reads is missing: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &got); err != nil {
+		t.Fatalf("Python parses one JSON object per line: %v", err)
+	}
+	for k, want := range map[string]string{
+		"granularite": "type", "cle": "DATE", "decision": "reveler",
+	} {
+		if got[k] != want {
+			t.Errorf("field %q = %q, Python expects %q", k, got[k], want)
+		}
+	}
+}
+
+// D4 holds on THIS path too. A forgotten write path would open a secret, and
+// the read guard on the engine side must not be the only thing standing.
+func TestAnswerForMessageRefusesASecret(t *testing.T) {
+	p := New(t.TempDir(), "project:parity", "", []byte("d4d4"))
+	if err := p.AnswerForMessage("classe", "secret", Reveal); err == nil {
+		t.Fatal("a secret was accepted for a message answer")
+	}
+	if err := p.AnswerForMessage("nawak", "x", Reveal); err == nil {
+		t.Fatal("an unknown granularity was accepted")
 	}
 }

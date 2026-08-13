@@ -206,6 +206,9 @@ type decideRequest struct {
 	Scope       string `json:"scope"`
 }
 
+// scopeMessage is not one of policy.Scopes: see Policy.AnswerForMessage.
+const scopeMessage = "message"
+
 func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 	var req decideRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -228,6 +231,25 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decision := policy.Decision(req.Decision)
+	// "message" is offered to the client as a scope because that is how the
+	// operator thinks of it — the nearest one there is. It is not a layer:
+	// nothing is written into a scope file, so nothing survives the message.
+	if req.Scope == scopeMessage {
+		if err := s.policy.AnswerForMessage(req.Granularity, req.Target, decision); err != nil {
+			fail(w, http.StatusConflict, err.Error())
+			return
+		}
+		s.notify()
+		var warning string
+		if decision == policy.Reveal {
+			warning = "this value leaves in clear for THIS MESSAGE only, and " +
+				"nothing is recorded; what has gone will not be recalled"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"decision": req.Decision, "scope": scopeMessage, "warning": warning,
+		})
+		return
+	}
 	if err := s.policy.Set(req.Scope, req.Granularity, req.Target, decision); err != nil {
 		// An invariant refusal is not a caller mistake to fix: it is the rule.
 		// Passed through verbatim, to be shown to the operator.

@@ -370,6 +370,16 @@ class Policy:
         if granularite not in GRANULARITES:
             raise PolitiqueInvalide(
                 f"granularité inconnue : {granularite!r} (parmi {GRANULARITES})")
+        # Refusé à l'ÉCRITURE, comme `definir` le fait — un refus que
+        # l'opérateur lit vaut mieux qu'une réponse ignorée en silence plus
+        # tard. `decide` la refuse de nouveau à la LECTURE : ce garde-là est
+        # l'invariant, celui-ci est l'ergonomie, et l'invariant ne doit pas
+        # dépendre de lui. Même règle, même endroit que côté Go.
+        if Decision(decision) is Decision.REVELER and granularite == "classe" \
+                and cle in CLASSES_NON_REVELABLES:
+            raise PolitiqueInvalide(
+                f"la classe {cle!r} n'est jamais révélable (D4 : un secret est "
+                "une référence dérivée, il ne se restaure pas)")
         with self._lock:
             self._reponses.parent.mkdir(parents=True, exist_ok=True)
             neuf = not self._reponses.exists()

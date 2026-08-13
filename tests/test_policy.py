@@ -703,13 +703,23 @@ def test_une_reponse_arrivee_TROP_TARD_ne_s_applique_pas(tmp_path):
 
 
 def test_un_SECRET_ne_se_revele_pas_meme_pour_un_message(tmp_path):
-    """D4 passe AVANT la réponse de message, et cet ordre est la garantie.
+    """DEUX gardes, et il en faut deux.
 
-    Un secret est une référence, jamais une valeur restaurée : aucune portée,
-    aucune granularité, aucune réponse ne l'ouvre."""
+    À l'ÉCRITURE, la réponse est REFUSÉE — un refus que l'opérateur lit vaut
+    mieux qu'une réponse ignorée en silence plus tard, et c'est ce que fait
+    déjà `definir`. À la LECTURE, `decide` court-circuite sur D4 quoi qu'il
+    arrive : ce garde-là est l'INVARIANT, et il ne doit pas dépendre du
+    premier — sinon un chemin d'écriture oublié ouvrirait un secret.
+    """
     p = _politique_message(tmp_path)
     p.debut_message()
-    p.repondre_pour_le_message("classe", "secret", Decision.REVELER)
+    with pytest.raises(PolitiqueInvalide):
+        p.repondre_pour_le_message("classe", "secret", Decision.REVELER)
+    # Et même si la réponse était écrite par un autre chemin, la lecture ferme.
+    p._reponses.parent.mkdir(parents=True, exist_ok=True)
+    p._reponses.write_text(
+        '{"granularite":"classe","cle":"secret","decision":"reveler"}\n',
+        encoding="utf-8")
     assert p.decide("AUTH_TOKEN", "secret", "ghp_x") == (
         Decision.ANONYMISER, "invariant:D4")
 

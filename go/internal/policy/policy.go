@@ -355,3 +355,60 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// answersFile holds the answers that are valid for the CURRENT message only.
+//
+// Deliberately NOT a fourth scope: a scope is a rule that survives, and a
+// reveal that outlives what it was granted for is an inherited reveal, which
+// this project's philosophy forbids. It is the answer to the question being
+// asked, and it dies with it — so it also stays out of the scope file naming,
+// where this side and Python diverged twice.
+func (p *Policy) answersFile() string {
+	return filepath.Join(p.root, "reponses-message.jsonl")
+}
+
+// AnswerForMessage records a decision valid for the current message only.
+//
+// The engine clears this channel when a message OPENS, so an answer written
+// after the message it aimed at is discarded rather than applied to the next
+// one. Both sides must write the same shape into the same file: this is the
+// pairing that was broken twice before, and `tests/control_e2e.sh` now has
+// Python honour what this function writes.
+func (p *Policy) AnswerForMessage(granularity, key string, d Decision) error {
+	if !contains(Granularities, granularity) {
+		return fmt.Errorf("%w: unknown granularity %q", ErrInvalid, granularity)
+	}
+	if d != Anonymise && d != Reveal {
+		return fmt.Errorf("%w: unknown decision %q", ErrInvalid, d)
+	}
+	// Refused at WRITE time, as `Set` does — a refusal the operator reads beats
+	// an answer silently ignored later. The engine refuses it again at READ
+	// time: that guard is the invariant, this one is the ergonomics, and the
+	// invariant must not depend on it.
+	if d == Reveal && granularity == "classe" && neverRevealable[key] {
+		return fmt.Errorf("%w: class %q is never revealable (D4: a secret is a derived "+
+			"reference, it is not restorable)", ErrInvalid, key)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ligne, err := json.Marshal(map[string]string{
+		"granularite": granularity, "cle": key, "decision": string(d),
+	})
+	if err != nil {
+		return err
+	}
+	fh, err := os.OpenFile(p.answersFile(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer fh.Close()
+	if _, err := fh.Write(append(ligne, '\n')); err != nil {
+		return err
+	}
+	if d == Reveal {
+		fmt.Fprintf(os.Stderr,
+			"anonproxy: REVEAL allowed for THIS MESSAGE — %s/%s (it dies with it)\n",
+			granularity, key)
+	}
+	return nil
+}

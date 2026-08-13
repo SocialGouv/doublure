@@ -134,6 +134,43 @@ check() {
   else echo "FAIL : $1 (expected $4, found ${found})"; rc=1; fi
 }
 
+# --------------------------------------------------------------------------- #
+# La réponse « CE MESSAGE » traverse la frontière : Go l'écrit, Python l'honore.
+#
+# C'est la SEULE façon de savoir que le portage est juste. Deux fois déjà, les
+# deux côtés ont écrit le même fichier différemment, et l'opérateur a arbitré
+# dans le vide — sur la seule décision qu'on ne peut pas reprendre.
+# --------------------------------------------------------------------------- #
+curl -s --unix-socket "${ANONPROXY_API_SOCKET}" -X POST \
+  -H 'content-type: application/json' \
+  -d '{"scope":"message","granularity":"type","target":"DATE","decision":"reveler"}' \
+  http://localhost/decide > "${STATE}/message.json" 2>&1 || true
+
+uv run python - > "${STATE}/message.txt" 2>&1 <<'FIN' || true
+import os, sys
+from pathlib import Path
+sys.path.insert(0, "src")
+from anonproxy.policy import Policy, Decision
+from anonproxy.config import read_master_key
+pol = Policy(racine=os.environ["ANONPROXY_POLICY_DIR"],
+             master_key=read_master_key(Path(os.environ["ANONPROXY_MASTER_KEY_FILE"])),
+             scope_key=os.environ["ANONPROXY_SCOPE"])
+decision, source = pol.decide("DATE", "infra", "3 février 2026")
+print("PY-HONOURS-GO" if (decision is Decision.REVELER
+                          and source == "message:type") else f"NON:{decision}/{source}")
+# Et elle ne survit PAS au message suivant.
+pol.debut_message()
+d2, _ = pol.decide("DATE", "infra", "3 février 2026")
+print("PY-DIES-WITH-MESSAGE" if d2 is Decision.ANONYMISER else f"SURVIT:{d2}")
+FIN
+
+# La classe `secret` doit être refusée par CE chemin aussi, pas seulement par
+# `Set` : un chemin d'écriture oublié ouvrirait un secret.
+curl -s --unix-socket "${ANONPROXY_API_SOCKET}" -X POST \
+  -H 'content-type: application/json' \
+  -d '{"scope":"message","granularity":"classe","target":"secret","decision":"reveler"}' \
+  http://localhost/decide > "${STATE}/message-secret.json" 2>&1 || true
+
 echo
 echo "== Verdict =="
 check "turn 1 — host anonymised"                "${STATE}/turn1.txt" "db-master-01-prod.acmecorp.internal" absent
@@ -142,6 +179,10 @@ check "D4 — revealing a secret is REFUSED"      "${STATE}/node.txt"  "SECRET-R
 check "the stream PUSHED without being polled"  "${STATE}/node.txt"  "PUSH-OK"                             present
 check "turn 2 — the arbitrated host is revealed" "${STATE}/turn2.txt" "db-master-01-prod.acmecorp.internal" present
 check "turn 2 — the e-mail stays anonymised"    "${STATE}/turn2.txt" "alice.dupont@acmecorp.example"       absent
+
+check "Go wrote a message answer Python honours" "${STATE}/message.txt" "PY-HONOURS-GO"        present
+check "and it dies with the message"            "${STATE}/message.txt" "PY-DIES-WITH-MESSAGE" present
+check "D4 — a secret is refused on THAT path too" "${STATE}/message-secret.json" "never revealable" present
 
 if grep -rqF "acmecorp" "${ANONPROXY_POLICY_DIR}" 2>/dev/null; then
   echo "FAIL : the policy holds a real value"; rc=1
