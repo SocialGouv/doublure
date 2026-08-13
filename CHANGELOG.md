@@ -62,8 +62,7 @@ session and one of which crosses the Python/Go boundary.
 
 Twenty-four rounds of adversarial review found and fixed well over a hundred
 defects — 132 of them counted round by round in `CLAUDE.md`, plus the earlier
-passes.
-It stopped when its findings became defects in code it had itself written hours
+passes. It stopped when its findings became defects in code it had itself written hours
 earlier — and what it could no longer find, **real sessions found in one
 afternoon**: four defects, two of which twenty-four rounds had missed. The
 model, told that the layer exists, reads its own surrogates and reports what
