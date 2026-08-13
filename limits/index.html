@@ -1402,6 +1402,37 @@ for you.</p>
 survives and an incident still reads as a sequence. The end-to-end proof that
 asserted this gap <em>inverted</em> has been turned the right way round — it failed
 the day the gap closed, which is what it was written to do.</p>
+<p>A <strong>partial date is shifted at its own granularity</strong>, and the step is converted
+rather than drawn again: a month-year moves by whole months, a quarter by
+quarters, a month-day within the year. Two reasons, and neither is cosmetic.
+Shifting a month-year by DAYS is not injective — February and March of one year
+are 28 days apart, which fits inside a 31-day month, so both could land in the
+same month and two real dates would share one surrogate. And drawing a separate
+step per granularity broke the chronology the module exists to keep: measured
+before the fix, <code>3 février 2026</code> and <code>février 2026</code> — the same month in the
+source — landed fifty-five years apart. What is never invented is the missing
+field: <code>August 2026</code> becomes another month-year, never a full date.</p>
+<p><strong>A substituted path segment keeps its file extension, and only that.</strong>
+Measured in a real session: <code>nginx.conf</code> came back <code>willow-xenon</code>, so the model
+could no longer tell a configuration file from a log or from a directory — the
+same loss of nature as a date returned as a word. The stem stays substituted,
+because the stem is what identifies: <code>tenant-acme-nda.md</code> becomes <code>&lt;word&gt;.md</code>.</p>
+<p>What leaves in the clear is therefore the FORMAT, never the name. That is an
+opening, small as it is, and it was arbitrated by jo (2026-08-13) rather than
+decided in the code. The extension is not read off the last dot —
+<code>db-01.acme.internal</code> has one, and keeping <code>.internal</code> would put the zone in the
+clear. It is asked of the curated list the allowlist already holds, on a neutral
+stem, and a name with several labels is not a file name. The engine's own
+default keeps nothing: no default opens anything, and it is the launcher that
+wires the list.</p>
+<p><strong>What still falls to the generic substitution, and therefore comes back as a
+word</strong>: a season (<code>hiver 1998</code>), a bare year, and a numeric day-month whose
+order is ambiguous (<code>03/04</code>). The last one follows the rule this module already
+applies to <code>3 jui</code> — what cannot be decided is not guessed. Consequence, stated:
+for those forms the model reads a hostname where the document says a date.
+A shared abbreviation (<code>sept</code>, <code>oct</code>, <code>nov</code>, <code>dec</code>) belongs to both languages,
+and a partial form carries no syntax to tell them apart, so the preferred table
+decides; a full month name resolves itself.</p>
 <div class="admonition note">
 <p class="admonition-title">Recall was measured, and it decided the model</p>
 <p>The first model shipped here returned <strong>two of the three people</strong> in a
