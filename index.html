@@ -1272,11 +1272,12 @@ depends on the model cooperating.</p>
 is pseudonymised there. What is not reversible is the EXECUTION — <code>kubectl</code>
 must reach the real cluster — so on that path the hook blocks data going
 OUT rather than substituting.</p>
-<p><strong>Remote MCP and WebFetch</strong> do, under <code>task forward -- &lt;agent&gt;</code> — but that
-is not the default path, and it has not yet been exercised by a real
-session. And on a workstation the proxy is still not the only network
-path: the egress harness <em>detects</em>, it does not <em>prevent</em>. See
-<a href="limits/">Known limits</a>.</p>
+<p><strong>Remote MCP and WebFetch</strong> do, under <code>task forward -- &lt;agent&gt;</code>. That is
+not the default path, but it is exercised by a real Claude Code session in
+<code>tests/forward_e2e.sh</code>, which also shows the destinations Phase 0 measured
+as escaping being refused with no socket opened. On a workstation the proxy
+is still not the only network path: the egress harness <em>detects</em>, it does
+not <em>prevent</em>. See <a href="limits/">Known limits</a>.</p>
 </div>
 
 

@@ -1293,6 +1293,21 @@ readable as infrastructure — and, for the last one, as a chronology:</p>
 </tr>
 </tbody>
 </table>
+<p>A sixth is available and <strong>off by default</strong>: <code>dates=cote_du_present</code> keeps a
+past date past and a future date future. It is off because it preserves one
+more thing, and every preserved attribute is something a re-identification can
+join on. See <a href="../policy/#settings">Policy</a> and the two prices in
+<a href="../limits/">Known limits</a>.</p>
+<div class="admonition danger">
+<p class="admonition-title">And a surrogate must not INVENT an attribute</p>
+<p>The five above are accepted <strong>because they are true</strong>. A fabricated one is
+worse than a leak: it reads exactly like a fact of the document, with
+nothing to tell the operator otherwise. Measured, and fixed: two colleagues
+with no connection were being given the same surname in 15.5 % of
+four-person documents, because the family name was drawn from forty-eight
+words while the first name was composed. Composing the family name instead
+took it to 0.8 %.</p>
+</div>
 <p>These are <strong>accepted leaks</strong>, listed in the
 <a href="../re-identification-analysis/">re-identification analysis</a>. They are the price
 of a usable agent, and they are stated rather than discovered.</p>
@@ -1310,52 +1325,47 @@ of a usable agent, and they are stated rather than discovered.</p>
 <tr>
 <td><code>HOSTNAME</code></td>
 <td><code>db-master.acme.internal</code></td>
-<td><code>island-gateway.fourth-alpine.internal</code></td>
+<td><code>quarry-inlet.southridge-margie.internal</code></td>
 </tr>
 <tr>
 <td><code>HOSTNAME</code></td>
 <td><code>srv-billing-prod-01.acme.internal</code></td>
-<td><code>registry-atlas-01-prod.fourth-alpine.internal</code></td>
+<td><code>meadow-willow-01-prod.southridge-margie.internal</code></td>
 </tr>
 <tr>
 <td><code>IP_ADDRESS</code></td>
 <td><code>10.1.2.0/24</code></td>
-<td><code>10.135.1.0/24</code></td>
+<td><code>172.18.14.0/24</code></td>
 </tr>
 <tr>
 <td><code>IP_ADDRESS</code></td>
 <td><code>192.168.4.17</code></td>
-<td><code>172.28.131.227</code></td>
+<td><code>172.20.120.201</code></td>
 </tr>
 <tr>
 <td><code>IP_ADDRESS</code></td>
 <td><code>51.75.28.4</code></td>
-<td><code>198.19.180.33</code></td>
+<td><code>198.19.145.191</code></td>
 </tr>
 <tr>
 <td><code>EMAIL_ADDRESS</code></td>
 <td><code>alice.dupont@acme.corp</code></td>
-<td><code>winter-peyton.ollie@coho-margie.corp</code></td>
+<td><code>york-corey.vale@olympic-litware.corp</code></td>
 </tr>
 <tr>
 <td><code>URL</code></td>
 <td><code>https://github.com/acme-corp/billing-api</code></td>
-<td><code>https://github.com/humongous-school/prairie-lagoon-api</code></td>
-</tr>
-<tr>
-<td><code>URL</code></td>
-<td><code>https://registry.acme.internal/payments/api?tenant=acme-nda</code></td>
-<td><code>https://yew-heather.fourth-alpine.internal/ridge-thicket/upland-compass?tenant=willow-summit</code></td>
+<td><code>https://github.com/blue-contoso/beacon-quarry-api</code></td>
 </tr>
 <tr>
 <td><code>FILE_PATH</code></td>
 <td><code>/home/alice/acme-nda/notes.md</code></td>
-<td><code>/home/knoll-billing/kestrel-quarry/notes.md</code></td>
+<td><code>/home/vale-quarry/moss-digest/notes.md</code></td>
 </tr>
 <tr>
 <td><code>PHONE_NUMBER</code></td>
 <td><code>+33 6 12 34 56 78</code></td>
-<td><code>+33 6 39 98 10 41</code></td>
+<td><code>+33 6 39 98 66 50</code></td>
 </tr>
 <tr>
 <td><code>IBAN_CODE</code></td>
@@ -1370,22 +1380,32 @@ of a usable agent, and they are stated rather than discovered.</p>
 <tr>
 <td><code>PERSON</code></td>
 <td><code>Thibault Escourrou</code></td>
-<td><code>Emery-wren Corey</code></td>
+<td><code>Gray Hayden-Emery</code></td>
 </tr>
 <tr>
 <td><code>DATE</code></td>
 <td><code>12 mars 2019</code></td>
-<td><code>24 octobre 2019</code></td>
+<td><code>20 décembre 2019</code></td>
 </tr>
 <tr>
 <td><code>DATE</code></td>
 <td><code>2026-02-03T14:32:00Z</code></td>
-<td><code>2026-09-17T14:32:00Z</code></td>
+<td><code>2026-11-13T14:32:00Z</code></td>
+</tr>
+<tr>
+<td><code>DATE</code></td>
+<td><code>August 2026</code></td>
+<td><code>May 2027</code></td>
+</tr>
+<tr>
+<td><code>DATE</code></td>
+<td><code>Q3 2024</code></td>
+<td><code>Q2 2025</code></td>
 </tr>
 <tr>
 <td><code>ADDRESS</code></td>
 <td><code>14 rue des Grands-Augustins, 75006 Paris</code></td>
-<td><code>76 rue des Darcy, 19449 Zion</code></td>
+<td><code>66 rue des Gray, 31424 Sauveterre-en-Brie</code></td>
 </tr>
 </tbody>
 </table>
@@ -1401,9 +1421,16 @@ of a usable agent, and they are stated rather than discovered.</p>
   needs to know it is talking about GitHub;</li>
 <li>the date moved by a constant, so <code>14:32:00</code> is untouched and two dates stay
   exactly as far apart as they were — an incident still reads as a sequence;</li>
-<li>the address kept <code>rue</code> and <code>des</code>, which identify nobody, and lost its
-  postcode: keeping the code keeps the LOCALITY, and locality is what a
-  re-identification joins on;</li>
+<li>a <strong>partial</strong> date stays partial and shifts at its own granularity: a
+  month-year moves by whole months, a quarter by quarters. The missing field is
+  never invented — <code>August 2026</code> does not become a full date;</li>
+<li>the file keeps its <strong>name shape and its extension</strong> (<code>notes.md</code>), so the model
+  can still tell a config from a log; the stem is what identifies, and the stem
+  is what moved;</li>
+<li>the address kept <code>rue</code> and <code>des</code>, which identify nobody. Its number is at
+  least one, its postcode is five digits in a department that exists, and what
+  follows the postcode is a <strong>city</strong> — drawn independently of the code, so the
+  pair cannot be anyone's;</li>
 <li>the IBAN is <strong>checksum-valid</strong> (ISO 13616 mod 97) with the bank identifier
   neutralised, so a validator accepts it and it names no bank;</li>
 <li>the phone number sits in the range regulators reserve for fiction (<code>06 39 98</code>

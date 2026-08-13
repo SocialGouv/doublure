@@ -1034,6 +1034,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#when-to-stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When to stop
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-patterns-that-repeat" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1219,6 +1230,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#when-to-stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When to stop
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-patterns-that-repeat" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1349,16 +1371,29 @@
 
 
 <h1 id="adversarial-record">Adversarial record<a class="headerlink" href="#adversarial-record" title="Permanent link">&para;</a></h1>
-<p>Twenty-one rounds of adversarial review, most of them run by independent agents
+<p>Twenty-four rounds of adversarial review, most of them run by independent agents
 instructed to <strong>break</strong> the code rather than approve it. The full log lives in
-<code>CLAUDE.md</code> at the repository root, defect by defect. This page keeps what
-generalises.</p>
+<code>CLAUDE.md</code> at the repository root, defect by defect — 132 defects counted round
+by round, plus the earlier passes. This page keeps what generalises.</p>
 <h2 id="the-uncomfortable-headline">The uncomfortable headline<a class="headerlink" href="#the-uncomfortable-headline" title="Permanent link">&para;</a></h2>
-<p><strong>Five real sessions found more defects than five rounds of adversarial
-review.</strong> A 400 on an API field nobody had modelled, a repository name leaving
-in the clear, path segments bypassing the vault, an IBAN never detected and
-then torn apart by a false credit-card match — none were found by an agent.</p>
-<p>Reviews find what you thought to look for. Use decides.</p>
+<p><strong>Real sessions find what rounds of adversarial review do not.</strong> A 400 on an API
+field nobody had modelled, a repository name leaving in the clear, path segments
+bypassing the vault, an IBAN never detected and then torn apart by a false
+credit-card match — none were found by an agent.</p>
+<p>It got sharper the day the loop stopped. In one afternoon, real sessions
+returned four defects, <strong>two of which twenty-four rounds had missed</strong>: a postal
+address whose city was drawn from a lexicon of first names, and two colleagues
+with no connection given the same surname — a family the substitution had
+invented. And the model found the first one itself, reading its own surrogate,
+because the announcement tells it the layer exists and asks it to report rather
+than work around.</p>
+<p>Reviews find what you thought to look for. Use decides. After any change to a
+generator, run a session and <strong>read the reasoning as well as the answer</strong>.</p>
+<h2 id="when-to-stop">When to stop<a class="headerlink" href="#when-to-stop" title="Permanent link">&para;</a></h2>
+<p>The loop stopped at round 24, and the criterion was not "no more findings" —
+that never arrives. It stopped when its findings became defects in code it had
+itself written hours earlier, while the older surfaces came back clean. That is
+not convergence, it is the signal to change lever.</p>
 <h2 id="the-patterns-that-repeat">The patterns that repeat<a class="headerlink" href="#the-patterns-that-repeat" title="Permanent link">&para;</a></h2>
 <h3 id="the-twin">The twin<a class="headerlink" href="#the-twin" title="Permanent link">&para;</a></h3>
 <p>One branch hardened, its twin left open. The same fix applied to <code>host:port</code>
