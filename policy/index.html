@@ -819,6 +819,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-interface" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1180,6 +1191,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#the-interface" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1264,6 +1286,10 @@ the default for the next answer:</p>
 </thead>
 <tbody>
 <tr>
+<td><code>message</code></td>
+<td>the message being processed, and nothing after it</td>
+</tr>
+<tr>
 <td><code>session</code></td>
 <td>this session only</td>
 </tr>
@@ -1279,11 +1305,32 @@ the default for the next answer:</p>
 </table>
 <p>The <strong>narrowest and nearest wins</strong>. A rule is never inherited upward, and a
 <code>reveler</code> decision is never inherited from a default at all.</p>
+<p><code>message</code> is offered as a scope because that is how you think of it — the
+nearest one there is — but it is deliberately <strong>not a layer</strong>. A scope is a rule
+that survives, and a reveal that outlives what it was granted for is an
+inherited reveal. Nothing is written into a scope file, so nothing survives: it
+is the answer to the question being asked, and it dies with it.</p>
+<p>The channel is cleared when a message <strong>opens</strong>, not when it closes. An answer
+written after the message it aimed at is therefore discarded rather than applied
+to the next one — a lost answer leaves the value anonymised, the reverse would
+let it out. Two concurrent requests discard each other's answer, which is the
+same safe direction.</p>
 <h2 id="answering">Answering<a class="headerlink" href="#answering" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>task<span class="w"> </span>policy<span class="w"> </span>--<span class="w"> </span>questions<span class="w">     </span><span class="c1"># what was anonymised without an explicit rule</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>task<span class="w"> </span>policy<span class="w"> </span>--<span class="w"> </span>arbitrate<span class="w">     </span><span class="c1"># answer them</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>task<span class="w"> </span>policy<span class="w"> </span>--<span class="w"> </span>arbitrer<span class="w">      </span><span class="c1"># answer them</span>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>task<span class="w"> </span>control<span class="w">                 </span><span class="c1"># the arbitration API, for the IDE extension</span>
 </span></code></pre></div>
+<p>In <code>arbitrer</code>, <code>m</code> answers <strong>for this message only</strong> at the granularity on
+screen — the whole group if it is grouped, the single value if you expanded it.
+The extension offers the same choice as a scope, and so does
+<code>POST /decide</code> with <code>{"scope": "message"}</code>.</p>
+<p>To decide on a value you have in mind rather than one the queue is showing:</p>
+<div class="highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>task<span class="w"> </span>policy<span class="w"> </span>--<span class="w"> </span>valeur<span class="w"> </span>projet<span class="w"> </span>PERSON<span class="w"> </span><span class="s2">&quot;Claude&quot;</span><span class="w"> </span>reveler
+</span></code></pre></div>
+<p>It prints the fingerprint, which is what <code>retirer</code> needs to revoke it. The
+fingerprint is computed on the <strong>canonical</strong> form of the value, the same one the
+engine looks up — computing it on the raw string would write a rule that looks
+taken and never applies.</p>
 <p>The queue is grouped <strong>by type</strong>, and that is what makes it usable: one real
 session produced 462 pending values, which grouping turned into <strong>14 gestures</strong>.
 Expanding a group to answer value by value is one keystroke away when a type is
@@ -1304,7 +1351,47 @@ opens whole types at once, without a confirmation step. There is no
 <li><strong>neither</strong> — tell the model how to work without the value. Often the right
   answer, and the one a queue that blocks would never let you give.</li>
 </ul>
-<p>A <code>SECRET</code> is never revealable (D4).</p>
+<p>A <code>SECRET</code> is never revealable (D4). That is refused when the rule is written
+<em>and</em> again when it is read, on every path including a message answer: the read
+guard is the invariant, the write guard is the ergonomics, and the invariant does
+not depend on it.</p>
+<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
+<p>Settings resolve through the <strong>same</strong> scope hierarchy as the rules, with the
+environment always winning — it is the troubleshooting lever. A setting that
+decides protection cannot be varied by a mode, or choosing a mode would amount
+to opening.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Values</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>domaines_fictifs</code></td>
+<td><code>reserves</code> · <code>tld_reels</code></td>
+<td><code>reserves</code></td>
+</tr>
+<tr>
+<td><code>chemins</code></td>
+<td><code>utilisateur_projet</code> · <code>utilisateur</code> · <code>complet</code></td>
+<td><code>utilisateur_projet</code></td>
+</tr>
+<tr>
+<td><code>dates</code></td>
+<td><code>libre</code> · <code>cote_du_present</code></td>
+<td><code>libre</code></td>
+</tr>
+</tbody>
+</table>
+<p><code>dates=cote_du_present</code> keeps a past date past and a future date future, which
+is useful when absolute chronology matters. It has two prices, both stated in
+<a href="../limits/">Known limits</a>: "past or future" becomes a preserved attribute, and
+the future half expires on its own as today advances. The default preserves
+intervals only, and the announcement is what keeps the model from concluding
+anything from a date's position.</p>
 <h2 id="the-interface">The interface<a class="headerlink" href="#the-interface" title="Permanent link">&para;</a></h2>
 <p>A VSCode/VSCodium extension in <code>extension/</code> speaks to the Go control service
 over a Unix socket, with <code>/events</code> as Server-Sent Events — so a blocked request
