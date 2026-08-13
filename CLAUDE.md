@@ -2092,6 +2092,30 @@ porté sur ce que le système doit OFFRIR, pas sur un correctif :
   Prix assumés par jo et écrits dans `limits.md` : « passé ou futur » devient
   un attribut préservé, et la moitié FUTURE se périme d'elle-même.
 
+**L'annonce est VALIDÉE par l'usage, et elle a fait mieux que prévu.** Sur le
+même document, avant : « l'incident est daté du 2 février 2027, or nous sommes
+le 13 août 2026 » — une anomalie inexistante et une phrase fausse. Après : « the
+incident opened in December 2028 and the client dossier in January 2022, so
+there's roughly a 6-year-11-month gap — plausible given the date-shifting
+rules ». Le modèle raisonne sur l'ÉCART, qui est conservé, nomme la règle, et
+discrimine : l'écart 48 min / 2 h du ticket n'est PAS attribué à la
+substitution.
+
+**Et il a trouvé le défaut suivant en lisant son propre substitut** : « 41 rue
+des Logan, 08409 Dallas mélange une mise en forme française avec une ville
+américaine ». Il avait raison, et il a SIGNALÉ au lieu de corriger — le
+comportement demandé. Quatre défauts dans `_fake_address`, tous de la famille
+« une date rendue en mot » : la VILLE tirée du lexique des prénoms (qui porte
+`paris`, `dallas`, `logan`), un numéro de rue qui pouvait valoir ZÉRO, un code
+postal impossible — et, trouvé par le témoin que je venais d'écrire, un
+département sous 10 privé de son zéro (`3270` pour `03270`) —, et `8 bis` rendu
+`2 quinn` alors qu'un rang est une forme, pas un identifiant.
+
+**Ce que ça change à la méthode** : l'annonce ne fait pas qu'éviter les fausses
+alertes, elle fait du modèle un DÉTECTEUR de défauts de substitution. Il voit
+les substituts de l'intérieur, ce qu'aucun test ne fait, et il signale ce qui ne
+tient pas — à condition qu'on lui ait dit que la couche existe.
+
 **Method — an ERROR is not a witness.** Reverting the extension fix made nine
 tests ERROR, because the fixture lost the method it calls; that proves an API is
 missing, not that a behaviour is wrong. Replaying the realistic regression —
