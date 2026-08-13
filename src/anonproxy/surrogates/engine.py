@@ -17,6 +17,7 @@ Contraintes tenues ici :
 """
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import hmac
 import ipaddress
@@ -26,7 +27,8 @@ from typing import Any, Callable
 from urllib.parse import unquote_plus
 
 from ..modes import (ARBITRAGE_BLOQUANT, CHEMINS_COMPLET, CHEMINS_UTILISATEUR,
-                     CHEMINS_UTILISATEUR_PROJET, DOMAINES_TLD_REELS)
+                     CHEMINS_UTILISATEUR_PROJET, DATES_COTE_DU_PRESENT,
+                     DOMAINES_TLD_REELS)
 from ..policy import Decision, Policy
 from ..vault import SurrogateConflict, Vault
 from .canonical import (
@@ -407,7 +409,22 @@ class SurrogateEngine:
         # variation, les 64 tentatives rendaient la même date et la requête
         # tombait en 503 sur un document qui mêle les deux formes.
         jours = self._DECALAGE_MIN + self._idx("date-shift") % etendue + attempt
-        return dates.shift(value, jours)
+        # `cote_du_present` fait tourner chaque date dans SON côté d'aujourd'hui.
+        # Le jour est lu à la SUBSTITUTION, jamais après : le coffre fige le
+        # substitut, donc ce qui est déjà sorti ne bouge plus — et la moitié
+        # future se périme à mesure que le présent avance, ce qui est le prix
+        # assumé du réglage.
+        aujourd_hui = (dt.date.today()
+                       if self.policy is not None
+                       and self.policy.reglage("dates") == DATES_COTE_DU_PRESENT
+                       else None)
+        try:
+            return dates.shift(value, jours, aujourd_hui)
+        except dates.CoteImpossible:
+            # Le côté est trop étroit pour décaler sans rendre le réel. On
+            # retombe sur le décalage libre : perdre la préservation du côté
+            # est visible, rendre la valeur réelle ne l'est pas.
+            return dates.shift(value, jours)
 
     # -- API ---------------------------------------------------------------- #
 

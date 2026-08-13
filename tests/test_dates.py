@@ -609,3 +609,68 @@ def test_le_mois_jour_est_injectif_sur_les_366_couples():
     substituts = [_dates.shift(v, 654) for v in lisibles]
     assert len(set(substituts)) == 366
     assert not any(a == b for a, b in zip(lisibles, substituts))
+
+
+# --------------------------------------------------------------------------- #
+# Le réglage « côté du présent » (jo, 2026-08-13)
+# --------------------------------------------------------------------------- #
+_AUJ = dt.date(2026, 8, 13)
+
+
+@pytest.mark.parametrize("valeur", [
+    "2026-02-03", "3 février 2026", "février 2026", "2026-02", "Q1 2026",
+    "2026-08-13",          # aujourd'hui compte pour le PASSÉ
+    "0001-01-05",          # au bord bas : le côté doit tenir jusque là
+])
+def test_une_date_passee_le_RESTE(valeur):
+    """La moitié DÉMONTRABLE du réglage, et elle est définitive : reculer garde
+    une date passée dans le passé pour toujours."""
+    rendu = _dates.shift(valeur, 654, _AUJ)
+    lu = _dates.parse(rendu)
+    assert lu is not None, rendu
+    assert lu[0] <= _AUJ, f"{valeur} → {rendu} est passé du côté du futur"
+
+
+@pytest.mark.parametrize("valeur", ["2027-02-03", "9999-12-31", "Q1 2030",
+                                    "décembre 2028"])
+def test_une_date_future_le_reste_AUJOURD_HUI(valeur):
+    """La moitié qui SE PÉRIME, et le nom du test le dit.
+
+    Elle tient au moment où le substitut est calculé. Le coffre le fige, et le
+    présent avance : dans quelques années, un substitut calculé aujourd'hui
+    pourra se retrouver dans le passé. jo l'a assumé (2026-08-13) ; ce qui
+    serait fautif, c'est de ne pas l'écrire."""
+    rendu = _dates.shift(valeur, 654, _AUJ)
+    lu = _dates.parse(rendu)
+    assert lu is not None, rendu
+    assert lu[0] > _AUJ, f"{valeur} → {rendu} est passé du côté du passé"
+
+
+def test_le_cote_du_present_conserve_les_ECARTS_du_meme_cote():
+    """Ce que le premier essai avait perdu : faire tourner dans TOUT l'espace
+    du côté rendait février 2026 en l'an 2 — une date passée, oui, et plus
+    aucune plausibilité ni aucun écart. Le pas garde sa magnitude, il ne change
+    que de direction."""
+    a = _dates.parse(_dates.shift("2026-02-03", 654, _AUJ))[0]
+    b = _dates.parse(_dates.shift("2026-03-05", 654, _AUJ))[0]
+    assert (b - a).days == (dt.date(2026, 3, 5) - dt.date(2026, 2, 3)).days
+
+
+def test_le_cote_du_present_reste_injectif_des_DEUX_cotes():
+    """D6 tient par construction : chaque côté est son propre espace de
+    rotation, donc deux dates d'un même côté gardent le même pas, et deux
+    côtés différents ne peuvent pas se rejoindre."""
+    jours = [dt.date(2026, 8, 13) + dt.timedelta(days=d)
+             for d in range(-400, 400)]
+    rendus = [_dates.shift(j.isoformat(), 654, _AUJ) for j in jours]
+    assert all(r is not None for r in rendus)
+    assert len(set(rendus)) == len(rendus), "collision entre substituts"
+    assert not any(j.isoformat() == r for j, r in zip(jours, rendus)), \
+        "un point fixe rend le RÉEL comme substitut"
+
+
+def test_sans_le_reglage_rien_ne_change():
+    """Le défaut FERME : sans `aujourd'hui`, le décalage est celui d'avant, et
+    ce test le tient — un réglage dont le défaut dérive est ce que le tour 18 a
+    trouvé sur `domaines_fictifs`."""
+    assert _dates.shift("2026-02-03", 654) == "2027-11-19"

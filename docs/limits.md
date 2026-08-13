@@ -121,6 +121,28 @@ before the fix, `3 février 2026` and `février 2026` — the same month in the
 source — landed fifty-five years apart. What is never invented is the missing
 field: `August 2026` becomes another month-year, never a full date.
 
+**`dates=cote_du_present` preserves whether a date is past or future — and
+that is a LEAK, plus a guarantee with an expiry date.** By default (`libre`) all
+dates move by one constant, so intervals survive but a past date can appear in
+the future; measured in a real session, the model reported an anomaly that does
+not exist. Under `cote_du_present` each date rotates within ITS side of today,
+so the side survives too. jo arbitrated both prices on 2026-08-13:
+
+- "past or future" joins environment, /24 co-membership, human vs service and
+  internal vs external as an attribute that survives substitution on purpose,
+  and it is therefore something a re-identification attempt can correlate on;
+- the PAST half is provable and definitive — moving a past date backwards keeps
+  it past forever. The FUTURE half expires by itself: today advances, the vault
+  freezes the surrogate, so a date shifted forward this morning can find itself
+  in the past in a few years, with nothing to signal it.
+
+Two more things it does not do, stated rather than discovered. A month-day
+(`Feb 28`) carries no year, so it has no side and the setting does not apply to
+it. And changing the setting only affects values substituted AFTERWARDS: the
+vault keeps what it sealed, so one document can mix both regimes and nothing
+counts it — jo's call, against the project's usual rule that an accepted
+residual is counted.
+
 **A substituted path segment keeps its file extension, and only that.**
 Measured in a real session: `nginx.conf` came back `willow-xenon`, so the model
 could no longer tell a configuration file from a log or from a directory — the

@@ -442,7 +442,56 @@ def chercher(valeur: str) -> tuple[int, int] | None:
 _ETENDUE = dt.date.max.toordinal()
 
 
-def _decaler(jour: dt.date, jours: int) -> dt.date:
+def _tourner(o: int, bas: int, haut: int, pas: int) -> int:
+    """Fait tourner `o` dans `[bas, haut]`, sans jamais rendre `o`.
+
+    Borner la rotation à un INTERVALLE est ce qui rend « la date reste de son
+    côté du présent » vrai jusqu'aux bords : chaque côté est son propre espace,
+    donc deux dates du même côté restent distinctes (même pas), et deux côtés
+    différents ne peuvent pas se rejoindre (espaces disjoints). D6 tient par
+    construction, au lieu de tenir « sauf près des bornes ».
+
+    Le pas arrive SIGNÉ et déjà borné : reculer dans le passé, avancer dans le
+    futur, de la même quantité que le décalage libre. Le calculer ici à partir
+    de l'étendue du côté donnerait un pas énorme — mesuré : février 2026
+    ressortait en l'an 2, ce qui est bien une date passée et n'est plus
+    plausible (D1), et l'écart aux autres dates du document était perdu.
+
+    Un intervalle d'un seul rang ne peut pas décaler sans rendre le réel : on
+    le dit à l'appelant plutôt que de rendre l'identité en silence.
+    """
+    etendue = haut - bas + 1
+    if etendue < 2:
+        raise CoteImpossible(f"un seul rang disponible entre {bas} et {haut}")
+    return bas + (o - bas + pas) % etendue
+
+
+def _signe(pas: int, vers_le_passe: bool, etendue: int) -> int:
+    """Le pas, orienté du bon côté et ramené dans l'étendue disponible.
+
+    Reculer garde une date passée dans le passé, avancer garde une date future
+    dans le futur — et la MAGNITUDE reste celle du décalage libre, donc les
+    écarts entre dates d'un même côté sont conservés exactement.
+    """
+    borne = max(1, pas % max(1, etendue - 1) or 1)
+    return -borne if vers_le_passe else borne
+
+
+class CoteImpossible(ValueError):
+    """Le côté du présent est trop étroit pour y décaler quoi que ce soit."""
+
+
+def _cote(o: int, o_aujourdhui: int, bas: int, haut: int) -> tuple[int, int]:
+    """L'intervalle du côté d'aujourd'hui où vit cette date.
+
+    Aujourd'hui compte pour le PASSÉ : une date du jour n'est pas « à venir »,
+    et la ranger dans le futur ferait dire au modèle l'inverse de ce que le
+    document dit.
+    """
+    return (bas, o_aujourdhui) if o <= o_aujourdhui else (o_aujourdhui + 1, haut)
+
+
+def _decaler(jour: dt.date, jours: int, aujourd_hui: dt.date | None = None) -> dt.date:
     """Le jour décalé, en TOURNANT dans la plage des dates représentables.
 
     Une addition nue lève `OverflowError` à moins de `jours` de `9999-12-31` —
@@ -456,7 +505,12 @@ def _decaler(jour: dt.date, jours: int) -> dt.date:
     pas tomber sur la même (D6). Prix assumé : pour la poignée de dates qui
     tournent, l'écart aux autres n'est plus préservé.
     """
-    return dt.date.fromordinal((jour.toordinal() - 1 + jours) % _ETENDUE + 1)
+    if aujourd_hui is None:
+        return dt.date.fromordinal((jour.toordinal() - 1 + jours) % _ETENDUE + 1)
+    o, auj = jour.toordinal(), aujourd_hui.toordinal()
+    bas, haut = _cote(o, auj, 1, _ETENDUE)
+    return dt.date.fromordinal(_tourner(o, bas, haut, _signe(jours, o <= auj,
+                                                             haut - bas + 1)))
 
 
 #: Étendues des granularités PARTIELLES, pour tourner comme `_decaler` tourne.
@@ -490,7 +544,8 @@ def _pas(jours: int, par: float, etendue: int) -> int:
     return max(1, round(jours / par) % etendue)
 
 
-def _decaler_mois(jour: dt.date, jours: int) -> dt.date:
+def _decaler_mois(jour: dt.date, jours: int,
+                  aujourd_hui: dt.date | None = None) -> dt.date:
     """Décale de MOIS entiers, parce qu'une année-mois n'a pas de jour.
 
     Décaler en JOURS ne serait pas injectif : février et mars d'une même année
@@ -498,40 +553,64 @@ def _decaler_mois(jour: dt.date, jours: int) -> dt.date:
     Décalés du même nombre de jours, les deux peuvent donc tomber dans le MÊME
     mois — deux dates réelles sous un seul substitut, ce que D6 interdit.
     """
-    o = ((jour.year - 1) * 12 + jour.month - 1
-         + _pas(jours, _JOURS_PAR_MOIS, _MOIS_ETENDUE)) % _MOIS_ETENDUE
+    rang = (jour.year - 1) * 12 + jour.month - 1
+    if aujourd_hui is None:
+        o = (rang + _pas(jours, _JOURS_PAR_MOIS, _MOIS_ETENDUE)) % _MOIS_ETENDUE
+    else:
+        auj = (aujourd_hui.year - 1) * 12 + aujourd_hui.month - 1
+        bas, haut = _cote(rang, auj, 0, _MOIS_ETENDUE - 1)
+        o = _tourner(rang, bas, haut,
+                     _signe(_pas(jours, _JOURS_PAR_MOIS, _MOIS_ETENDUE),
+                            rang <= auj, haut - bas + 1))
     return dt.date(o // 12 + 1, o % 12 + 1, 1)
 
 
-def _decaler_trimestre(jour: dt.date, jours: int) -> dt.date:
+def _decaler_trimestre(jour: dt.date, jours: int,
+                       aujourd_hui: dt.date | None = None) -> dt.date:
     """Décale de TRIMESTRES entiers — même raison qu'au-dessus, un cran plus haut."""
-    o = ((jour.year - 1) * 4 + (jour.month - 1) // 3
-         + _pas(jours, _JOURS_PAR_TRIMESTRE, _TRIMESTRE_ETENDUE)
-         ) % _TRIMESTRE_ETENDUE
+    rang = (jour.year - 1) * 4 + (jour.month - 1) // 3
+    pas = _pas(jours, _JOURS_PAR_TRIMESTRE, _TRIMESTRE_ETENDUE)
+    if aujourd_hui is None:
+        o = (rang + pas) % _TRIMESTRE_ETENDUE
+    else:
+        auj = (aujourd_hui.year - 1) * 4 + (aujourd_hui.month - 1) // 3
+        bas, haut = _cote(rang, auj, 0, _TRIMESTRE_ETENDUE - 1)
+        o = _tourner(rang, bas, haut, _signe(pas, rang <= auj, haut - bas + 1))
     return dt.date(o // 4 + 1, (o % 4) * 3 + 1, 1)
 
 
-def _decaler_dans_l_annee(jour: dt.date, jours: int) -> dt.date:
+def _decaler_dans_l_annee(jour: dt.date, jours: int,
+                          aujourd_hui: dt.date | None = None) -> dt.date:
     """Décale un mois-jour DANS l'année, qui est tout ce que la valeur porte.
 
     Tourner dans l'année garde la forme (pas d'année à inventer) et reste une
     bijection sur les trois cent soixante-six couples possibles.
+
+    Le côté du présent n'a pas de sens ici : `Feb 28` ne porte pas d'année,
+    donc rien ne dit s'il est passé ou futur. Le réglage ne s'y applique pas,
+    et c'est énoncé plutôt que deviné.
     """
+    del aujourd_hui
     rang = dt.date(_ANNEE_REF, jour.month, jour.day).timetuple().tm_yday - 1
     o = (rang + _pas(jours, 1, _JOURS_ANNEE)) % _JOURS_ANNEE
     return dt.date(_ANNEE_REF, 1, 1) + dt.timedelta(days=o)
 
 
-def shift(valeur: str, jours: int) -> str | None:
+def shift(valeur: str, jours: int,
+          aujourd_hui: dt.date | None = None) -> str | None:
     """Décale la date CONTENUE dans la valeur, en gardant tout le reste.
 
     None seulement s'il n'y a aucune date lisible — auquel cas l'appelant
     substitue génériquement, et la nature ne peut pas être tenue.
+
+    `aujourd_hui` renseigné, chaque date tourne dans SON côté du présent : une
+    date passée reste passée, une future reste future. Le réglage qui l'active
+    est `dates=cote_du_present`, et son prix est écrit là-bas.
     """
     lu = parse(valeur)
     if lu is not None:
         jour, rendre, decaler = lu
-        return rendre(decaler(jour, jours))
+        return rendre(decaler(jour, jours, aujourd_hui))
 
     # TOUTES les dates, pas la première. N'en décaler qu'une laissait les
     # suivantes VERBATIM dans le substitut : `du 3 février 2026 au 12 mars
@@ -548,7 +627,7 @@ def shift(valeur: str, jours: int) -> str | None:
             # en être une (`2020-02-30`, courant dans un export) faisait ainsi
             # exploser la pile, et `RecursionError` n'est rattrapée nulle part.
             return None
-        decalee = shift(valeur[debut:fin], jours)
+        decalee = shift(valeur[debut:fin], jours, aujourd_hui)
         if decalee is None:
             # Recopier le fragment non décalable faisait sortir une VRAIE date
             # en clair dès qu'une AUTRE date de la valeur, elle, se décalait :

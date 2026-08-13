@@ -67,6 +67,28 @@ CHEMINS_COMPLET = "complet"                        # tout, l'ancien comportement
 CHEMINS_UTILISATEUR_PROJET = "utilisateur_projet"  # l'utilisateur ET le projet
 CHEMINS_UTILISATEUR = "utilisateur"                # l'utilisateur seul
 
+#: Ce qu'une DATE conserve du temps réel.
+#:
+#: `libre` décale toutes les dates du même pas : les écarts sont conservés,
+#: donc la chronologie interne d'un document tient, mais une date passée peut
+#: apparaître dans le futur — mesuré en session réelle, le modèle a signalé une
+#: anomalie inexistante et sa phrase était fausse une fois restaurée.
+#:
+#: `cote_du_present` fait tourner chaque date dans SON côté d'aujourd'hui : une
+#: date passée reste passée, une date future reste future. Deux prix, tous deux
+#: assumés par jo (2026-08-13) :
+#:
+#:   - « passé ou futur » devient un attribut PRÉSERVÉ, donc une fuite de plus,
+#:     au même titre qu'interne/externe ;
+#:   - la moitié FUTURE se périme : aujourd'hui avance, et un substitut calculé
+#:     ce matin peut se retrouver dans le passé dans six mois. La moitié passée,
+#:     elle, est définitive.
+#:
+#: Le défaut FERME, comme tout réglage de ce fichier : il ne préserve rien de
+#: plus que les écarts, et c'est l'annonce qui prévient le modèle.
+DATES_LIBRE = "libre"
+DATES_COTE_DU_PRESENT = "cote_du_present"
+
 #: Valeurs admises, par réglage. Une valeur hors liste est REFUSÉE : une faute
 #: de frappe retomberait sinon en silence sur un défaut que l'opérateur croit
 #: avoir changé.
@@ -75,6 +97,7 @@ VALEURS: dict[str, tuple[str, ...]] = {
     "arbitrage": (ARBITRAGE_DIFFERE, ARBITRAGE_BLOQUANT),
     "domaines_fictifs": (DOMAINES_TLD_REELS, DOMAINES_RESERVES),
     "chemins": (CHEMINS_COMPLET, CHEMINS_UTILISATEUR_PROJET, CHEMINS_UTILISATEUR),
+    "dates": (DATES_LIBRE, DATES_COTE_DU_PRESENT),
 }
 
 #: Réglage numérique : combien de temps la requête attend une décision, en
@@ -88,7 +111,7 @@ DELAI_ARBITRAGE = "delai_arbitrage"
 #: une décision explicite de l'opérateur. L'invariant est vérifié par un test,
 #: pas seulement énoncé ici : `auto` avait justement dérivé sur
 #: `domaines_fictifs`, et rien ne le voyait.
-REGLAGES_DE_PROTECTION = frozenset({"domaines_fictifs", "chemins"})
+REGLAGES_DE_PROTECTION = frozenset({"domaines_fictifs", "chemins", "dates"})
 
 MODES: dict[str, dict[str, object]] = {
     "auto": {
@@ -96,6 +119,7 @@ MODES: dict[str, dict[str, object]] = {
         "arbitrage": ARBITRAGE_DIFFERE,
         "domaines_fictifs": DOMAINES_RESERVES,
         "chemins": CHEMINS_UTILISATEUR_PROJET,
+        "dates": DATES_LIBRE,
         DELAI_ARBITRAGE: 0,
     },
     "consciencieux": {
@@ -103,6 +127,7 @@ MODES: dict[str, dict[str, object]] = {
         "arbitrage": ARBITRAGE_BLOQUANT,
         "domaines_fictifs": DOMAINES_RESERVES,
         "chemins": CHEMINS_UTILISATEUR_PROJET,
+        "dates": DATES_LIBRE,
         DELAI_ARBITRAGE: 120,
     },
     "ferme": {
@@ -110,6 +135,7 @@ MODES: dict[str, dict[str, object]] = {
         "arbitrage": ARBITRAGE_DIFFERE,
         "domaines_fictifs": DOMAINES_RESERVES,
         "chemins": CHEMINS_UTILISATEUR_PROJET,
+        "dates": DATES_LIBRE,
         DELAI_ARBITRAGE: 0,
     },
 }
@@ -122,6 +148,7 @@ ENV: dict[str, str] = {
     "arbitrage": "ANONPROXY_ARBITRAGE",
     "domaines_fictifs": "ANONPROXY_DOMAINES_FICTIFS",
     "chemins": "ANONPROXY_CHEMINS",
+    "dates": "ANONPROXY_DATES",
     DELAI_ARBITRAGE: "ANONPROXY_DELAI_ARBITRAGE",
 }
 
