@@ -1,18 +1,34 @@
 # Adversarial record
 
-Twenty-one rounds of adversarial review, most of them run by independent agents
+Twenty-four rounds of adversarial review, most of them run by independent agents
 instructed to **break** the code rather than approve it. The full log lives in
-`CLAUDE.md` at the repository root, defect by defect. This page keeps what
-generalises.
+`CLAUDE.md` at the repository root, defect by defect — 132 defects counted round
+by round, plus the earlier passes. This page keeps what generalises.
 
 ## The uncomfortable headline
 
-**Five real sessions found more defects than five rounds of adversarial
-review.** A 400 on an API field nobody had modelled, a repository name leaving
-in the clear, path segments bypassing the vault, an IBAN never detected and
-then torn apart by a false credit-card match — none were found by an agent.
+**Real sessions find what rounds of adversarial review do not.** A 400 on an API
+field nobody had modelled, a repository name leaving in the clear, path segments
+bypassing the vault, an IBAN never detected and then torn apart by a false
+credit-card match — none were found by an agent.
 
-Reviews find what you thought to look for. Use decides.
+It got sharper the day the loop stopped. In one afternoon, real sessions
+returned four defects, **two of which twenty-four rounds had missed**: a postal
+address whose city was drawn from a lexicon of first names, and two colleagues
+with no connection given the same surname — a family the substitution had
+invented. And the model found the first one itself, reading its own surrogate,
+because the announcement tells it the layer exists and asks it to report rather
+than work around.
+
+Reviews find what you thought to look for. Use decides. After any change to a
+generator, run a session and **read the reasoning as well as the answer**.
+
+## When to stop
+
+The loop stopped at round 24, and the criterion was not "no more findings" —
+that never arrives. It stopped when its findings became defects in code it had
+itself written hours earlier, while the older surfaces came back clean. That is
+not convergence, it is the signal to change lever.
 
 ## The patterns that repeat
 

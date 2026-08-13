@@ -108,8 +108,9 @@ depends on the model cooperating.
     must reach the real cluster — so on that path the hook blocks data going
     OUT rather than substituting.
 
-    **Remote MCP and WebFetch** do, under `task forward -- <agent>` — but that
-    is not the default path, and it has not yet been exercised by a real
-    session. And on a workstation the proxy is still not the only network
-    path: the egress harness *detects*, it does not *prevent*. See
-    [Known limits](limits.md).
+    **Remote MCP and WebFetch** do, under `task forward -- <agent>`. That is
+    not the default path, but it is exercised by a real Claude Code session in
+    `tests/forward_e2e.sh`, which also shows the destinations Phase 0 measured
+    as escaping being refused with no socket opened. On a workstation the proxy
+    is still not the only network path: the egress harness *detects*, it does
+    not *prevent*. See [Known limits](limits.md).
