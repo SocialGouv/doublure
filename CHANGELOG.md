@@ -42,8 +42,9 @@ Six proofs are replayed before every commit: the Python suite, the Go suite, the
 hook suite, and three end-to-end scripts, one of which runs a real Claude Code
 session and one of which crosses the Python/Go boundary.
 
-- **0 real values across 393 KB** captured with mitmproxy during a real session,
-  restoration 3/3 operator-side.
+- **0 real values across 821.9 KB** captured with mitmproxy during a real Claude
+  Code session, restoration 3/3 operator-side — re-measured on the released
+  code (`tests/phase3_e2e.sh`, 2026-08-13, 3 requests to `api.anthropic.com`).
 - **10,000 values, 0 collisions**, byte-for-byte determinism across processes.
 - A forbidden command **refused before execution**, traced, with the reason
   quoted back by the model.

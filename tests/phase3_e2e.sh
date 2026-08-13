@@ -60,15 +60,37 @@ export HTTPS_PROXY="http://127.0.0.1:${MITM_PORT}"
 export HTTP_PROXY="http://127.0.0.1:${MITM_PORT}"
 export NO_PROXY="127.0.0.1,localhost"
 
+# Le port doit être LIBRE avant de lancer. Sans cette vérification, un proxy
+# déjà là — celui d'une session en cours, sur le même port par défaut — fait
+# échouer le bind de CELUI-CI en silence, pendant que `curl /healthz` répond
+# quand même : la preuve croit son proxy prêt et mesure le processus d'un
+# autre, avec une autre portée et sans passer par la capture. Constaté.
+#
+# Répondre sur un port ne prouve pas qu'on l'a ouvert. C'est la même règle que
+# « un refus obtenu pour la mauvaise raison n'est pas un refus », appliquée au
+# vert.
+if curl -sf -m 2 "http://127.0.0.1:${PROXY_PORT}/healthz" >/dev/null 2>&1; then
+  echo "ÉCHEC : quelque chose écoute déjà sur :${PROXY_PORT}." >&2
+  echo "  Cette preuve doit lancer SON proxy, sinon elle mesure celui d'un" >&2
+  echo "  autre. Arrêter l'autre, ou relancer avec PROXY_PORT=<libre>." >&2
+  exit 1
+fi
+
 uv run python -m uvicorn anonproxy.proxy.app:app \
   --host 127.0.0.1 --port "${PROXY_PORT}" --log-level info \
   > "${OUT}/proxy.log" 2>&1 &
 PROXY_PID=$!
 
 for _ in $(seq 1 30); do
+  kill -0 "${PROXY_PID}" 2>/dev/null || {
+    echo "ÉCHEC : le proxy est mort au démarrage ; log :" >&2
+    tail -20 "${OUT}/proxy.log" >&2; exit 1; }
   curl -sf -m 2 "http://127.0.0.1:${PROXY_PORT}/healthz" >/dev/null && break
   sleep 1
 done
+kill -0 "${PROXY_PID}" 2>/dev/null || {
+  echo "ÉCHEC : le proxy est mort ; log :" >&2
+  tail -20 "${OUT}/proxy.log" >&2; exit 1; }
 curl -sf -m 5 "http://127.0.0.1:${PROXY_PORT}/healthz" >/dev/null || {
   echo "ÉCHEC : proxy pas prêt ; log :" >&2; tail -20 "${OUT}/proxy.log" >&2; exit 1; }
 echo "→ proxy OK sur :${PROXY_PORT} (portée ${ANONPROXY_SCOPE})"
