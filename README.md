@@ -63,7 +63,22 @@ task bench:parser     # inputs the bash grammar still refuses
 ```
 
 The proofs start real processes and, for two of them, a real Claude Code
-session. Three defects were only ever found by them, never by the unit suites.
+session. `task proofs` is the complete set; a faster loop while working is the
+two unit suites plus `policy`, `control` and `forward` — but `control` is the
+only one that crosses into Go, and leaving it out once left the control
+interface disconnected for two rounds.
+
+Three layers, and each finds what the one below does not:
+
+- the **unit suites** find what you thought to check;
+- the **end-to-end proofs** found three defects the suites never saw — a broken
+  schema, a rejected `cache_control`, a session burning its turns on a file
+  whose name had been masked;
+- **real sessions** found four more in a single afternoon, two of which
+  twenty-four rounds of adversarial review had missed. After changing a
+  surrogate generator, run one, and read the model's reasoning as well as its
+  answer: told that the layer exists, it reports what does not hold in its own
+  surrogates.
 
 ## Layout
 
