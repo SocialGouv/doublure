@@ -2116,6 +2116,26 @@ alertes, elle fait du modèle un DÉTECTEUR de défauts de substitution. Il voit
 les substituts de l'intérieur, ce qu'aucun test ne fait, et il signale ce qui ne
 tient pas — à condition qu'on lui ait dit que la couche existe.
 
+**Une classe NOUVELLE : le substitut qui INVENTE un attribut.** En session,
+`Kai-zion Reese` ouvrait le ticket et `Marlow-cameron Reese` prenait
+l'astreinte — deux collègues sans lien rendus comme une famille. Mesuré
+ensuite : 15,5 % des documents de quatre personnes portaient deux homonymes,
+parce que le PRÉNOM était composé et le patronyme tiré dans quarante-huit mots,
+soit l'inverse de la forme réelle (`Ines Ferreira-Konate`).
+
+C'est l'exact opposé d'une fuite, et c'est ce qui en fait une classe à part.
+Les quatre attributs préservés du §3.4 sont assumés PARCE QU'ILS SONT VRAIS ;
+un attribut inventé donne à l'opérateur et au modèle un fait qui se lit comme
+celui du document, sans rien pour l'en distinguer. Composition déplacée sur le
+patronyme : 48 → 48², et 15,5 % → 0,8 %.
+
+**Ce que la journée établit sur la MÉTHODE.** Les deux derniers défauts —
+l'adresse et le patronyme — ont été trouvés par le même chemin : une session
+réelle, et le RAISONNEMENT du modèle lu autant que sa réponse. Aucun n'était
+visible depuis les tests, et tous deux avaient traversé vingt-quatre tours de
+revue adversariale. Le modèle voit les substituts de l'intérieur, ce qu'aucun
+test ne fait : un test vérifie ce qu'on a pensé à vérifier.
+
 **Method — an ERROR is not a witness.** Reverting the extension fix made nine
 tests ERROR, because the fixture lost the method it calls; that proves an API is
 missing, not that a behaviour is wrong. Replaying the realistic regression —
