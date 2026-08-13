@@ -1224,12 +1224,29 @@ class SurrogateEngine:
             # Même nombre de mots : « Marie-Anne De La Fontaine » réduit à deux
             # jetons change la structure du texte et se remarque.
             words = v.split()
-            first = self._combo("person-a", canon.key, attempt, IDENTITY_WORDS).capitalize()
-            rest = [
-                pick(IDENTITY_WORDS, self._idx("person-n", canon.key, str(i), tweak)).capitalize()
-                for i in range(1, len(words))
+            # C'est le NOM DE FAMILLE qui est composé, pas le prénom. Deux
+            # raisons, et la seconde est un défaut mesuré.
+            #
+            # La forme d'abord : le réel s'écrit `Ines Ferreira-Konate` —
+            # prénom simple, patronyme composé. L'inverse rendait
+            # `Kai-zion Reese`, qui se lit à l'envers.
+            #
+            # L'espace ensuite : le patronyme était tiré dans les quarante-huit
+            # mots du lexique, donc DEUX personnes sur quatre portaient le même
+            # nom dans 15,5 % des documents — mesuré, et observé en session
+            # réelle sur deux collègues sans lien. Le système FABRIQUAIT une
+            # parenté absente du réel : tout le reste du projet assume de
+            # préserver des attributs VRAIS, jamais d'en inventer un faux, et
+            # rien ne permet à l'opérateur de faire la différence. Composer
+            # porte l'espace à 48², et le taux sous 0,3 %.
+            famille = _capitale_composee(
+                self._combo("person-a", canon.key, attempt, IDENTITY_WORDS))
+            prenoms = [
+                pick(IDENTITY_WORDS,
+                     self._idx("person-n", canon.key, str(i), tweak)).capitalize()
+                for i in range(len(words) - 1)
             ]
-            return " ".join([first, *rest])
+            return " ".join([*prenoms, famille])
 
         if etype in ("ORGANIZATION", "LOCATION"):
             word = self._combo("org", canon.key, attempt, ORG_WORDS)

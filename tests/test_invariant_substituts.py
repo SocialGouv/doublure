@@ -452,3 +452,56 @@ def test_une_ville_composee_s_ecrit_comme_en_francais(moteur):
     assert _capitale_composee("saint-ombre") == "Saint-Ombre"
     assert _capitale_composee("verneuil-sur-doux") == "Verneuil-sur-Doux"
     assert _capitale_composee("brantigny") == "Brantigny"
+
+
+# --------------------------------------------------------------------------- #
+# Ce que le substitut ne doit pas INVENTER
+# --------------------------------------------------------------------------- #
+def test_deux_personnes_sans_lien_ne_deviennent_pas_une_FAMILLE(moteur):
+    """Le système préserve des attributs VRAIS ; il ne doit pas en fabriquer un
+    FAUX.
+
+    Le patronyme était tiré dans les quarante-huit mots du lexique alors que le
+    prénom, lui, était composé : deux personnes sur quatre portaient le même nom
+    dans 15,5 % des documents. Observé en session réelle sur deux collègues sans
+    lien — `Kai-zion Reese` et `Marlow-cameron Reese` — et ni l'opérateur ni le
+    modèle n'ont moyen de savoir que la parenté est un artefact.
+
+    C'est l'exact opposé d'une fuite, et c'est pour ça que ça mérite un
+    invariant : les attributs préservés (environnement, /24, humain vs service)
+    sont assumés PARCE QU'ILS SONT VRAIS.
+    """
+    documents, avec_parente = 400, 0
+    for essai in range(documents):
+        gens = [moteur.substitute_value("PERSON", f"Prenom{essai} Nom{essai}-{k}")
+                for k in range(4)]
+        familles = [g.split()[-1] for g in gens]
+        if len(set(familles)) < len(familles):
+            avec_parente += 1
+    taux = avec_parente / documents
+    assert taux < 0.03, (
+        f"{taux:.1%} des documents de quatre personnes inventent une parenté "
+        f"(15,5 % avant correction, seuil à 3 %)")
+
+
+@pytest.mark.parametrize("reel", [
+    "Ines Ferreira-Konate", "Thibault Escourrou", "Marguerite",
+    "Marie-Anne De La Fontaine",
+])
+def test_un_nom_de_personne_garde_son_nombre_de_MOTS(moteur, reel):
+    """`Marie-Anne De La Fontaine` réduit à deux jetons change la structure du
+    texte et se remarque. Le patronyme composé ne doit pas ajouter de mot."""
+    faux = moteur.substitute_value("PERSON", reel)
+    assert len(faux.split()) == len(reel.split()), f"{reel} → {faux}"
+
+
+def test_le_patronyme_est_compose_et_le_prenom_simple(moteur):
+    """La forme du réel : `Ines Ferreira-Konate`, prénom simple et patronyme
+    composé. L'inverse — `Kai-zion Reese` — se lit à l'envers, et c'est ce qui
+    laissait le patronyme dans un espace de quarante-huit mots."""
+    faux = moteur.substitute_value("PERSON", "Ines Ferreira-Konate")
+    prenom, famille = faux.split()
+    assert "-" not in prenom, faux
+    assert "-" in famille, faux
+    # Casse française d'un composé : `Wren-Tatum`, pas `Wren-tatum`.
+    assert all(p[:1].isupper() for p in famille.split("-")), faux
