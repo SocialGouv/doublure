@@ -121,6 +121,25 @@ before the fix, `3 février 2026` and `février 2026` — the same month in the
 source — landed fifty-five years apart. What is never invented is the missing
 field: `August 2026` becomes another month-year, never a full date.
 
+**A fictional city can name a real commune, and a city with no postcode in
+front of it is not recognised as one.** A postal address keeps its shape — a
+street number of at least one, the street type verbatim, a five-digit postcode
+in a department that exists, and a city drawn from a city lexicon. What
+designates nobody is the address as a WHOLE: the postcode is drawn independently
+of the city, so the pair cannot be anyone's. France has thirty-four thousand
+communes, so an invented French name may well be one of them; the arbitration is
+the same as a fictional domain under a real TLD. And it is the POSITION that
+identifies a city — `Baker Street, London`, with no postcode before it, still
+draws from the person lexicon.
+
+**Two people can still be given the same surname, in about one document in a
+hundred and twenty.** The surrogate must not INVENT an attribute: the four
+preserved attributes are accepted because they are TRUE, whereas a fabricated
+family tie reads exactly like a fact of the document. The family name is
+composed from two lexicon words, which took the measured rate from 15.5% of
+four-person documents to 0.8%. What remains is stated rather than hidden, and a
+test holds it under 3%.
+
 **`dates=cote_du_present` preserves whether a date is past or future — and
 that is a LEAK, plus a guarantee with an expiry date.** By default (`libre`) all
 dates move by one constant, so intervals survive but a past date can appear in
