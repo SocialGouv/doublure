@@ -107,6 +107,7 @@ class ProxyState:
             master_key=master,
             scope_key=settings.scope_key,
             is_public=predicat_public(settings.allowlist_file),
+            extension_curee=Allowlist.load(settings.allowlist_file).extension_curee,
             policy=self.policy,
             projet=settings.projet,
         )

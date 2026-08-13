@@ -130,6 +130,7 @@ class SurrogateEngine:
 
     def __init__(self, vault: Vault, master_key: str, scope_key: str,
                  is_public: Callable[[str], bool] | None = None,
+                 extension_curee: Callable[[str], str] | None = None,
                  policy: "Policy | None" = None,
                  projet: str | None = None):
         self.vault = vault
@@ -152,6 +153,11 @@ class SurrogateEngine:
         # se limiter à des types (`code` public en FILE_PATH, jamais en
         # HOSTNAME) — sans le type, elle ne s'applique pas.
         self.is_public = is_public or (lambda _value, _etype=None: False)
+        #: « Quelle extension de fichier ce segment peut-il GARDER ? » — la
+        #: liste curée, consultée par l'allowlist, jamais recopiée ici. Le
+        #: défaut ne rend RIEN : aucun défaut n'ouvre quoi que ce soit, et
+        #: garder une extension fait sortir le format du fichier en clair.
+        self.extension_curee = extension_curee or (lambda _nom: "")
         self._master = master_key.encode() if isinstance(master_key, str) else master_key
         # Sel de portée : deux portées ne dérivent jamais le même substitut.
         self._salt = hmac.new(self._master, scope_key.encode(), hashlib.sha256).digest()
@@ -206,6 +212,26 @@ class SurrogateEngine:
         sortie = [p if i in garder else masque(i, p) for i, p in enumerate(parts)]
         out = "/".join(sortie)
         return f"/{out}" if absolu else out
+
+    def _garder_extension(self, reel: str, faux: str) -> str:
+        """Rend au substitut l'extension de fichier du réel, si elle est curée.
+
+        La NATURE d'un segment est ce qui se perdait : `nginx.conf` devenait
+        `willow-xenon`, et le modèle ne distinguait plus un fichier de
+        configuration d'un journal ni d'un dossier — le même coût qu'une date
+        rendue en mot.
+
+        Ce qui sort en clair est le FORMAT, jamais le nom : le radical reste
+        substitué, donc `tenant-acme-nda.md` rend `<mot>.md`. C'est une
+        OUVERTURE, si petite soit-elle, et elle est arbitrée par jo
+        (2026-08-13) plutôt que décidée ici.
+
+        Une seule implantation, appelée aux deux endroits qui fabriquent un
+        segment — chemin et URL. Ce fichier a déjà payé trois écritures d'une
+        même règle.
+        """
+        ext = self.extension_curee(reel)
+        return f"{faux}{ext}" if ext and not faux.endswith(ext) else faux
 
     def _segments_gardes(self, parts: list[str], absolu: bool) -> set[int]:
         """Les indices que le substitut conserve — la règle, en un seul endroit.
@@ -1178,7 +1204,8 @@ class SurrogateEngine:
                 segments = [s for s in path.split("/") if s]
                 fake_path = "".join(
                     "/" + (s if self.is_public(s)
-                           else self._combo("url-seg", f"{i}:{s}", attempt, SERVICE_WORDS))
+                           else self._garder_extension(s, self._combo(
+                               "url-seg", f"{i}:{s}", attempt, SERVICE_WORDS)))
                     for i, s in enumerate(segments)
                 )
                 if path.endswith("/") and segments:
@@ -1204,7 +1231,13 @@ class SurrogateEngine:
         pieces = [f"{prefix}{word}{num}"]
         if env:
             pieces.append(env)
-        return "-".join(pieces)
+        rendu = "-".join(pieces)
+        # L'extension est rendue ICI, dans le générateur, et non après coup :
+        # ce que le coffre enregistre doit être ce que le chemin porte, sinon
+        # la restauration cherche un substitut qui n'a jamais été écrit. C'est
+        # aussi ce qui fait que la garde d'unicité voit la forme finale.
+        return (self._garder_extension(v, rendu)
+                if etype in TYPES_COMPOSITION else rendu)
 
     def _fake_authority(self, authority: str, attempt: int) -> tuple[str, str]:
         """(autorité fictive, port) depuis la partie autorité d'une URL.

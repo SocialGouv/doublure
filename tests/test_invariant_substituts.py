@@ -307,3 +307,74 @@ def test_le_repli_garde_l_index_quand_un_prefixe_en_fait_un_index(moteur):
     for valeur, index in (("svc-42", "42"), ("svc-100", "100"),
                           ("svc-42-payment", "42"), ("bot-12_worker", "12")):
         assert index in moteur.substitute_value("SERVICE_ACCOUNT", valeur), valeur
+
+
+# --------------------------------------------------------------------------- #
+# La NATURE d'un segment de chemin
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def moteur_avec_extensions(tmp_path_factory):
+    """Le moteur tel que le proxy le construit — avec la liste curée.
+
+    Le défaut du moteur ne rend AUCUNE extension : aucun défaut n'ouvre quoi
+    que ce soit. C'est le lanceur qui branche la liste, et c'est donc ainsi
+    qu'il faut l'éprouver, sinon on prouverait le défaut et pas le produit.
+    """
+    from anonproxy.allowlist import Allowlist
+
+    liste = Allowlist.load()
+    chemin = tmp_path_factory.mktemp("extensions") / "coffre.db"
+    return SurrogateEngine(vault=Vault(chemin, master_key=MASTER),
+                           master_key=MASTER, scope_key=SCOPE,
+                           is_public=liste.is_exact,
+                           extension_curee=liste.extension_curee)
+
+
+@pytest.mark.parametrize("etype,reel,extension", [
+    ("FILE_PATH", "/a/b/nginx.conf", ".conf"),
+    ("FILE_PATH", "/a/b/app.log", ".log"),
+    ("FILE_PATH", "~/.claude/plans/sujet-handover.md", ".md"),
+    ("FILE_PATH", "/a/b/Taskfile.yml", ".yml"),
+    ("URL", "https://interne.acme/guide/install.md", ".md"),
+])
+def test_un_segment_substitue_reste_un_FICHIER(moteur_avec_extensions, etype,
+                                               reel, extension):
+    """Mesuré en session réelle : `nginx.conf` devenait `willow-xenon`.
+
+    Le modèle ne distinguait plus un fichier de configuration d'un journal ni
+    d'un dossier — la même perte de nature qu'une date rendue en mot. Le
+    radical, lui, reste substitué : c'est lui qui identifie.
+    """
+    faux = moteur_avec_extensions.substitute_value(etype, reel)
+    dernier = faux.rstrip("/").rsplit("/", 1)[-1]
+    assert dernier.endswith(extension), f"{reel} → {faux}"
+    assert reel.rstrip("/").rsplit("/", 1)[-1] not in faux, \
+        "le nom du fichier a survécu : ce n'est plus une substitution"
+
+
+@pytest.mark.parametrize("reel", [
+    "/a/b/db-01.acme.internal",     # une ZONE interne, pas une extension
+    "/a/b/acme.internal",
+    "/a/b/srv.dev",                 # `.dev` est un vrai domaine, hors liste
+    "/a/b/site.io",
+])
+def test_un_suffixe_qui_N_EST_PAS_une_extension_ne_survit_pas(
+        moteur_avec_extensions, reel):
+    """L'AUTRE MOITIÉ, et c'est elle qui rend la première acceptable.
+
+    L'extension n'est pas lue sur le dernier point — `db-01.acme.internal` en
+    a un, et garder `.internal` ferait sortir la zone, c'est-à-dire exactement
+    ce que tout ce fichier protège. Seules les formes que la liste curée
+    reconnaît survivent, et un nom à plusieurs labels n'est pas un fichier.
+    """
+    faux = moteur_avec_extensions.substitute_value("FILE_PATH", reel)
+    suffixe = "." + reel.rsplit(".", 1)[-1]
+    assert suffixe not in faux, f"{reel} → {faux} : le suffixe a survécu"
+
+
+def test_le_DEFAUT_du_moteur_ne_rend_aucune_extension(moteur):
+    """Aucun défaut n'ouvre quoi que ce soit — la philosophie du projet, sur
+    ce réglage-ci. Un moteur construit sans la liste curée ne fait sortir
+    aucune extension, et c'est le lanceur qui branche l'ouverture."""
+    faux = moteur.substitute_value("FILE_PATH", "/a/b/nginx.conf")
+    assert ".conf" not in faux, faux

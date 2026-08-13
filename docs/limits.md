@@ -121,6 +121,21 @@ before the fix, `3 février 2026` and `février 2026` — the same month in the
 source — landed fifty-five years apart. What is never invented is the missing
 field: `August 2026` becomes another month-year, never a full date.
 
+**A substituted path segment keeps its file extension, and only that.**
+Measured in a real session: `nginx.conf` came back `willow-xenon`, so the model
+could no longer tell a configuration file from a log or from a directory — the
+same loss of nature as a date returned as a word. The stem stays substituted,
+because the stem is what identifies: `tenant-acme-nda.md` becomes `<word>.md`.
+
+What leaves in the clear is therefore the FORMAT, never the name. That is an
+opening, small as it is, and it was arbitrated by jo (2026-08-13) rather than
+decided in the code. The extension is not read off the last dot —
+`db-01.acme.internal` has one, and keeping `.internal` would put the zone in the
+clear. It is asked of the curated list the allowlist already holds, on a neutral
+stem, and a name with several labels is not a file name. The engine's own
+default keeps nothing: no default opens anything, and it is the launcher that
+wires the list.
+
 **What still falls to the generic substitution, and therefore comes back as a
 word**: a season (`hiver 1998`), a bare year, and a numeric day-month whose
 order is ambiguous (`03/04`). The last one follows the rule this module already

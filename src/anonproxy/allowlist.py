@@ -115,6 +115,28 @@ class Allowlist:
             etype in portee and motif.fullmatch(value)
             for motif, portee in self.patterns_types)
 
+    def extension_curee(self, nom: str) -> str:
+        """L'extension de fichier de ce nom, quand la liste la juge PUBLIQUE.
+
+        Sert à garder la NATURE d'un segment qu'on substitue : `nginx.conf`
+        devenait `willow-xenon`, et le modèle ne distinguait plus un `.conf`
+        d'un `.log` ni d'un dossier. Le radical, lui, reste substitué — c'est
+        lui qui identifie.
+
+        L'extension n'est PAS lue sur le dernier point : `db-01.acme.internal`
+        en a un, et garder `.internal` ferait sortir la zone. La question est
+        posée aux règles de FORME sur un radical neutre, donc à la liste curée
+        qu'elles portent déjà — la recopier ici en ferait une seconde source de
+        vérité, le piège que ce projet paie le plus souvent.
+
+        Un nom à plusieurs labels n'est pas un nom de fichier : c'est la même
+        restriction qui rend cette liste sûre là où elle est écrite.
+        """
+        radical, point, ext = nom.rpartition(".")
+        if not point or not radical or "." in radical or not ext:
+            return ""
+        return f".{ext}" if any(p.fullmatch(f"x.{ext}") for p in self.patterns) else ""
+
     def is_exact(self, value: str, etype: str | None = None) -> bool:
         """Prédicat pour une SOUS-PARTIE d'une valeur composite.
 
